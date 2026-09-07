@@ -1,160 +1,47 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VoxelEngine - Python-Coderss</title>
-<style>
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0b0d12;color:#e8ecf1;line-height:1.6}
-.wrap{max-width:860px;margin:0 auto;padding:48px 24px}
-a{color:#7dd3fc;text-decoration:none}a:hover{text-decoration:underline}
-h1,h2,h3{margin:0 0 12px;letter-spacing:-0.3px}
-ul{padding-left:18px}code{background:#1a1d24;padding:2px 6px;border-radius:4px;font-size:0.9em}
-pre{background:#11141b;border:1px solid #23272f;border-radius:12px;padding:16px;overflow:auto}
-.header{margin-bottom:32px;border-bottom:1px solid #23272f;padding-bottom:16px}
-.back{display:inline-block;margin-bottom:16px;color:#7dd3fc}
-</style>
+<link rel="stylesheet" href="../style.css">
 </head>
 <body>
-<div class="wrap">
-<a class="back" href="/">&larr; Back to projects</a>
-<div class="header">
+<div class="wrap page">
+<nav class="topnav"><a class="back" href="../index.html">&larr; All projects</a></nav>
+<header class="repo-head">
 <h1>VoxelEngine</h1>
-<p><a href="https://github.com/Python-Coderss/VoxelEngine" target="_blank">View on GitHub</a></p>
-</div>
-<p># VoxelEngine
-
-A voxel engine made in Java using LWJGL 3, slowly turning into a Minecraft clone.
-
-## Source Structure
-
-### ai
-
-- ai\MobBrain.java
-- ai\PathFinder.java
-- ai\Raycaster.java
-- ai\Senses.java
-- ai\Stimulus.java
-- ai\StimulusBus.java
-- ai\VoxelView.java
-- ai\Walkability.java
-
-### audio
-
-- audio\AudioData.java
-- audio\DialogueCatalog.java
-- audio\DialogueDirector.java
-- audio\DialogueLine.java
-- audio\FFT.java
-- audio\Mp3Decoder.java
-- audio\MusicDirector.java
-- audio\MusicPlayer.java
-
-### biome
-
-- biome\Biome.java
-- biome\BiomeBeach.java
-- biome\BiomeDecorator.java
-- biome\BiomeDesert.java
-- biome\BiomeEnd.java
-- biome\BiomeForest.java
-- biome\BiomeHell.java
-- biome\BiomeHills.java
-
-### camera
-
-- camera\CameraController.java
-
-### cinematic
-
-- cinematic\CinematicSystem.java
-
-### combat
-
-- combat\CombatSystem.java
-
-### crafting
-
-- crafting\CraftingManager.java
-- crafting\VanillaRecipeLoader.java
-
-### entity
-
-- entity\AechorPlantEntity.java
-- entity\AerbunnyEntity.java
-- entity\AerwhaleEntity.java
-- entity\AetherPassiveEntity.java
-- entity\AetherProjectileEntity.java
-- entity\Animation.java
-- entity\ArrowEntity.java
-- entity\BlazeEntity.java
-
-### game
-
-- game\ArmorValues.java
-- game\AtmosphereRenderer.java
-- game\BlockInteraction.java
-- game\CanonicalRegistry.java
-- game\ChestManager.java
-- game\CommandBlockManager.java
-- game\CommandProcessor.java
-- game\CraftingTableConstants.java
-
-### lighting
-
-- lighting\EnumSkyBlock.java
-- lighting\LightEngine.java
-- lighting\LightNode.java
-- lighting\LightSource.java
-- lighting\LightType.java
-
-### player
-
-- player\PlayerController.java
-
-### render
-
-- render\Renderer.java
-
-### tools
-
-- tools\PointClickWorldExporter.java
-- tools\TutorialWorldExporter.java
-- tools\UVFinder.java
-
-### ui
-
-- ui\HudUI.java
-- ui\UIConstants.java
-- ui\UILayer.java
-- ui\UIManager.java
-
-### utils
-
-- utils\BiomeManager.java
-- utils\BlockDataManager.java
-- utils\BlockRegistry.java
-- utils\Direction.java
-- utils\FixedPoint.java
-- utils\GLUtil.java
-- utils\MinecraftContentLoader.java
-- utils\PerlinNoise.java
-
-### world
-
-- world\AetherGenerator.java
-- world\AncientBuilderFacility.java
-- world\BeaconLogic.java
-- world\BetaWorldGenerator.java
-- world\BlazeBurnerManager.java
-- world\ChunkManager.java
-- world\CopperTankManager.java
-- world\DimensionManager.java
-
-## Build
-
-Maven project with LWJGL 3.3.3, JOML, JSON, jlayer, and ONNX Runtime dependencies.</p>
-</p>
+<div class="repo-actions"><a class="btn" href="https://github.com/Python-Coderss/VoxelEngine" target="_blank" rel="noopener">View on GitHub ↗</a></div>
+<p class="repo-desc">A voxel engine made in Java using LWJGL 3, slowly turning into a Minecraft clone. Note: contains Minecraft assets, do not redistribute.</p>
+<div class="chips"><span class="chip"><span class="lang-dot" style="background:#b07219"></span>Java</span><span class="chip">~17,000 files</span><span class="chip">updated 2026-09-06</span></div>
+</header>
+<main>
+<article class="markdown-body readme">
+<p>There is no README in this repository. It is a large Java/LWJGL 3 voxel engine (roughly 17,000 tracked files, including bundled Minecraft-derived assets — see the repository description regarding redistribution). The top level breaks down like this:</p>
+</article>
+<h2>Repository structure</h2>
+<ul class="tree digest">
+<li><span class="dir-name">src/</span> <span class="count">11,193 files — Java sources and bundled assets</span></li>
+<li><span class="dir-name">The-Aether/</span> <span class="count">4,404 files — Aether-dimension content</span></li>
+<li><span class="dir-name">samples/</span> <span class="count">178 files</span></li>
+<li><span class="dir-name">tools/</span> <span class="count">86 files</span></li>
+<li><span class="dir-name">models/</span> <span class="count">40 files</span></li>
+<li><span class="dir-name">.harness/</span> <span class="count">39 files</span></li>
+<li><span class="dir-name">screenshots/</span> <span class="count">3 files</span></li>
+<li><span class="dir-name">.settings/</span> <span class="count">3 files</span></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/pom.xml">pom.xml</a> — Maven build</li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/CHANGELOG.md">CHANGELOG.md</a></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/MATERIALS_GUIDE.md">MATERIALS_GUIDE.md</a></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/PYTHON_VOICE.md">PYTHON_VOICE.md</a></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/VOICE_SETUP.md">VOICE_SETUP.md</a></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/knowledge.md">knowledge.md</a></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/eval-lines.json">eval-lines.json</a></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/launch_freebuff.bat">launch_freebuff.bat</a></li>
+<li><a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/mvnw">mvnw</a> / <a href="https://github.com/Python-Coderss/VoxelEngine/blob/main/mvnw.cmd">mvnw.cmd</a> — Maven wrapper</li>
+</ul>
+<p class="muted">This repository is large, so folders are summarized here — <a href="https://github.com/Python-Coderss/VoxelEngine/tree/main" target="_blank" rel="noopener">browse the full repository on GitHub</a>.</p>
+</main>
+<footer class="site-foot">Compiled from live GitHub data for Python-Coderss/VoxelEngine.</footer>
 </div>
 </body>
 </html>
