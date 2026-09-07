@@ -16,7 +16,10 @@ fi
   -Wl,--no-entry -Wl,--export-memory \
   -Wl,--export=run3_init -Wl,--export=run3_flap -Wl,--export=run3_level \
   -Wl,--export=run3_step -Wl,--export=run3_state -Wl,--export=run3_level_idx \
-  -Wl,--export=run3_cells -Wl,--export=run3_level_count \
+  -Wl,--export=run3_switch -Wl,--export=run3_level_count \
+  -Wl,--export=run3_sides -Wl,--export=run3_solid -Wl,--export=run3_rows \
+  -Wl,--export=run3_rows_total \
+  -Wl,--export=run3_rows_per \
   -Wl,--export=run3_progress -Wl,--export=run3_width -Wl,--export=run3_height \
   -Wl,--export=run3_buffer \
   -o run3.wasm run3.c

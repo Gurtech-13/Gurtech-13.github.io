@@ -1,13 +1,24 @@
 /*
- * Run 3-style pseudo-3D runner — a WASM demo in freestanding C (no libc, no deps).
+ * Run 3-style tunnel runner — WASM demo in freestanding C (no libc, no deps).
  *
- * Original implementation. Community recreations of Player03's "Run 3"
- * (lcrol77/run-clone, bigjackson/Run3Source) were consulted only as design
- * reference for the general model: auto-run along a path of floating tiles,
- * jump gaps, clear barriers, collect cells, reach the finish. No code, assets,
- * or level data were copied; every level below is original.
+ * Model (matches the game's structure, per player feedback):
+ *  - The camera is always behind the runner, looking down the tunnel toward
+ *    the runner's back. From the camera's perspective the runner is
+ *    stationary and the tunnel tiles stream backward toward the camera.
+ *  - A tunnel is a STRAIGHT tube whose cross-section is a convex polygon
+ *    with 4..16 sides. Each side is split into k >= 1 tiles; all tiles in a
+ *    tunnel are the same size (tile size may differ between tunnels).
+ *  - There are no "kill bricks": the only way to die is to fall into the
+ *    void through a missing tile. Missing tiles can span a whole row
+ *    (jump it) or a long block of rows (gravity-jump to a wall side to
+ *    ride around it, then come back — switching sides is what "changing
+ *    gravity" looks like from this fixed camera).
+ *  - Switching to an adjacent side rotates the view so the new side becomes
+ *    the floor; the runner is always drawn upright on the current side.
  *
- * The module owns simulation + framebuffer; the host page is only an I/O layer.
+ * Original implementation; gameplay modeled on the general structure of
+ * Player03's "Run 3". No code, assets, or level data are copied from it.
+ * The module owns simulation + framebuffer; the host page is I/O only.
  * Build with build.sh.
  */
 
@@ -15,90 +26,309 @@
 
 #define W 640
 #define H 360
+#define CX 320
+#define CY 178        /* screen y of the tunnel axis (vanishing point) */
+#define FOCAL 230.0   /* lens: screen = world * FOCAL / (DCAM + z) */
+#define DCAM 5.0      /* camera distance behind the runner plane (z=0) */
+#define VIEW 34.0     /* draw tiles out to this depth, in world units */
 
-#define SEG_LEN 3.0     /* world units per path segment */
-#define TILE_HW 1.3     /* tile half-width in world units */
-#define CAM_H 2.4       /* camera height above the tile plane */
-#define CAM_BACK 8.0    /* camera sits this far behind the runner */
-#define FOCAL 300.0     /* projection focal length in px */
-#define HORIZON 118     /* screen y of the vanishing line */
-#define NEAR 1.2        /* near clip distance */
+#define MAXN 16
+#define MAXR 240      /* rows of tunnel geometry we precompute */
+#define TAU 6.283185307179586
+#define PI 3.141592653589793
 
-#define WALL_H 1.0      /* barrier height that must be jumped */
-#define JUMP_VY 8.8
-#define GRAV 20.0
-#define MAX_FALL 14.0
+#define GRAV 10.0     /* gravity, world units/s^2 (in rolled view: -y) */
+#define JUMPV 4.6     /* jump launch speed, world units/s */
 
-enum { T_FLOOR = '.', T_GAP = ' ', T_WALL = '|', T_CELL = 'o', T_FINISH = 'F' };
-enum { S_READY = 0, S_RUN = 1, S_DEAD = 2, S_CLEAR = 3 };
+typedef enum { S_READY = 0, S_RUN = 1, S_DEAD = 2, S_CLEAR = 3 } state_t;
 
-static uint32_t fb[W * H]; /* 0xAARRGGBB, exported via memory */
+static uint32_t fb[W * H]; /* 0xAARRGGBB */
 
-/* ---------- original level courses ---------- */
+/* ---------------- tunnel (level) definitions ---------------- */
 
 typedef struct {
-  const char *map;
-  double speed;
-  int theme;
-} level_t;
+  int n;          /* polygon sides: 4..16 */
+  int k;          /* tiles per side: >= 1 */
+  double tile;    /* uniform tile size: row depth AND tile width across a side */
+  double rows;    /* tunnel length in tile-rows */
+  double rowsPer; /* scroll speed in rows per second */
+  double holeP;   /* probability a (side,row) single hole exists */
+  int theme;      /* color theme */
+  int blockEvery; /* every N rows, one side gets a 4-row void (0 = none) */
+} tunnel_t;
 
-static const char MAP_1[] =
-    "...........o..........o.........o..........|.........o.....o.......o....F";
-static const char MAP_2[] =
-    ".......|....o....o....  ....o...|....o.....  ....|....o....|.....o.....F";
-static const char MAP_3[] =
-    ".....o..o...|....o...o....|...o...  ...o....|....o...o....|....o....o.F";
-static const char MAP_4[] =
-    "......o.....|....  ....o....|...o...o...  ...|....o.....o...|....o....F";
-static const char MAP_5[] =
-    "..o...|...o....o...  ...|....o.....|...o...  ....o....|...o....o..F";
-static const char MAP_6[] =
-    ".o..o..|...o....o...|...o...o....  ....o..o....|....o....o...|....o...F";
-static const char MAP_7[] =
-    "...|...o...|...o....  ....o...o...|...o....o....|..o....o...|...o....F";
-static const char MAP_8[] =
-    "o..|...o....|....o....o....|...o.....|...o....o...   ...o..o....|...o....F";
-
-static const level_t LEVELS[] = {
-    {MAP_1, 7.0, 0}, {MAP_2, 8.0, 1}, {MAP_3, 8.5, 2}, {MAP_4, 9.0, 3},
-    {MAP_5, 9.5, 4}, {MAP_6, 10.0, 0}, {MAP_7, 10.5, 1}, {MAP_8, 11.0, 2},
+/* g_radius = k*tile / (2 sin(pi/n)) is derived; these stay between ~1.7 and ~2.5. */
+static const tunnel_t TUNNELS[] = {
+    { 4, 1, 2.40,  90, 2.3, 0.05, 0, 0  },
+    { 4, 2, 1.20, 100, 2.6, 0.06, 1, 24 },
+    { 5, 1, 2.00, 108, 2.9, 0.07, 2, 14 },
+    { 6, 2, 1.10, 118, 3.2, 0.08, 3, 12 },
+    { 8, 2, 0.85, 130, 3.6, 0.09, 4, 10 },
+    {10, 2, 0.70, 142, 4.0, 0.10, 0, 9  },
+    {12, 2, 0.60, 156, 4.4, 0.11, 1, 8  },
+    {16, 3, 0.34, 170, 4.8, 0.12, 2, 7  },
 };
-#define LEVEL_COUNT ((int)(sizeof(LEVELS) / sizeof(LEVELS[0])))
+#define NTUNNELS ((int)(sizeof(TUNNELS) / sizeof(TUNNELS[0])))
 
-/* ---------- game state ---------- */
+/* minimal freestanding trig (no libm): range reduction + Taylor on [0, pi/2] */
+static double ssin(double x) {
+  x -= TAU * (double)((long long)(x / TAU)); /* wrap into [0, 2pi) */
+  if (x < 0.0) x += TAU;
+  int sign = 1;
+  if (x > PI) { x = TAU - x; sign = -1; }
+  if (x > PI / 2.0) x = PI - x;
+  double x2 = x * x;
+  double t = 1.0 + x2 * (-1.0 / 5040.0 + x2 / 362880.0);
+  double s = x * (1.0 + x2 * (-1.0 / 6.0 + x2 * (1.0 / 120.0 + x2 * t)));
+  return sign > 0 ? s : -s;
+}
+static double scos(double x) { return ssin(PI / 2.0 - x); }
+
+/* precomputed tunnel wall: 1 = tile present, 0 = void */
+static uint8_t g_map[MAXN][MAXR];
+
+/* ---------------- geometry ---------------- */
+
+static int g_n, g_k;          /* current tunnel */
+static double g_tile, g_R, g_ap; /* tile size, circumradius, apothem */
+static double g_rows, g_rowsPer;
+static double g_holeP;
+static int g_blockEvery;
+static uint32_t g_seed;       /* rng state (given by the host) */
+
+/* ---------------- game state ---------------- */
 
 static int g_state;
-static int g_level;
-static double g_pz;    /* position along the path */
-static double g_py;    /* height above the tile plane */
-static double g_pvy;
-static double g_cells; /* collected cells */
-static int g_seg_seen;
-static uint32_t g_rng;
+static int g_tun;
+static double g_prog;    /* fractional row at the runner plane (z=0) */
+static int g_side;       /* side the runner runs on */
+static double g_rot;     /* view rotation (rad), animates toward g_rotT */
+static double g_rotT;    /* target view rotation: side g_side at bottom */
+static double g_jump;    /* height above the current surface */
+static double g_jv;      /* vertical velocity (rolled +y) */
+static double g_fallT;   /* time since falling into the void */
 
-#define STARS 70
+#define STARS 90
 static int star_x[STARS], star_y[STARS], star_s[STARS];
 static uint32_t star_c[STARS];
 
 static uint32_t rnd(void) {
-  g_rng = g_rng * 1664525u + 1013904223u;
-  return g_rng;
+  g_seed = g_seed * 1664525u + 1013904223u;
+  return g_seed;
 }
 
-#define rgb(r, g, b) (0xFF000000u | ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
+#define rgb(r, g, b) \
+  (0xFF000000u | ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
 
-static const char *active_map(void) { return LEVELS[g_level].map; }
-
-static int map_len(int idx) {
-  static const int LENS[LEVEL_COUNT] = {
-      (int)(sizeof(MAP_1) - 1), (int)(sizeof(MAP_2) - 1), (int)(sizeof(MAP_3) - 1),
-      (int)(sizeof(MAP_4) - 1), (int)(sizeof(MAP_5) - 1), (int)(sizeof(MAP_6) - 1),
-      (int)(sizeof(MAP_7) - 1), (int)(sizeof(MAP_8) - 1)};
-  return LENS[idx];
+static int lrp(int a, int b, double t) { /* channel lerp */
+  return (int)((double)a + ((double)b - (double)a) * t);
 }
+static uint32_t mixc(uint32_t c0, uint32_t c1, double t) {
+  if (t <= 0.0) return c0;
+  if (t >= 1.0) return c1;
+  return rgb(lrp((c0 >> 16) & 0xff, (c1 >> 16) & 0xff, t),
+             lrp((c0 >> 8) & 0xff, (c1 >> 8) & 0xff, t),
+             lrp(c0 & 0xff, c1 & 0xff, t));
+}
+
+/* ---------------- tunnel wall generation ---------------- */
+
+static uint32_t h32(uint32_t x) { /* small avalanche hash */
+  x ^= x >> 16; x *= 0x7feb352du;
+  x ^= x >> 15; x *= 0x846ca68bu;
+  x ^= x >> 16;
+  return x;
+}
+
+/* Rows 0..3 are always solid (start area). Single holes never repeat on the
+   same side. Around every 4-row void block, all sides keep a clean buffer
+   (2 rows before / 1 after) so the block is always dodgeable by switching
+   walls. Void blocks: window k starts at row k*blockEvery, lasts 4 rows,
+   and takes sides (k+2) % n in turn, so the void orbits the tube. */
+static void build_map(void) {
+  for (int r = 0; r < MAXR; r++) {
+    int voidSide = -1, buffered = 0;
+    if (g_blockEvery > 0) {
+      int w0 = (r - 4) / g_blockEvery;
+      if (w0 < 0) w0 = 0;
+      int w1 = (r + 2) / g_blockEvery;
+      if (w1 < 0) w1 = 0;
+      for (int w = w0; w <= w1; w++) {
+        int br = w * g_blockEvery;
+        if (r >= br - 2 && r <= br + 4) {
+          buffered = 1;
+          if (r >= br && r <= br + 3) voidSide = (int)((w + 2) % g_n);
+          break;
+        }
+      }
+    }
+    for (int s = 0; s < g_n; s++) {
+      if (r < 4) { g_map[s][r] = 1; continue; }
+      if (voidSide >= 0) { g_map[s][r] = (s == voidSide) ? 0 : 1; continue; }
+      if (buffered) { g_map[s][r] = 1; continue; }
+      /* single holes: not right after a missing row on the same side */
+      if (g_map[s][r - 1] == 0) { g_map[s][r] = 1; continue; }
+      uint32_t h = h32(g_seed ^ (uint32_t)(s * 1013u) ^ (uint32_t)(r * 7919u));
+      g_map[s][r] = ((double)((h >> 8) & 0xffff) / 65536.0) < g_holeP ? 0 : 1;
+    }
+  }
+}
+
+static int solid_at(int side, int row) {
+  if (row < 0 || row >= MAXR) return 1; /* before the start / past the end */
+  return g_map[side][row];
+}
+
+/* ---------------- setup ---------------- */
+
+static void setup_tunnel(int idx) {
+  const tunnel_t *t = &TUNNELS[idx];
+  g_n = t->n; g_k = t->k;
+  g_tile = t->tile;
+  g_rows = t->rows;
+  g_rowsPer = t->rowsPer;
+  g_holeP = t->holeP;
+  g_blockEvery = t->blockEvery;
+  g_R = (double)g_k * g_tile / (2.0 * ssin(PI / (double)g_n));
+  g_ap = g_R * scos(PI / (double)g_n); /* center -> flat side distance */
+}
+
+void run3_level(int idx) {
+  if (idx < 0) idx = 0;
+  if (idx >= NTUNNELS) idx = NTUNNELS - 1;
+  g_tun = idx;
+  setup_tunnel(idx);
+  build_map();
+  g_state = S_READY;
+  g_prog = 0.0;
+  g_side = 0;
+  g_rot = 0.0;
+  g_rotT = 0.0; /* side 0 starts at the bottom */
+  g_jump = 0.0;
+  g_jv = 0.0;
+  g_fallT = 0.0;
+}
+
+static void draw(void); /* forward decl */
+
+void run3_init(uint32_t seed) {
+  g_seed = seed ? seed : 1u;
+  for (int i = 0; i < STARS; i++) {
+    star_x[i] = (int)(rnd() % W);
+    star_y[i] = (int)(rnd() % H);
+    star_s[i] = (int)(rnd() % 2) + 1;
+    star_c[i] = rgb(160 + (int)(rnd() % 90), 160 + (int)(rnd() % 90),
+                    200 + (int)(rnd() % 55));
+  }
+  run3_level(0);
+}
+
+/* ---------------- exported API ---------------- */
+
+int32_t run3_state(void) { return g_state; }
+int32_t run3_level_idx(void) { return g_tun; }
+double run3_progress(void) {
+  double p = g_prog / g_rows;
+  return p < 0.0 ? 0.0 : (p > 1.0 ? 1.0 : p);
+}
+int32_t run3_rows(void) { return (int32_t)g_prog; }
+double run3_rows_total(void) { return g_rows; }
+double run3_rows_per(void) { return g_rowsPer; }
+int32_t run3_level_count(void) { return NTUNNELS; }
+int32_t run3_sides(void) { return g_n; }
+int32_t run3_solid(int32_t side, int32_t row) {
+  if (side < 0 || side >= g_n) return 0;
+  return solid_at(side, row) ? 1 : 0;
+}
+int32_t run3_width(void) { return W; }
+int32_t run3_height(void) { return H; }
+uint32_t *run3_buffer(void) { return fb; }
+
+void run3_flap(void) { /* one tap = "go": jump / start / retry / advance */
+  if (g_state == S_READY) {
+    g_state = S_RUN;
+  } else if (g_state == S_RUN) {
+    if (g_jump <= 0.001 && g_jv <= 0.0) {
+      g_jump = 0.001;
+      g_jv = JUMPV;
+    }
+  } else if (g_state == S_DEAD) {
+    run3_level(g_tun); /* retry the same level, straight back into the run */
+    g_state = S_RUN;
+  } else if (g_state == S_CLEAR) {
+    run3_level(g_tun + 1 < NTUNNELS ? g_tun + 1 : 0); /* next tunnel */
+    g_state = S_RUN;
+  }
+}
+
+/* Gravity-jump to an adjacent side. The view rolls so the new side becomes
+   the floor. Refuses the switch if the landing strip is not solid. */
+int32_t run3_switch(int dir) {
+  if (g_state != S_RUN) return 0;
+  int ns = (g_side + (dir > 0 ? 1 : g_n - 1)) % g_n;
+  if (ns == g_side) return 0;
+  int r0 = (int)g_prog;
+  for (int rr = r0; rr <= r0 + 3; rr++)
+    if (!solid_at(ns, rr)) return 0;
+  g_side = ns;
+  g_rotT = -(TAU * (double)g_side) / (double)g_n;
+  return 1;
+}
+
+void run3_step(double dt) {
+  if (dt <= 0.0) dt = 1.0 / 60.0;
+  if (dt > 0.1) dt = 0.1;
+
+  /* ease the view roll */
+  double d = g_rotT - g_rot;
+  if (d * d > 1e-6) {
+    g_rot += d * (dt * 14.0 < 1.0 ? dt * 14.0 : 1.0);
+  } else {
+    g_rot = g_rotT;
+  }
+
+  if (g_state == S_RUN) {
+    g_prog += g_rowsPer * dt;
+    int row = (int)g_prog;
+
+    if (row >= (int)g_rows) {
+      g_state = S_CLEAR;
+    } else if (g_jump > 0.0 || g_jv > 0.0) {
+      /* airborne: fall in rolled -y (gravity reorients when you switch) */
+      g_jump += g_jv * dt;
+      g_jv -= GRAV * dt;
+      if (g_jump <= 0.0) {
+        if (solid_at(g_side, row)) {
+          g_jump = 0.0;
+          g_jv = 0.0;
+        } else {
+          g_state = S_DEAD; /* landed in a void */
+          g_fallT = 0.0;
+        }
+      }
+    } else if (!solid_at(g_side, row)) {
+      g_state = S_DEAD; /* stepped into the void */
+      g_fallT = 0.0;
+    }
+  } else if (g_state == S_DEAD) {
+    g_fallT += dt;
+  }
+
+  draw();
+}
+
+/* ---------------- rendering ---------------- */
+
+/* theme: sky, floor(bright), wall(mid), deep(opposite walls) */
+static const uint32_t PAL[5][4] = {
+    { rgb(10, 12, 26),  rgb(130, 185, 255), rgb(64, 100, 165), rgb(36, 58, 98) },
+    { rgb(24, 8, 26),   rgb(255, 150, 235), rgb(170, 84, 152), rgb(104, 48, 94) },
+    { rgb(6, 20, 22),   rgb(96, 235, 195),  rgb(48, 145, 120), rgb(28, 92, 76) },
+    { rgb(26, 16, 8),   rgb(255, 196, 110), rgb(176, 122, 60), rgb(110, 74, 38) },
+    { rgb(8, 22, 14),   rgb(150, 235, 110), rgb(88, 152, 62),  rgb(54, 96, 40) },
+};
 
 static void fill_rect(int x, int y, int w, int h, uint32_t c) {
-  if (w <= 0 || h <= 0) return;
   int x0 = x < 0 ? 0 : x;
   int y0 = y < 0 ? 0 : y;
   int x1 = x + w; if (x1 > W) x1 = W;
@@ -106,6 +336,57 @@ static void fill_rect(int x, int y, int w, int h, uint32_t c) {
   for (int yy = y0; yy < y1; yy++)
     for (int xx = x0; xx < x1; xx++)
       fb[(uint32_t)yy * W + (uint32_t)xx] = c;
+}
+
+/* convex quad fill, scanline style (double math, screen clipped) */
+static void fill_quad(double x0, double y0, double x1, double y1,
+                      double x2, double y2, double x3, double y3, uint32_t c) {
+  double xs[4] = { x0, x1, x2, x3 };
+  double ys[4] = { y0, y1, y2, y3 };
+  int miny = (int)ys[0], maxy = (int)ys[0];
+  for (int i = 1; i < 4; i++) {
+    if ((int)ys[i] < miny) miny = (int)ys[i];
+    if ((int)ys[i] > maxy) maxy = (int)ys[i];
+  }
+  if (miny < 0) miny = 0;
+  if (maxy >= H) maxy = H - 1;
+  if (miny > maxy) return;
+  for (int y = miny; y <= maxy; y++) {
+    double hits[4];
+    int nh = 0;
+    for (int e = 0; e < 4; e++) {
+      double xa = xs[e], ya = ys[e];
+      double xb = xs[(e + 1) & 3], yb = ys[(e + 1) & 3];
+      if ((ya <= (double)y && yb > (double)y) || (yb <= (double)y && ya > (double)y)) {
+        hits[nh++] = xa + ((double)y - ya) * (xb - xa) / (yb - ya);
+      }
+    }
+    if (nh == 2) {
+      double lo = hits[0], hi = hits[1];
+      if (lo > hi) { double t = lo; lo = hi; hi = t; }
+      int x0i = (int)lo + 1;
+      int x1i = (int)hi;
+      if (x0i < 0) x0i = 0;
+      if (x1i >= W) x1i = W - 1;
+      if (x0i <= x1i)
+        for (int x = x0i; x <= x1i; x++) fb[(uint32_t)y * W + (uint32_t)x] = c;
+    }
+  }
+}
+
+static void proj(double x, double y, double z, double *sx, double *sy) {
+  double d = DCAM + z; /* depth from the camera */
+  double s = FOCAL / d;
+  *sx = CX + x * s;
+  *sy = CY - y * s; /* +y up on screen */
+}
+
+/* corner c of the ring in VIEW space (side g_side flat at the bottom after
+   the roll has settled; during a switch the ring is mid-rotation) */
+static void corner(int c, double *x, double *y) {
+  double a = -PI / 2.0 - PI / (double)g_n + TAU * (double)c / (double)g_n + g_rot;
+  *x = g_R * scos(a);
+  *y = g_R * ssin(a);
 }
 
 static void fill_circle(int cx, int cy, int r, uint32_t c) {
@@ -118,228 +399,105 @@ static void fill_circle(int cx, int cy, int r, uint32_t c) {
     }
 }
 
-/* ---------- exported API ---------- */
-
-void run3_init(uint32_t seed);
-void run3_level(int idx);
-void run3_flap(void);
-void run3_step(double dt);
-static void draw(void);
-
-void run3_init(uint32_t seed) {
-  g_rng = seed ? seed : 1u;
-  for (int i = 0; i < STARS; i++) {
-    star_x[i] = (int)(rnd() % W);
-    star_y[i] = (int)(rnd() % (HORIZON + 20));
-    star_s[i] = (int)(rnd() % 2) + 1;
-    star_c[i] = rgb(180 + (rnd() % 60), 180 + (rnd() % 60), 220 + (rnd() % 35));
-  }
-  run3_level(0);
-}
-
-void run3_level(int idx) {
-  if (idx < 0) idx = 0;
-  if (idx >= LEVEL_COUNT) idx = LEVEL_COUNT - 1;
-  g_level = idx;
-  g_state = S_READY;
-  g_pz = 0.0;
-  g_py = 0.0;
-  g_pvy = 0.0;
-  g_cells = 0.0;
-  g_seg_seen = -1;
-}
-
-void run3_flap(void) {
-  if (g_state == S_READY) {
-    g_state = S_RUN;
-  } else if (g_state == S_RUN) {
-    if (g_py <= 0.001) { g_py = 0.0; g_pvy = JUMP_VY; }
-  } else if (g_state == S_DEAD) {
-    run3_level(g_level);
-  } else { /* S_CLEAR: advance to next level, wrap around */
-    run3_level(g_level + 1 < LEVEL_COUNT ? g_level + 1 : 0);
-  }
-}
-
-static void die(void) { g_state = S_DEAD; }
-
-void run3_step(double dt) {
-  if (dt <= 0.0) dt = 1.0 / 60.0;
-  if (dt > 0.1) dt = 0.1;
-
-  if (g_state == S_READY) {
-    g_py = 0.0;
-  } else if (g_state == S_RUN) {
-    double speed = LEVELS[g_level].speed;
-    int len = map_len(g_level);
-    g_pz += speed * dt;
-
-    /* vertical motion */
-    if (g_py > 0.0 || g_pvy != 0.0) {
-      g_pvy -= GRAV * dt;
-      if (g_pvy < -MAX_FALL) g_pvy = -MAX_FALL;
-      g_py += g_pvy * dt;
-      if (g_py < 0.0) g_py = 0.0;
-    }
-
-    int idx = (int)(g_pz / SEG_LEN);
-    const char *map = active_map();
-    char t = (idx >= 0 && idx < len) ? map[idx] : T_FLOOR;
-
-    /* crossed into a new segment */
-    if (idx != g_seg_seen) {
-      g_seg_seen = idx;
-      if (t == T_CELL) g_cells += 1.0;
-      if (t == T_FINISH) g_state = S_CLEAR;
-    }
-
-    /* hazards while inside the segment */
-    if (g_state == S_RUN) {
-      if (t == T_GAP) {
-        if (g_py <= 0.001 && g_pvy <= 0.0) die(); /* walked off the edge */
-      } else if (t == T_WALL) {
-        if (g_py <= WALL_H) die(); /* hit the barrier */
-      } else if (t != T_GAP && g_py <= 0.001 && g_pvy <= 0.0) {
-        g_py = 0.0; /* settled on a floor */
-        g_pvy = 0.0;
-      }
-    }
-
-    /* finish line */
-    if (g_state == S_RUN) {
-      double finish_z = (double)(len - 1) * SEG_LEN + SEG_LEN * 0.6;
-      if (g_pz >= finish_z) g_state = S_CLEAR;
-    }
-  } else if (g_state == S_DEAD) {
-    g_pvy -= GRAV * dt;
-    if (g_pvy < -MAX_FALL) g_pvy = -MAX_FALL;
-    g_py += g_pvy * dt;
-    if (g_py < -8.0) g_py = -8.0;
-  }
-
-  draw();
-}
-
-int32_t run3_state(void) { return g_state; }
-int32_t run3_level_idx(void) { return g_level; }
-int32_t run3_cells(void) { return (int32_t)g_cells; }
-int32_t run3_level_count(void) { return LEVEL_COUNT; }
-double run3_progress(void) {
-  int len = map_len(g_level);
-  double total = (double)len * SEG_LEN;
-  double p = g_pz / total;
-  return p < 0.0 ? 0.0 : (p > 1.0 ? 1.0 : p);
-}
-int32_t run3_width(void) { return W; }
-int32_t run3_height(void) { return H; }
-uint32_t *run3_buffer(void) { return fb; }
-
-/* ---------- rendering ---------- */
-
-static char seg_type_at(int idx); /* fwd decl */
-
-static const uint32_t THEME_BG[5] = {
-    rgb(14, 20, 40), rgb(26, 13, 42), rgb(8, 24, 34),
-    rgb(34, 24, 10), rgb(12, 30, 22)};
-static const uint32_t THEME_TILE[5] = {
-    rgb(120, 170, 225), rgb(215, 135, 215), rgb(85, 200, 170),
-    rgb(235, 170, 90), rgb(150, 210, 120)};
-static const uint32_t THEME_TILE_DARK[5] = {
-    rgb(72, 112, 160), rgb(150, 82, 150), rgb(48, 140, 118),
-    rgb(180, 122, 58), rgb(100, 160, 80)};
-
-/* project world (lateral x, height y) at depth d (meters ahead of the camera)
-   onto screen space */
-static int sx(double x, double d) { return (int)((double)W / 2.0 + x * FOCAL / d); }
-static int sy(double y, double d) { return (int)((double)HORIZON + (CAM_H - y) * FOCAL / d); }
-
 static void draw(void) {
-  int th = LEVELS[g_level].theme % 5;
-  uint32_t bg = THEME_BG[th];
-
-  for (int i = 0; i < W * H; i++) fb[i] = bg;
+  int th = TUNNELS[g_tun].theme % 5;
+  uint32_t sky = PAL[th][0];
+  for (int i = 0; i < W * H; i++) fb[i] = sky;
   for (int s = 0; s < STARS; s++)
     fill_rect(star_x[s], star_y[s], star_s[s], star_s[s], star_c[s]);
 
-  double cam_z = g_pz - CAM_BACK;
-  double halfw = TILE_HW;
-  double halfd = SEG_LEN / 2.0;
+  /* draw tile rows far -> near (z from +VIEW down to the camera plane) */
+  double front = g_prog;
+  int rFar = (int)(front + VIEW / g_tile) + 2;
+  int rNear = (int)(front - (DCAM + g_tile) / g_tile) - 2;
+  double hz = 0.5 * g_tile;
 
-  /* tiles, far to near */
-  int idx = (int)((cam_z + 90.0) / SEG_LEN);
-  if (idx > 300) idx = 300;
-  for (; idx >= 0; idx--) {
-    double zc = ((double)idx + 0.5) * SEG_LEN;
-    double d = zc - cam_z;
-    if (d < NEAR) continue;
-    char t = seg_type_at(idx);
-    if (t == T_GAP) continue;
+  for (int ri = rFar; ri >= rNear; ri--) {
+    double zc = ((double)ri - front) * g_tile; /* row center depth */
+    double zFar = zc + hz;
+    double zNear = zc - hz;
+    if (zFar > VIEW) continue;
+    if (zNear < -DCAM + 0.15) continue;
 
-    double df = d - halfd; /* front edge depth */
-    double db = d + halfd; /* back edge depth  */
-    if (df < NEAR) df = NEAR;
+    /* fog: tiles far away melt into the sky */
+    double fog = (zFar / VIEW) * 0.85;
+    if (fog < 0.0) fog = 0.0;
+    if (fog > 0.85) fog = 0.85;
 
-    int x0 = sx(-halfw, d);
-    int x1 = sx(halfw, d);
-    int w = x1 - x0;
-    int y_top = sy(0.0, db);   /* top (far edge) of the flat tile on screen */
-    int y_bot = sy(0.0, df);   /* bottom (near edge) */
-    int h = y_bot - y_top;
-    if (h < 2) h = 2;
+    /* ring corners for this row (view space) */
+    double rx[MAXN + 1], ry[MAXN + 1];
+    for (int c = 0; c <= g_n; c++) corner(c, &rx[c], &ry[c]);
 
-    uint32_t col = THEME_TILE[th];
-    uint32_t dark = THEME_TILE_DARK[th];
-    if (t == T_WALL) { col = rgb(205, 75, 75); dark = rgb(140, 42, 42); }
-    else if (t == T_CELL) { col = rgb(242, 214, 60); dark = rgb(184, 150, 32); }
-    else if (t == T_FINISH) { col = rgb(120, 242, 150); dark = rgb(72, 176, 96); }
+    for (int side = 0; side < g_n; side++) {
+      int rowIdx = ri;
+      if (!solid_at(side, rowIdx)) {
+        /* void: paint the empty side strip near-black so gaps read as holes */
+        uint32_t vcol = mixc(rgb(4, 5, 11), sky, fog * 0.35);
+        double p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y;
+        proj(rx[side], ry[side], zFar, &p0x, &p0y);
+        proj(rx[side + 1], ry[side + 1], zFar, &p1x, &p1y);
+        proj(rx[side + 1], ry[side + 1], zNear, &p2x, &p2y);
+        proj(rx[side], ry[side], zNear, &p3x, &p3y);
+        fill_quad(p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, vcol);
+        continue;
+      }
+      uint32_t base;
+      if (side == g_side) base = PAL[th][1];
+      else if (side == (g_side + 1) % g_n || side == (g_side + g_n - 1) % g_n)
+        base = PAL[th][2];
+      else
+        base = PAL[th][3];
+      uint32_t col = mixc(base, sky, fog);
+      /* tiny alternation so individual tiles read on long walls */
+      if ((side & 1) && side != g_side) col = mixc(col, sky, 0.10);
 
-    fill_rect(x0, y_top, w, h, col);
-    fill_rect(x0, y_top, w, (h > 3 ? 3 : h), dark);      /* back shading  */
-    fill_rect(x0, y_bot - 3, w, 3, dark);                /* front edge     */
-
-    if (t == T_WALL) {
-      int wpx = (int)((double)TILE_HW * 2.0 * FOCAL / df);
-      int wh = (int)(WALL_H * FOCAL / df);
-      int wy = sy(WALL_H, df);
-      int wx = sx(-TILE_HW, df);
-      if (wx < x0) wx = x0;
-      int ww = wpx - (wx - x0);
-      fill_rect(wx, wy, ww, wh, dark);
-      fill_rect(wx + 2, wy + 2, ww - 4 > 0 ? ww - 4 : 0, wh - 4 > 0 ? wh - 4 : 0, col);
-    } else if (t == T_CELL) {
-      /* cell bob floats just above the tile */
-      double cy = 0.75 + 0.12 * (idx % 3);
-      int r = (int)(0.11 * FOCAL / d) + 1;
-      int cxp = sx(0.0, d);
-      int cyp = sy(cy, d);
-      fill_circle(cxp, cyp, r + 1, dark);
-      fill_circle(cxp, cyp, r, col);
+      for (int l = 0; l < g_k; l++) {
+        double t0 = (double)l / (double)g_k;
+        double t1 = (double)(l + 1) / (double)g_k;
+        double ax = rx[side] + (rx[side + 1] - rx[side]) * t0;
+        double ay = ry[side] + (ry[side + 1] - ry[side]) * t0;
+        double bx = rx[side] + (rx[side + 1] - rx[side]) * t1;
+        double by = ry[side] + (ry[side + 1] - ry[side]) * t1;
+        double p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y;
+        proj(ax, ay, zFar, &p0x, &p0y);
+        proj(bx, by, zFar, &p1x, &p1y);
+        proj(bx, by, zNear, &p2x, &p2y);
+        proj(ax, ay, zNear, &p3x, &p3y);
+        fill_quad(p0x, p0y, p1x, p1y, p2x, p2y, p3x, p3y, col);
+      }
     }
   }
 
-  /* runner */
-  {
-    double d = CAM_BACK; /* the runner is always CAM_BACK ahead of the camera */
-    double feet_y = sy(0.0, d);       /* ground line at the runner's depth */
-    int gy = (int)(feet_y - g_py * FOCAL / d);
-    int gx = sx(0.0, d);
-    int body = (int)(0.42 * FOCAL / d) + 1;
-    uint32_t skin = rgb(240, 210, 120);
-    uint32_t suit = rgb(70, 130, 240);
-
-    if (g_state == S_DEAD) {
-      fill_circle(gx, gy - body, body, rgb(150, 40, 40)); /* fallen runner */
-    } else {
-      fill_circle(gx, gy - body, body + 2, rgb(40, 40, 60));   /* outline  */
-      fill_circle(gx, gy - body, body, suit);                  /* suit     */
-      fill_circle(gx + body / 2, gy - body - body / 2, body / 2, skin); /* head */
-      fill_circle(gx + body / 2 + 1, gy - body - body / 2 - 1, 1, rgb(30, 30, 40)); /* eye */
-    }
+  /* the runner: stationary at the bottom-center of the rolled view.
+     Surface of the current side is at view-space y = -g_ap (+g_jump). */
+  double vy = -g_ap + g_jump;
+  double vz = 0.0;
+  if (g_state == S_DEAD) {
+    double f = g_fallT * 1.4;
+    if (f > 1.5) f = 1.5;
+    vy -= f; /* sink through the floor into the void */
   }
-}
+  double sx, sy;
+  proj(0.0, vy, vz, &sx, &sy);
 
-static char seg_type_at(int idx) {
-  int len = map_len(g_level);
-  if (idx < 0 || idx >= len) return T_FLOOR;
-  return active_map()[idx];
+  double shrink = 1.0;
+  if (g_state == S_DEAD) {
+    double f = g_fallT * 0.9;
+    if (f > 0.55) f = 0.55;
+    shrink = 1.0 - f;
+    if (shrink < 0.45) shrink = 0.45;
+  }
+  int r = (int)(12.0 * shrink + 0.5);
+
+  if (g_state == S_DEAD) {
+    /* tumbling fall: just a shrinking blob */
+    fill_circle((int)sx, (int)sy, r, rgb(200, 96, 110));
+  } else {
+    /* little round runner seen from behind */
+    fill_circle((int)sx, (int)sy - r / 3, r, rgb(235, 244, 255));     /* body */
+    fill_circle((int)sx, (int)sy - r - 1, r / 2, rgb(235, 244, 255)); /* head */
+    fill_circle((int)sx, (int)sy - r - 1, r / 4, rgb(36, 40, 56));    /* back of helmet */
+    fill_circle((int)sx, (int)sy - r - 1, 1, rgb(36, 40, 56));
+    fill_circle((int)sx + 2, (int)sy - r - 3, 1, rgb(36, 40, 56));
+  }
 }

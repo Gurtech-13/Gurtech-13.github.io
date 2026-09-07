@@ -19,14 +19,24 @@
   }
   .hud {
     position: absolute;
-    top: 10px; left: 0; right: 0;
+    top: 8px; left: 0; right: 0;
     text-align: center;
-    font-size: 1.6rem;
+    font-size: 2rem;
     font-weight: 800;
     color: #fff;
     text-shadow: 0 2px 4px rgba(0,0,0,0.35);
     pointer-events: none;
     letter-spacing: 0.5px;
+  }
+  .best {
+    position: absolute;
+    top: 46px; left: 0; right: 0;
+    text-align: center;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.85);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.35);
+    pointer-events: none;
   }
   .hint {
     position: absolute;
@@ -52,7 +62,8 @@
 
 <div class="stage">
   <canvas id="cv" width="320" height="480"></canvas>
-  <div class="hud" id="score" style="display:none">0</div>
+  <div class="hud" id="score">0</div>
+  <div class="best" id="best">Best 0</div>
   <div class="hint" id="hint">Click or press Space to flap</div>
 </div>
 <p id="status" role="status" aria-live="polite">Loading flappy.wasm…</p>
@@ -73,6 +84,10 @@
   var STEP = 1 / 60;
 
   var exps = null, words = null, imageData = null, view = null;
+  var best = 0;
+  try { best = parseInt(localStorage.getItem("flappy-best") || "0", 10) || 0; } catch (e) { best = 0; }
+  var bestEl = document.getElementById("best");
+  bestEl.textContent = "Best " + best;
 
   function fail(msg) {
     status.textContent = "Failed to start: " + msg + " (serve over http://, e.g. python -m http.server)";
@@ -129,11 +144,18 @@
     ctx.putImageData(imageData, 0, 0);
 
     var s = exps.flappy_score() | 0;
-    if (s !== lastScore) { lastScore = s; scoreEl.textContent = String(s); }
+    if (s !== lastScore) {
+      lastScore = s;
+      scoreEl.textContent = String(s);
+      if (s > best) {
+        best = s;
+        bestEl.textContent = "Best " + best;
+        try { localStorage.setItem("flappy-best", String(best)); } catch (e) {}
+      }
+    }
     var st = exps.flappy_state() | 0;
     if (st !== lastState) {
       lastState = st;
-      scoreEl.className = "hud" + (st === 0 ? " hidden" : "");
       if (st === 0) { hintEl.textContent = "Click or press Space to start"; hintEl.className = "hint"; }
       else if (st === 1) { hintEl.className = "hint hidden"; }
       else { hintEl.textContent = "Game over — click to restart"; hintEl.className = "hint"; }
