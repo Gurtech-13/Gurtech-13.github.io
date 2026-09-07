@@ -48,6 +48,7 @@ code, pre, kbd, samp {
 .site-head { margin-bottom: 28px; }
 .site-head h1 { margin: 0 0 6px; font-size: 2.1rem; letter-spacing: -0.5px; }
 .site-head p { margin: 0; color: var(--muted); }
+.site-accounts { margin-top: 6px; font-size: 0.95rem; }
 
 .repo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 
@@ -251,6 +252,45 @@ h2 + .muted { margin-top: -6px; }
   gap: 6px 18px;
 }
 .section-list li { padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+
+/* ------------------------------ scratch section --------------------------- */
+
+.scratch { margin-top: 44px; }
+.scratch h2 { margin: 0 0 4px; font-size: 1.4rem; }
+.scratch > .muted { margin: 0 0 16px; }
+
+.scratch-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.scratch-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.scratch-card:hover { border-color: #33405a; transform: translateY(-1px); }
+
+.scratch-card .thumb { display: block; }
+.scratch-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 282 / 218;
+  object-fit: cover;
+  background: #000;
+}
+
+.scratch-body { padding: 10px 12px 12px; }
+.scratch-body h3 { margin: 0 0 3px; font-size: 0.95rem; line-height: 1.35; }
+.scratch-stats { margin: 0; color: var(--faint); font-size: 0.8rem; }
 
 /* ---------------------------------- footer -------------------------------- */
 
