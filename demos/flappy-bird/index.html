@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flappy Bird — C → WASM demo</title>
+<link rel="stylesheet" href="../../style.css">
+<style>
+  .demo-wrap { display: flex; flex-direction: column; align-items: center; padding: 24px 16px 48px; }
+  .stage { position: relative; }
+  canvas {
+    display: block;
+    width: 320px;
+    height: 480px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #70c5ce;
+    touch-action: none;
+  }
+  .hud {
+    position: absolute;
+    top: 10px; left: 0; right: 0;
+    text-align: center;
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: #fff;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.35);
+    pointer-events: none;
+    letter-spacing: 0.5px;
+  }
+  .hint {
+    position: absolute;
+    left: 0; right: 0; bottom: 96px;
+    text-align: center;
+    color: rgba(255,255,255,0.95);
+    text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    font-weight: 600;
+    pointer-events: none;
+  }
+  .hint.hidden, .hud.hidden { display: none; }
+  .controls { margin-top: 14px; color: var(--muted); font-size: 0.9rem; text-align: center; }
+  #status { color: var(--faint); font-size: 0.85rem; margin: 10px 0 0; min-height: 1.2em; }
+  #status.err { color: #f2a7a7; }
+  .back { align-self: flex-start; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap demo-wrap">
+<nav class="topnav back"><a class="back" href="../../index.html">&larr; All projects</a></nav>
+<h1 style="margin:0 0 4px">Flappy Bird</h1>
+<p class="muted" style="margin:0 0 16px">Minimal demo — game logic in freestanding C, compiled to WASM. JavaScript is used only as an I/O layer (input, clock, canvas). No libraries.</p>
+
+<div class="stage">
+  <canvas id="cv" width="320" height="480"></canvas>
+  <div class="hud" id="score" style="display:none">0</div>
+  <div class="hint" id="hint">Click or press Space to flap</div>
+</div>
+<p id="status" role="status" aria-live="polite">Loading flappy.wasm…</p>
+<p class="controls">Click / tap anywhere, or press <kbd>Space</kbd> / <kbd>↑</kbd> to flap.</p>
+<p class="muted" style="font-size:0.8rem">Source: <a href="flappy.c">flappy.c</a> · build: <code>bash demos/flappy-bird/build.sh</code></p>
+</div>
+
+<script>
+/* Minimal I/O layer: fetch the module, feed input/clock, blit pixels. */
+(function () {
+  "use strict";
+  var status = document.getElementById("status");
+  var canvas = document.getElementById("cv");
+  var ctx = canvas.getContext("2d");
+  var scoreEl = document.getElementById("score");
+  var hintEl = document.getElementById("hint");
+  var W = 320, H = 480;
+  var STEP = 1 / 60;
+
+  var exps = null, words = null, imageData = null, view = null;
+
+  function fail(msg) {
+    status.textContent = "Failed to start: " + msg + " (serve over http://, e.g. python -m http.server)";
+    status.className = "err";
+    hintEl.textContent = msg;
+  }
+
+  function load() {
+    return fetch("flappy.wasm", { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        if (WebAssembly.instantiateStreaming) return WebAssembly.instantiateStreaming(r, {});
+        return r.arrayBuffer().then(function (b) { return WebAssembly.instantiate(b, {}); });
+      })
+      .then(function (res) {
+        exps = res.instance.exports;
+        if (typeof exps.flappy_step !== "function") throw new Error("bad exports");
+        words = exps.memory
+          ? new Uint32Array(exps.memory.buffer, exps.flappy_buffer(), W * H)
+          : null;
+        if (!words) throw new Error("no memory export");
+        imageData = ctx.createImageData(W, H);
+        view = new Uint32Array(imageData.data.buffer);
+        // start
+        exps.flappy_init((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0);
+        run();
+      })
+      .catch(function (e) {
+        fail(e && e.message ? e.message : String(e));
+        throw e;
+      });
+  }
+
+  var last = 0, acc = 0, lastScore = -1, lastState = -1;
+  function run() {
+    status.textContent = "WASM loaded (" + (exps.memory.buffer.byteLength / 1024).toFixed(0) + " KB) — click or press Space";
+    last = performance.now();
+    requestAnimationFrame(frame);
+  }
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    acc += Math.min((now - last) / 1000, 0.1);
+    last = now;
+    while (acc >= STEP) { exps.flappy_step(STEP); acc -= STEP; }
+
+    // blit framebuffer (0xAARRGGBB words -> RGBA bytes)
+    var n = W * H;
+    for (var i = 0; i < n; i++) {
+      var v = words[i];
+      // A stays in place; R(16..23)->low byte; G(8..15) stays; B(0..7)->bits 16..23
+      view[i] = (v & 0xff000000) | ((v >>> 16) & 0xff) | (v & 0x0000ff00) | ((v & 0xff) << 16);
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    var s = exps.flappy_score() | 0;
+    if (s !== lastScore) { lastScore = s; scoreEl.textContent = String(s); }
+    var st = exps.flappy_state() | 0;
+    if (st !== lastState) {
+      lastState = st;
+      scoreEl.className = "hud" + (st === 0 ? " hidden" : "");
+      if (st === 0) { hintEl.textContent = "Click or press Space to start"; hintEl.className = "hint"; }
+      else if (st === 1) { hintEl.className = "hint hidden"; }
+      else { hintEl.textContent = "Game over — click to restart"; hintEl.className = "hint"; }
+    }
+  }
+
+  function flap() {
+    if (!exps) return;
+    try { exps.flappy_flap(); } catch (e) { /* noop */ }
+  }
+  window.addEventListener("pointerdown", flap);
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW") {
+      e.preventDefault();
+      flap();
+    }
+  });
+
+  window.addEventListener("error", function (e) {
+    try { status.textContent = "Runtime error: " + (e.message || e); status.className = "err"; } catch (_) {}
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    try { status.textContent = "Runtime error: " + (e.reason && e.reason.message ? e.reason.message : e.reason); status.className = "err"; } catch (_) {}
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+# Local Zig toolchain (downloaded into the repo for building WASM demos)
+/zig/
+
+# Zig build caches
+/zig-cache/
+/.zig-cache/
+zig-out/

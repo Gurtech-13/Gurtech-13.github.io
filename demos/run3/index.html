@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run 3-style — C → WASM demo</title>
+<link rel="stylesheet" href="../../style.css">
+<style>
+  .demo-wrap { display: flex; flex-direction: column; align-items: center; padding: 20px 16px 48px; }
+  .stage { position: relative; }
+  canvas {
+    display: block;
+    width: 640px;
+    max-width: 100%;
+    height: auto;
+    aspect-ratio: 640 / 360;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #0e1428;
+    touch-action: none;
+  }
+  .hud { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+  .hud .toprow { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 10px 14px; box-sizing: border-box; }
+  .hud .cells { color: #fff; font-weight: 800; font-size: 1.05rem; text-shadow: 0 1px 3px rgba(0,0,0,.5); }
+  .hud .level-tag { color: rgba(255,255,255,.75); font-size: .85rem; text-shadow: 0 1px 3px rgba(0,0,0,.5); }
+  .progress { height: 5px; width: 100%; background: rgba(255,255,255,.15); }
+  .progress > i { display: block; height: 100%; width: 0%; background: #7dd3fc; transition: width .15s linear; }
+  .msg {
+    margin-top: auto; margin-bottom: 26px;
+    padding: 10px 18px; border-radius: 10px;
+    background: rgba(8,10,18,.72); border: 1px solid var(--border);
+    color: #fff; font-weight: 700; text-align: center;
+  }
+  .msg small { display:block; font-weight: 400; color: var(--muted); margin-top: 3px; }
+  .levels { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
+  .levels button {
+    font: inherit; cursor: pointer;
+    background: var(--panel); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; font-size: .82rem;
+  }
+  .levels button:hover { color: var(--fg); border-color: var(--accent-dim); }
+  .levels button.active { color: #04131d; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+  .controls, .footnote { margin-top: 12px; color: var(--muted); font-size: .88rem; text-align: center; }
+  .footnote { font-size: .78rem; }
+  #status { color: var(--faint); font-size: .85rem; min-height: 1.2em; text-align:center; }
+  #status.err { color: #f2a7a7; }
+</style>
+</head>
+<body>
+<div class="wrap demo-wrap">
+<nav class="topnav"><a class="back" href="../../index.html">&larr; All projects</a></nav>
+<h1 style="margin:0 0 4px">Run 3-style Runner</h1>
+<p class="muted" style="margin:0 0 14px">Original C → WASM tribute. Auto-run a path of floating tiles: jump gaps and barriers, grab cells, reach the finish. JS is only the I/O layer — no libraries.</p>
+
+<div class="stage">
+  <canvas id="cv" width="640" height="360"></canvas>
+  <div class="hud">
+    <div class="toprow"><span class="cells">◎ <span id="cells">0</span></span><span class="level-tag" id="leveltag">Level 1</span></div>
+    <div class="progress"><i id="bar"></i></div>
+    <div class="msg" id="msg">Click / Space to run<small>Jump with a well-timed tap — gaps and barriers ahead!</small></div>
+  </div>
+</div>
+<div class="levels" id="levels"></div>
+<p id="status" role="status" aria-live="polite">Loading run3.wasm…</p>
+<p class="controls">Jump: <kbd>Space</kbd> / <kbd>↑</kbd> / click · pick a level above · finish a level to advance</p>
+<p class="footnote">All code and levels are original; gameplay modeled after the general "Run 3" concept (see <a href="https://github.com/Python-Coderss/Gurtech-13.github.io/blob/main/demos/run3/run3.c">run3.c</a> header for attribution). Source: <a href="run3.c">run3.c</a> · <a href="build.sh">build.sh</a></p>
+</div>
+
+<script>
+/* Minimal I/O layer: fetch the module, drive the clock/input, blit pixels. */
+(function () {
+  "use strict";
+  var status = document.getElementById("status");
+  var canvas = document.getElementById("cv");
+  var ctx = canvas.getContext("2d");
+  var cellsEl = document.getElementById("cells");
+  var tagEl = document.getElementById("leveltag");
+  var barEl = document.getElementById("bar");
+  var msgEl = document.getElementById("msg");
+  var levelsEl = document.getElementById("levels");
+  var LEVEL_NAMES = [
+    "Warm-Up", "First Gaps", "Walls & Cells", "Double Gaps",
+    "Hazards", "Night Run", "Long Haul", "Blitz"
+  ];
+  var STEP = 1 / 60;
+  var exps = null, words = null, imageData = null, view = null;
+  var cur = -1, lastState = -1, lastCells = -1;
+
+  function fail(m) {
+    status.textContent = "Failed to start: " + m + " (serve over http://, e.g. python -m http.server)";
+    status.className = "err";
+    msgEl.textContent = "Could not start";
+  }
+
+  function load() {
+    return fetch("run3.wasm", { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        if (WebAssembly.instantiateStreaming) return WebAssembly.instantiateStreaming(r, {});
+        return r.arrayBuffer().then(function (b) { return WebAssembly.instantiate(b, {}); });
+      })
+      .then(function (res) {
+        exps = res.instance.exports;
+        words = new Uint32Array(exps.memory.buffer, exps.run3_buffer(), 640 * 360);
+        imageData = ctx.createImageData(640, 360);
+        view = new Uint32Array(imageData.data.buffer);
+        exps.run3_init((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0);
+        buildLevels();
+        setLevel(0);
+        status.textContent = "WASM loaded (" + (exps.memory.buffer.byteLength / 1024).toFixed(0) + " KB)";
+        last = performance.now();
+        requestAnimationFrame(frame);
+        if (/[?&]demo=1/.test(location.search)) {
+          demo = true;
+          setTimeout(function () { exps.run3_flap(); }, 300);
+        }
+      })
+      .catch(function (e) {
+        fail(e && e.message ? e.message : String(e));
+        throw e;
+      });
+  }
+
+  function buildLevels() {
+    for (var i = 0; i < exps.run3_level_count(); i++) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = (i + 1) + ". " + LEVEL_NAMES[i];
+      b.addEventListener("click", (function (n) { return function () { setLevel(n); }; })(i));
+      levelsEl.appendChild(b);
+    }
+  }
+
+  function setLevel(n) {
+    exps.run3_level(n | 0);
+    cur = n | 0;
+    var bs = levelsEl.querySelectorAll("button");
+    for (var i = 0; i < bs.length; i++) bs[i].className = i === cur ? "active" : "";
+    tagEl.textContent = "Level " + (cur + 1) + " · " + LEVEL_NAMES[cur];
+  }
+
+  var last = 0, acc = 0, demo = false, nextDemoJump = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    acc += Math.min((now - last) / 1000, 0.1);
+    last = now;
+    while (acc >= STEP) { exps.run3_step(STEP); acc -= STEP; }
+
+    // blit framebuffer: 0xAARRGGBB -> RGBA bytes
+    var n = 640 * 360;
+    for (var i = 0; i < n; i++) {
+      var v = words[i];
+      view[i] = (v & 0xff000000) | ((v >>> 16) & 0xff) | (v & 0x0000ff00) | ((v & 0xff) << 16);
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    if (demo) {
+      nextDemoJump -= STEP;
+      if (nextDemoJump <= 0) { exps.run3_flap(); nextDemoJump = 0.55 + Math.random() * 0.2; }
+    }
+
+    var cells = exps.run3_cells() | 0;
+    if (cells !== lastCells) { lastCells = cells; cellsEl.textContent = String(cells); }
+    barEl.style.width = (exps.run3_progress() * 100).toFixed(1) + "%";
+
+    var st = exps.run3_state() | 0;
+    if (st !== lastState) {
+      lastState = st;
+      if (st === 0) msgEl.innerHTML = "Click / Space to run<small>Level " + (cur + 1) + " · " + LEVEL_NAMES[cur] + "</small>";
+      else if (st === 1) msgEl.innerHTML = "";
+      else if (st === 2) msgEl.innerHTML = "You fell!<small>Click / Space to retry</small>";
+      else msgEl.innerHTML = "Level cleared!<small>Click / Space for level " + Math.min(cur + 2, exps.run3_level_count()) + (cur + 1 >= exps.run3_level_count() ? " (loops to 1)" : "") + "</small>";
+    }
+  }
+
+  function tap() {
+    if (!exps) return;
+    try { exps.run3_flap(); } catch (e) {}
+  }
+  window.addEventListener("pointerdown", function (e) {
+    var t = e.target;
+    if (t && (t.tagName === "BUTTON" || t.tagName === "A")) return;
+    tap();
+  });
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW") {
+      e.preventDefault();
+      tap();
+    }
+  });
+  window.addEventListener("error", function (e) {
+    try { status.textContent = "Runtime error: " + (e.message || e); status.className = "err"; } catch (_) {}
+  });
+  window.addEventListener("unhandledrejection", function (e) {
+    try { status.textContent = "Runtime error: " + (e.reason && e.reason.message ? e.reason.message : e.reason); status.className = "err"; } catch (_) {}
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

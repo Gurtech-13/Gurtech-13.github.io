@@ -253,6 +253,25 @@ h2 + .muted { margin-top: -6px; }
 }
 .section-list li { padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
 
+/* -------------------------------- demo banner ----------------------------- */
+
+.demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 10px 0 0;
+  padding: 14px 18px;
+  background: linear-gradient(90deg, #123043, #0f2433 60%, var(--panel));
+  border: 1px solid #2c4a63;
+  border-radius: var(--radius);
+  color: var(--fg);
+}
+.demo-banner + .demo-banner { margin-top: 10px; }
+.demo-banner:hover { border-color: var(--accent-dim); text-decoration: none; transform: translateY(-1px); transition: all 0.15s ease; }
+.demo-banner strong { color: var(--accent); }
+.demo-banner .arrow { color: var(--accent); font-weight: 700; white-space: nowrap; }
+
 /* ------------------------------ scratch section --------------------------- */
 
 .scratch { margin-top: 44px; }
