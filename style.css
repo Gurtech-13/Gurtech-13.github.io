@@ -1,0 +1,271 @@
+/* Shared stylesheet for the Python-Coderss projects site (no external deps). */
+
+:root {
+  --bg: #0b0d12;
+  --panel: #11141b;
+  --panel-2: #161a23;
+  --border: #23272f;
+  --fg: #e8ecf1;
+  --muted: #a9b1bc;
+  --faint: #7d8793;
+  --accent: #7dd3fc;
+  --accent-dim: #38a7dd;
+  --code-bg: #1a1d24;
+  --radius: 14px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 40px 24px 64px;
+}
+
+.page { max-width: 980px; }
+
+/* ------------------------------- index page ------------------------------ */
+
+.site-head { margin-bottom: 28px; }
+.site-head h1 { margin: 0 0 6px; font-size: 2.1rem; letter-spacing: -0.5px; }
+.site-head p { margin: 0; color: var(--muted); }
+
+.repo-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+
+.repo-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.repo-card:hover { border-color: #33405a; transform: translateY(-1px); }
+
+.repo-main { min-width: 0; }
+.repo-main h2 { margin: 0 0 4px; font-size: 1.15rem; letter-spacing: -0.2px; }
+.repo-name { color: var(--fg); }
+.repo-name:hover { color: var(--accent); text-decoration: none; }
+
+.repo-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.93rem;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.repo-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--faint);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.repo-meta .sep { margin: 0 6px; opacity: 0.5; }
+.gh-link { font-size: 0.85rem; }
+
+/* ---------------------------------- chips --------------------------------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.chip-warn { color: #f2c879; border-color: #5a4a24; }
+.lang-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+/* ------------------------------ repo detail page -------------------------- */
+
+.topnav { margin-bottom: 8px; }
+.back { color: var(--faint); font-size: 0.9rem; }
+.back:hover { color: var(--accent); }
+
+.repo-head {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 20px;
+  margin-bottom: 28px;
+}
+.repo-head h1 {
+  margin: 0 0 6px;
+  font-size: 2rem;
+  letter-spacing: -0.5px;
+  overflow-wrap: anywhere;
+}
+.repo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 14px; }
+.repo-desc { color: var(--muted); margin: 0 0 14px; max-width: 72ch; }
+
+.btn {
+  display: inline-block;
+  background: var(--accent-dim);
+  color: #04131d;
+  font-weight: 600;
+  font-size: 0.9rem;
+  border-radius: 8px;
+  padding: 6px 14px;
+}
+.btn:hover { background: var(--accent); text-decoration: none; }
+.btn-ghost { background: transparent; color: var(--accent); border: 1px solid #2c4a63; font-weight: 500; }
+.btn-ghost:hover { border-color: var(--accent); }
+
+/* ----------------------------- rendered README ---------------------------- */
+
+.readme { max-width: 100%; }
+.readme > *:first-child { margin-top: 0; }
+
+.readme h1, .readme h2, .readme h3, .readme h4, .readme h5, .readme h6 {
+  margin: 1.6em 0 0.6em;
+  line-height: 1.3;
+  letter-spacing: -0.3px;
+  scroll-margin-top: 24px;
+}
+.readme h1 { font-size: 1.7rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.readme h2 { font-size: 1.35rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.readme h3 { font-size: 1.15rem; }
+.readme h4 { font-size: 1rem; }
+.readme p { margin: 0 0 1em; color: var(--fg); }
+.readme ul, .readme ol { padding-left: 1.6em; margin: 0 0 1em; }
+.readme li { margin: 0.25em 0; }
+.readme li > ul, .readme li > ol { margin-bottom: 0; }
+.readme ul.contains-task-list { list-style: none; padding-left: 0.4em; }
+.readme img { max-width: 100%; height: auto; border-radius: 6px; }
+.readme a { word-break: break-word; }
+.readme strong { color: #f2f5f9; }
+.readme hr { border: none; border-top: 1px solid var(--border); margin: 1.8em 0; }
+.readme blockquote {
+  margin: 0 0 1em;
+  padding: 2px 16px;
+  border-left: 3px solid #2c4a63;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 0 8px 8px 0;
+}
+.readme blockquote p { color: inherit; }
+
+.readme code {
+  background: var(--code-bg);
+  border: 1px solid #262b35;
+  border-radius: 5px;
+  padding: 0.1em 0.35em;
+}
+.readme pre {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  line-height: 1.5;
+  margin: 0 0 1em;
+}
+.readme pre code { background: none; border: none; padding: 0; font-size: 0.88em; }
+.readme .highlight { border-radius: 10px; margin: 0 0 1em; }
+.readme .highlight pre { border: 1px solid var(--border); margin: 0; }
+
+.readme table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 1em;
+  font-size: 0.92rem;
+}
+.readme th, .readme td {
+  border: 1px solid var(--border);
+  padding: 7px 13px;
+  text-align: left;
+  vertical-align: top;
+}
+.readme th { background: var(--panel-2); font-weight: 600; white-space: nowrap; }
+.readme tr:nth-child(2n) td { background: rgba(255, 255, 255, 0.018); }
+
+.readme details { margin: 0 0 1em; }
+.readme summary { cursor: pointer; }
+
+/* --------------------------------- file tree ------------------------------ */
+
+.tree { list-style: none; margin: 0 0 1em; padding-left: 0; font-size: 0.92rem; }
+.tree ul { list-style: none; padding-left: 1.4em; margin: 0; border-left: 1px dashed #2a303b; margin-left: 0.6em; }
+.tree li { margin: 2px 0; }
+.tree summary { cursor: pointer; color: var(--fg); }
+.tree summary:hover { color: var(--accent); }
+.tree .dir-name { font-weight: 600; }
+.tree .file a { color: var(--muted); }
+.tree .file a:hover { color: var(--accent); }
+.tree.digest li { padding: 4px 0; border-bottom: 1px dashed rgba(35, 39, 47, 0.6); }
+.tree.digest .count { color: var(--faint); font-size: 0.85rem; margin-left: 8px; }
+
+.muted { color: var(--faint); }
+h2 + .muted { margin-top: -6px; }
+
+/* ------------------------- section headings & lists ----------------------- */
+
+.wrap h2 {
+  margin: 1.8em 0 0.7em;
+  font-size: 1.3rem;
+  letter-spacing: -0.3px;
+}
+
+.readme + h2, .readme + p + h2 { margin-top: 1.2em; }
+
+.section-list {
+  list-style: none;
+  margin: 0 0 1em;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 6px 18px;
+}
+.section-list li { padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+
+/* ---------------------------------- footer -------------------------------- */
+
+.site-foot {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--faint);
+  font-size: 0.83rem;
+}
+
+/* ------------------------------- responsive ------------------------------- */
+
+@media (max-width: 640px) {
+  .wrap { padding: 24px 16px 48px; }
+  .repo-card { flex-direction: column; align-items: flex-start; }
+  .repo-meta { align-items: flex-start; white-space: normal; }
+}
