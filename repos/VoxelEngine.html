@@ -24,7 +24,137 @@ pre{background:#11141b;border:1px solid #23272f;border-radius:12px;padding:16px;
 </div>
 <p># VoxelEngine
 
-*No content available.*</p>
+A voxel engine made in Java using LWJGL 3, slowly turning into a Minecraft clone.
+
+## Source Structure
+
+### ai
+
+- ai\MobBrain.java
+- ai\PathFinder.java
+- ai\Raycaster.java
+- ai\Senses.java
+- ai\Stimulus.java
+- ai\StimulusBus.java
+- ai\VoxelView.java
+- ai\Walkability.java
+
+### audio
+
+- audio\AudioData.java
+- audio\DialogueCatalog.java
+- audio\DialogueDirector.java
+- audio\DialogueLine.java
+- audio\FFT.java
+- audio\Mp3Decoder.java
+- audio\MusicDirector.java
+- audio\MusicPlayer.java
+
+### biome
+
+- biome\Biome.java
+- biome\BiomeBeach.java
+- biome\BiomeDecorator.java
+- biome\BiomeDesert.java
+- biome\BiomeEnd.java
+- biome\BiomeForest.java
+- biome\BiomeHell.java
+- biome\BiomeHills.java
+
+### camera
+
+- camera\CameraController.java
+
+### cinematic
+
+- cinematic\CinematicSystem.java
+
+### combat
+
+- combat\CombatSystem.java
+
+### crafting
+
+- crafting\CraftingManager.java
+- crafting\VanillaRecipeLoader.java
+
+### entity
+
+- entity\AechorPlantEntity.java
+- entity\AerbunnyEntity.java
+- entity\AerwhaleEntity.java
+- entity\AetherPassiveEntity.java
+- entity\AetherProjectileEntity.java
+- entity\Animation.java
+- entity\ArrowEntity.java
+- entity\BlazeEntity.java
+
+### game
+
+- game\ArmorValues.java
+- game\AtmosphereRenderer.java
+- game\BlockInteraction.java
+- game\CanonicalRegistry.java
+- game\ChestManager.java
+- game\CommandBlockManager.java
+- game\CommandProcessor.java
+- game\CraftingTableConstants.java
+
+### lighting
+
+- lighting\EnumSkyBlock.java
+- lighting\LightEngine.java
+- lighting\LightNode.java
+- lighting\LightSource.java
+- lighting\LightType.java
+
+### player
+
+- player\PlayerController.java
+
+### render
+
+- render\Renderer.java
+
+### tools
+
+- tools\PointClickWorldExporter.java
+- tools\TutorialWorldExporter.java
+- tools\UVFinder.java
+
+### ui
+
+- ui\HudUI.java
+- ui\UIConstants.java
+- ui\UILayer.java
+- ui\UIManager.java
+
+### utils
+
+- utils\BiomeManager.java
+- utils\BlockDataManager.java
+- utils\BlockRegistry.java
+- utils\Direction.java
+- utils\FixedPoint.java
+- utils\GLUtil.java
+- utils\MinecraftContentLoader.java
+- utils\PerlinNoise.java
+
+### world
+
+- world\AetherGenerator.java
+- world\AncientBuilderFacility.java
+- world\BeaconLogic.java
+- world\BetaWorldGenerator.java
+- world\BlazeBurnerManager.java
+- world\ChunkManager.java
+- world\CopperTankManager.java
+- world\DimensionManager.java
+
+## Build
+
+Maven project with LWJGL 3.3.3, JOML, JSON, jlayer, and ONNX Runtime dependencies.</p>
+</p>
 </div>
 </body>
 </html>
