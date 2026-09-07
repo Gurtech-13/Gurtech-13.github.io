@@ -1,0 +1,73 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jengine - Python-Coderss</title>
+<style>
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0b0d12;color:#e8ecf1;line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;padding:48px 24px}
+a{color:#7dd3fc;text-decoration:none}a:hover{text-decoration:underline}
+h1,h2,h3{margin:0 0 12px;letter-spacing:-0.3px}
+ul{padding-left:18px}code{background:#1a1d24;padding:2px 6px;border-radius:4px;font-size:0.9em}
+pre{background:#11141b;border:1px solid #23272f;border-radius:12px;padding:16px;overflow:auto}
+.header{margin-bottom:32px;border-bottom:1px solid #23272f;padding-bottom:16px}
+.back{display:inline-block;margin-bottom:16px;color:#7dd3fc}
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/">&larr; Back to projects</a>
+<div class="header">
+<h1>Jengine</h1>
+<p><a href="https://github.com/Python-Coderss/Jengine" target="_blank">View on GitHub</a></p>
+</div>
+<p># Jengine - A Java 3D Ray Tracing Engine
+
+Jengine is a simple 3D ray tracing engine built in Java. It's designed to render voxel-based scenes with features like terrain generation, multiple block types, and basic lighting effects. The engine uses Swing for its graphical user interface.
+
+## Features
+
+- Ray tracing for realistic lighting, shadows, reflection, and refraction.
+- Voxel-based terrain generation using Perlin noise.
+- Multiple block types: Grass, Dirt, Stone, Bedrock.
+- Camera controls: WASD for movement, right-click + drag for mouse look.
+- Basic lighting: Directional (unit) lights and ambient light.
+- Skybox for background rendering.
+- Performance and debug overlay showing FPS, frame time, camera position, and orientation.
+
+## How to Run
+
+1.  <strong>Compile the code:</strong> Navigate to the <code>Jengine</code> directory and compile the Java source files. You can use a standard Java compiler (javac). For example: <code>find src -name '*.java' &gt; sources.txt &amp;&amp; javac @sources.txt -d bin</code> (This command might need adjustment based on your specific setup and OS).
+2.  <strong>Run the application:</strong> Execute the <code>MainWindow</code> class. From the <code>Jengine/bin</code> directory (or wherever your compiled classes are), run: <code>java io.github.jengine.MainWindow</code>
+
+## Controls
+
+-   <code>WASD</code>: Move the camera forward, left, backward, and right.
+-   <code>Right-Click + Drag Mouse</code>: Rotate the camera view.
+-   <code>ESC</code>: Pause or unpause the rendering.
+
+## Code Overview
+
+-   <code>io.github.jengine.MainWindow</code>: The main class that sets up the application window using Swing, handles user input (keyboard and mouse), and manages the main render loop.
+-   <code>io.github.jengine.Renderer</code>: Contains the core ray tracing logic. It generates rays, finds intersections with scene objects, and calculates pixel colors based on lighting, materials, reflection, and refraction.
+-   <code>io.github.jengine.Scene</code>: Manages all objects in the 3D world, including blocks, lights, and the skybox. It provides methods for intersecting rays with objects.
+-   <code>io.github.jengine.Camera</code>: Represents the viewer's perspective. It handles camera position, orientation, movement, and generates primary rays for the renderer.
+-   <code>io.github.jengine.TerrainGenerator</code>: Responsible for creating the voxel-based terrain using Perlin noise algorithms. It can generate different layers of blocks (e.g., grass, dirt, stone).
+-   <code>io.github.jengine.Block</code> (and its subclasses like <code>GrassBlock</code>, <code>DirtBlock</code>, <code>StoneBlock</code>, <code>BedrockBlock</code>): Abstract class and concrete implementations for different types of blocks in the world. Each block has a position and material properties.
+-   <code>io.github.jengine.Vector3</code>: A utility class for representing 3D vectors and points, used extensively for positions, directions, and calculations in 3D space.
+-   <code>io.github.jengine.Material</code>: Defines the visual properties of objects, such as color, reflectivity, and refractivity.
+-   <code>io.github.jengine.Skybox</code>: Renders the background of the scene.
+
+## Future Enhancements
+
+-   More advanced lighting models (e.g., area lights, soft shadows).
+-   Support for more complex object geometries beyond voxels.
+-   Texture mapping for blocks and objects.
+-   Performance optimizations (e.g., acceleration structures like BVH).
+-   User interface for scene configuration or material editing.
+-   Sound effects or music.</p>
+</p>
+</div>
+</body>
+</html>

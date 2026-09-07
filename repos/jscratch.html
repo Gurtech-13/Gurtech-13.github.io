@@ -1,0 +1,225 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jscratch - Python-Coderss</title>
+<style>
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0b0d12;color:#e8ecf1;line-height:1.6}
+.wrap{max-width:860px;margin:0 auto;padding:48px 24px}
+a{color:#7dd3fc;text-decoration:none}a:hover{text-decoration:underline}
+h1,h2,h3{margin:0 0 12px;letter-spacing:-0.3px}
+ul{padding-left:18px}code{background:#1a1d24;padding:2px 6px;border-radius:4px;font-size:0.9em}
+pre{background:#11141b;border:1px solid #23272f;border-radius:12px;padding:16px;overflow:auto}
+.header{margin-bottom:32px;border-bottom:1px solid #23272f;padding-bottom:16px}
+.back{display:inline-block;margin-bottom:16px;color:#7dd3fc}
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="/">&larr; Back to projects</a>
+<div class="header">
+<h1>jscratch</h1>
+<p><a href="https://github.com/Python-Coderss/jscratch" target="_blank">View on GitHub</a></p>
+</div>
+<p># Java-based Scratch-like Web Application with Python Block Support
+
+## Project Description
+
+This project is a web application that provides a simplified, Scratch-like visual programming environment. Users can drag and drop blocks (including custom Python code blocks) to an assembly area to create simple programs. The frontend is built with HTML, CSS, and vanilla JavaScript, while the backend is a lightweight Java HTTP server responsible for executing the programs. Python code blocks are executed using an embedded Jython interpreter.
+
+The primary goal is to explore the integration of a visual block metaphor with Python scripting, executed server-side, and to build a foundation for more complex block-based programming.
+
+## Features (Current State)
+
+*   <strong>Web-Based Interface:</strong> Accessible via a modern web browser with a tabbed interface ("Scripts", "Costumes", "Sounds").
+*   <strong>Basic Sprite System:</strong>
+    *   A default "Sprite1" is created on application startup (both client and server-side conceptual model).
+    *   Scripts, costumes, and sounds are managed in the context of this active sprite.
+    *   A "Sprites" panel displays the list of sprites (currently just "Sprite1") and allows selection.
+*   <strong>Visual Stage:</strong>
+    *   A 480x360 pixel stage area where sprites are rendered.
+    *   Sprites display their current costume at their X, Y coordinates ((0,0) is center, Y positive is up, similar to Scratch).
+*   <strong>Scripts Tab:</strong>
+    *   <strong>Three-Panel Layout:</strong> Block Palette, Script Assembly Area, and Stage Area (text output).
+    *   <strong>Drag-and-Drop Interface:</strong> Blocks can be dragged from the palette to the script assembly area for the active sprite, allowing vertical stacking.
+    *   <strong>Block Configuration &amp; Types:</strong>
+        *   <strong>Python Code Block:</strong> Opens a modal for Python code input. Executed server-side using an embedded Jython interpreter.
+        *   <strong>Say Block (Looks):</strong> Prompts for text. Server simulates a "say" action, output in Stage.
+        *   <strong>Loop Block (Control):</strong> Prompts for a count. Rendered with a visual placeholder for nested blocks (execution of children not yet implemented).
+        *   <strong>Go to X: Y: Block (Motion):</strong> Prompts for X and Y coordinates. Affects the active sprite's position on the stage.
+        *   <strong>Switch to costume: Block (Looks):</strong> Prompts with available costumes for the active sprite. Changes the sprite's appearance on the stage.
+    *   <strong>Multi-Block Script Execution:</strong> The frontend sends a JSON array of the active sprite's blocks to the server. The server parses this and executes blocks sequentially.
+    *   <strong>Aggregated Text Output:</strong> Output from all executed blocks is displayed in the "Stage Area's" text output section.
+*   <strong>Basic Variable System:</strong> Create global or sprite-local variables via a UI dialog (name, scope).
+*   <strong>Variable Blocks:</strong> 'Set [Variable] to [Value]' and 'Change [Variable] by [Value]' blocks for modifying variables.
+*   <strong>Variable Reporters:</strong> Created variables appear as draggable reporter blocks in a 'Variables' palette category.
+*   <strong>Stage Monitors:</strong> Variables can be toggled for display on the stage, showing their name and current value. Monitors update optimistically during script execution.
+*   <strong>Costumes Tab (per Sprite):</strong>
+    *   <strong>Client-Side Asset Handling:</strong> Allows users to select local image files for the active sprite.
+    *   Thumbnails are displayed. Clicking a thumbnail sets it as the <code>currentCostumeId</code> for the active sprite and updates the stage.
+*   <strong>Sounds Tab (per Sprite):</strong>
+    *   <strong>Client-Side Asset Handling:</strong> Allows users to select local audio files for the active sprite.
+    *   Sounds are listed with a "Play" button for in-browser playback.
+*   <strong>Server-Side Operations:</strong>
+    *   Java HTTP server for static files and API requests.
+    *   Server-side logging (<code>server.log</code>).
+*   <strong>Basic Script Runner (Legacy):</strong> Retains a <code>/run/&lt;script_name&gt;</code> endpoint.
+
+## Directory Structure
+
+-   <code>src/main/java/com/example/SimpleHttpServer.java</code>: The core Java code for the backend HTTP server, including request handlers.
+-   <code>src/main/java/com/example/JythonExecutor.java</code>: Class responsible for executing Python code using the embedded Jython interpreter.
+-   <code>webapp/</code>: Contains all frontend files (<code>index.html</code>, <code>style.css</code>, <code>js/app.js</code>).
+-   <code>scripts/</code>: Holds example shell scripts for the legacy <code>/run/</code> endpoint.
+-   <code>lib/</code>: This directory is for JAR dependencies. <strong>You must create this directory and place the required JARs (Jython Standalone and Org.JSON) here.</strong>
+-   <code>server.log</code>: Log file generated by the Java server.
+-   <code>out/</code> (Optional, created during build): Default directory for compiled Java class files.
+-   <code>DESIGN_NOTES.md</code>: Contains conceptual details about program execution architecture and sandboxing.
+
+## Prerequisites
+
+*   <strong>Java JDK 8 or higher:</strong> Required to compile and run the Java server code.
+*   <strong>Jython Standalone JAR:</strong> Required for executing Python blocks from the web UI.
+*   <strong>Org.JSON JAR:</strong> Required by the server to parse JSON data sent from the frontend.
+*   <strong>Python 3 Interpreter (Optional, for legacy script runner):</strong> If you intend to use the <code>/run/&lt;script_name&gt;</code> endpoint with Python scripts that require CPython, it must be in the system's PATH. This is <strong>not</strong> used for Python blocks added via the UI.
+*   <strong>Web Browser:</strong> A modern web browser to access the application.
+
+### Dependency Setup (<code>lib/</code> directory)
+
+The Java server relies on external JAR files. These need to be manually downloaded and placed in a <code>lib/</code> directory within the project root.
+
+1.  <strong>Create <code>lib</code> Directory:</strong> If it doesn't already exist, create a directory named <code>lib</code> in the root of this project.
+2.  <strong>Download Jython Standalone JAR:</strong>
+    *   Go to the <a href="https://www.jython.org/download" target="_blank">Jython official website</a>.
+    *   Download the "Jython Standalone" JAR file (e.g., <code>jython-standalone-2.7.3.jar</code>). Replace <code>2.7.3</code> with your downloaded version in commands below.
+    *   Place this JAR into the <code>lib/</code> directory.
+3.  <strong>Download Org.JSON JAR:</strong>
+    *   Go to the <a href="https://search.maven.org/search?q=g:org.json%20AND%20a:json" target="_blank">Maven Central Repository Search</a>.
+    *   Select a recent version (e.g., <code>20231013</code>). Replace <code>20231013</code> with your downloaded version in commands below.
+    *   Download the JAR file (e.g., <code>json-20231013.jar</code>).
+    *   Place this JAR into the <code>lib/</code> directory.
+
+<strong>After setup, your <code>lib/</code> directory should contain at least:</strong>
+*   <code>jython-standalone-X.Y.Z.jar</code> (e.g., <code>jython-standalone-2.7.3.jar</code>)
+*   <code>json-YYYYMMDD.jar</code> (e.g., <code>json-20231013.jar</code>)
+
+## How to Build and Run
+
+1.  <strong>Ensure <code>lib</code> directory and the Jython &amp; JSON JARs are set up as described above.</strong> Remember to replace version numbers in commands with the actual versions you downloaded.
+2.  <strong>Compile the Java Server:</strong>
+    Open a terminal or command prompt, navigate to the project's root directory. Create an <code>out</code> directory if it doesn't exist (<code>mkdir -p out</code>). Then, run the compilation command:
+
+    *   <strong>Linux/macOS (colon classpath separator):</strong>
+        ``<code>bash
+        javac -cp "lib/jython-standalone-2.7.3.jar:lib/json-20231013.jar" -d out src/main/java/com/example/*.java
+        </code>`<code>
+    *   <strong>Windows (semicolon classpath separator):</strong>
+        </code>`<code>bash
+        javac -cp "lib\jython-standalone-2.7.3.jar;lib\json-20231013.jar" -d out src\main\java\com\example\*.java
+        </code>`<code>
+    *(Note: The server will not function correctly without these JARs and the correct classpath setup. Ensure you use the correct JAR filenames for the versions you downloaded.)*
+
+3.  <strong>Run the Java Server:</strong>
+    After successful compilation, run the server using:
+
+    *   <strong>Linux/macOS:</strong>
+        </code>`<code>bash
+        java -cp "lib/jython-standalone-2.7.3.jar:lib/json-20231013.jar:out" com.example.SimpleHttpServer
+        </code>`<code>
+    *   <strong>Windows:</strong>
+        </code>`<code>bash
+        java -cp "lib\jython-standalone-2.7.3.jar;lib\json-20231013.jar;out" com.example.SimpleHttpServer
+        </code>`<code>
+    The server will start, and you should see log messages in your console (and in </code>server.log<code>) indicating it's running on port 8000.
+
+4.  <strong>Access the Application:</strong>
+    Open your web browser and navigate to:
+    </code>http://localhost:8000/<code>
+
+## How to Use (Current Functionality)
+
+1.  <strong>Open the Application:</strong> Navigate to </code>http://localhost:8000/<code> in your browser. The "Scripts" tab is active by default. A default "Sprite1" is automatically created and selected.
+
+2.  <strong>Sprite Context:</strong>
+    *   The "Sprites" panel (usually below the stage or main content area) lists available sprites. Currently, only "Sprite1" exists.
+    *   All script blocks added, costumes uploaded, and sounds uploaded are associated with the currently <strong>active sprite</strong> (which is "Sprite1" by default).
+
+3.  <strong>Working with the "Scripts" Tab (for the active sprite):</strong>
+    *   <strong>Adding Blocks:</strong> Drag blocks ("Python Code Block", "Say Block", "Loop Block", "Go to X: Y:", "Switch to costume:") from the "Block Palette" (left panel) to the "Script Assembly Area" (middle panel). Blocks will be added to the script of the active sprite.
+    *   <strong>Configuring Blocks:</strong>
+        *   <strong>Python Code Block:</strong> On drop, a modal appears. Enter Python code, click "Save Python."
+        *   <strong>Say Block:</strong> On drop, a prompt appears. Enter text to "say," click "OK."
+        *   <strong>Loop Block:</strong> On drop, a prompt appears. Enter repetitions (e.g., 3), click "OK."
+        *   <strong>Go to X: Y: Block:</strong> On drop, prompts for X then Y coordinates. Enter numbers, click "OK." This affects the active sprite's position on the Stage.
+        *   <strong>Switch to costume: Block:</strong> On drop, a prompt lists available costumes for the active sprite (by name/ID). Enter the name or ID of the desired costume. This changes the active sprite's appearance on the Stage. (Upload costumes first via the "Costumes" tab).
+    *   <strong>Viewing Assembled Program:</strong> Blocks appear stacked in the "Script Assembly Area."
+    *   <strong>Running the Program:</strong> Click the "Run Program" button. This executes the script for the active sprite.
+    *   <strong>Viewing Output &amp; Stage:</strong> Text output appears in the text area below the stage. Visual changes (sprite position, costume) occur on the stage.
+
+4.  <strong>Working with Variables (for the active sprite):</strong>
+    *   <strong>Making Variables:</strong> Click the "Make a Variable" button in the "Variables" category of the Block Palette. A dialog will appear.
+        *   Enter a variable name (letters, numbers, underscores; must start with a letter or underscore).
+        *   Choose the scope: "For all sprites (global)" or "For this sprite only" (local to the active sprite).
+        *   Click "OK".
+    *   <strong>Variable Reporters in Palette:</strong> Newly created variables appear as draggable reporter blocks in the "Variables" category. Global variables are shown by name (e.g., </code>myGlobalVar<code>). Local variables are prefixed with the sprite name (e.g., </code>Sprite1:myLocalVar<code>).
+    *   <strong>Stage Monitors:</strong> Next to each variable reporter in the palette is a checkbox. Check this box to display the variable's name and current value as a "monitor" on the stage. Uncheck to hide it. Monitors update in real-time during script execution (based on client-side optimistic updates).
+    *   <strong>Using "Set [Variable] to [Value]" Block:</strong>
+        *   Drag this block from the "Variables" category to the script assembly area.
+        *   A prompt will ask you to select the variable to set (by its display name or ID from a list of available global and active sprite's local variables).
+        *   A second prompt will ask for the value to set it to. Currently, this must be a literal value (number, text, true/false).
+    *   <strong>Using "Change [Variable] by [Value]" Block:</strong>
+        *   Drag this block to the script assembly area.
+        *   A prompt will ask you to select the variable to change.
+        *   A second prompt will ask for the numeric value to change it by (e.g., </code>1<code>, </code>-5<code>). If the variable currently holds a non-numeric value, it's treated as </code>0<code> before the change. If the variable doesn't exist, it's created with a value of </code>0<code> before the change.
+
+5.  <strong>Working with the "Costumes" Tab (for the active sprite):</strong>
+    *   Select the "Costumes" tab.
+    *   Click "Choose Files" to select local image files.
+    *   Thumbnails appear. Clicking a thumbnail sets it as the active sprite's current costume, updating its appearance on the Stage.
+
+5.  <strong>Working with the "Sounds" Tab (for the active sprite):</strong>
+    *   Select the "Sounds" tab.
+    *   Click "Choose Files" to select local audio files.
+    *   Sounds are listed with a "Play" button. Click to play.
+
+## Testing
+
+Automated JavaScript UI testing (e.g., with Jest) was explored. However, due to current execution environment limitations preventing the installation of Node.js packages or running test runners, this is not feasible at this time.
+
+Manual testing is the current approach for verifying frontend and integration functionality. Detailed manual test cases can be found in <a href="TESTING.md" target="_blank">TESTING.md</a>.
+
+## Known Issues &amp; Limitations
+
+*   <strong>Backend Sprite Targeting:</strong> Backend execution for "Go to X:Y:" and "Switch to costume:" blocks currently targets a hardcoded "sprite1". True multi-sprite execution context (knowing which sprite's script is running and applying actions to *that specific* sprite on the backend) is not yet fully implemented.
+*   <strong>Client-Side Optimistic Updates:</strong> Sprite position and costume changes are shown immediately on the frontend (optimistic update). The server updates its state for "sprite1". The server's response is an aggregated log; it does not yet send back the authoritative full state of all sprites.
+*   <strong>Sprite Management UI:</strong> Only a single, default "Sprite1" is created at startup. There is no UI for adding new sprites, deleting existing ones, or renaming them.
+*   <strong>Asset Persistence &amp; Scope:</strong> Costumes and Sounds are client-side only (using Data URLs, stored in JavaScript arrays per sprite for the session). They are not saved on the server or persisted if the page is refreshed.
+*   <strong>Drag-and-Drop Limitations:</strong> Currently supports adding blocks to the end of the active sprite's script. Reordering or deleting blocks is not yet implemented.
+*   <strong>Nesting Implementation:</strong> The Loop block has a visual placeholder for nested blocks, but dropping blocks *into* it or executing nested logic is not yet functional.
+*   <strong>Loop Block Execution:</strong> Backend execution for Loop blocks is a placeholder; it acknowledges the loop and its count but does not execute child blocks.
+*   <strong>No Block Editing After Placement:</strong> Configured blocks in the assembly area cannot be directly edited.
+*   <strong>Variable Reporter Blocks as Inputs:</strong> Using a variable reporter block as an input to another block (e.g., </code>Set [var1] to [var2]<code>) is supported by the backend if the JSON is structured correctly, but the UI does not yet allow visually dragging and dropping reporters into input slots of other blocks. Current block input prompts only accept literal values.
+*   <strong>Stage Monitor Synchronization:</strong> Stage monitors reflect client-side optimistic updates. The server's response is an aggregated log; no full variable state is sent back to synchronize after execution (though the server state *is* updated).
+*   <strong>No State Persistence:</strong> The entire project state (sprites, scripts, assets, variables) is lost on page refresh.
+
+## Future Ideas
+
+*   Implement execution of child blocks within Loop blocks.
+*   Allow editing and deletion of blocks in the assembly area.
+*   Implement drag-and-drop reordering of assembled blocks.
+*   Support for more "Standard Blocks" (e.g., variables, simple math, conditional logic).
+*   Visual feedback for connections between blocks.
+*   Saving and loading user-created programs.
+
+## Design and Architecture
+
+The current execution model for code submitted from the web UI (via the </code>/api/execute_program` endpoint) uses a JSON array payload to define the program (a sequence of blocks). Python code blocks are run using Jython directly within the Java server, and standard blocks like "Say" are handled by specific Java logic. The backend iterates through this array to process the blocks.
+
+For a more Scratch-like experience with advanced features like nested execution in loops and more complex block interactions, a more comprehensive program execution architecture is being developed.
+
+Detailed conceptual notes on this program execution architecture, including JSON structure, block type handling, state management, and sandboxing, can be found in <a href="./DESIGN_NOTES.md" target="_blank">DESIGN_NOTES.md</a>.</p>
+</p>
+</div>
+</body>
+</html>
