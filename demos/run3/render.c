@@ -541,20 +541,19 @@ void render_map(void) {
   int scroll = run3_map_scroll_x();
   render_map_bg(scroll);
 
-  /* draw edges — only between discovered tunnels, black lines, horizontal scroll */
-  for (int i = 0; i < MAP_EDGE_COUNT; i++) {
-    int a = map_edges[i].a, b = map_edges[i].b;
-    if (a < 0 || a >= MAP_TUNNEL_COUNT || b < 0 || b >= MAP_TUNNEL_COUNT) continue;
-    if (!run3_map_is_discovered(a) || !run3_map_is_discovered(b)) continue;
-    const map_node_t *na = &map_nodes[a];
-    const map_node_t *nb = &map_nodes[b];
-    int ax = na->x + scroll, ay = na->y;
-    int bx = nb->x + scroll, by = nb->y;
-    if ((ax < -30 && bx < -30) || (ax >= W+30 && bx >= W+30)) continue;
-    // black line
-    draw_line(ax, ay, bx, by, rgb(0,0,0));
-    // subtle outline for visibility on dark bg
-    // inner white at 1px offset would be too much, keep pure black as requested
+  /* draw each discovered tunnel's ORIGINAL drawn curve, horizontal scroll */
+  for (int i = 0; i < MAP_TUNNEL_COUNT; i++) {
+    if (!run3_map_is_discovered(i)) continue;
+    int n = map_wp_n[i];
+    if (n < 2) continue;
+    const int16_t *w = map_wp[i];
+    for (int s = 0; s + 1 < n; s++) {
+      int ax = w[2 * s] + scroll, ay = w[2 * s + 1];
+      int bx = w[2 * s + 2] + scroll, by = w[2 * s + 3];
+      if ((ax < -30 && bx < -30) || (ax >= W+30 && bx >= W+30)) continue;
+      if (ax == bx && ay == by) continue;
+      draw_line(ax, ay, bx, by, rgb(0,0,0));
+    }
   }
 
   /* checkpoints — every level of each discovered tunnel, along its edge.

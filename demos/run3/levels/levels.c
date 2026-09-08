@@ -10,7 +10,7 @@
  */
 #include "../run3.h"
 
-const uint16_t NTUNNELS = 48;
+const uint16_t NTUNNELS = 30;
 
 const tunnel_t TUNNELS[MAX_TUNNELS] = {
   /* =================================================================
@@ -106,62 +106,5 @@ const tunnel_t TUNNELS[MAX_TUNNELS] = {
 
   /* 29 Side Path W     tunnel6,2 — side path W (6 levels) */
   { 6, 2, 4, 6, 3, 8, 3.55, 0.029, 4.30, 0.053, 0.0021, 0.15, 0.85 },
-
-  /* =================================================================
-   * EXTENDED TUNNELS — mid-to-late game variety
-   * ================================================================= */
-
-  /* 30 Tunnel M        tunnel16,1 — mega hexadecagon (20 levels) */
-  { 16, 1, 0, 20, 10, 25, 4.60, 0.041, 6.50, 0.085, 0.0029, 0.24, 1.40 },
-
-  /* 31 Tunnel N        tunnel4,4 — narrow square maze (16 levels) */
-  { 4, 4, 1, 16, 8, 20, 3.80, 0.032, 4.90, 0.060, 0.0024, 0.18, 0.70 },
-
-  /* 32 Tunnel P        tunnel8,3 — octagon chaos (14 levels) */
-  { 8, 3, 3, 14, 8, 18, 4.20, 0.036, 5.50, 0.070, 0.0026, 0.21, 1.00 },
-
-  /* 33 Tunnel Q        tunnel5,5 — wide pentagon (12 levels) */
-  { 5, 5, 2, 12, 6, 15, 4.00, 0.034, 5.20, 0.065, 0.0025, 0.20, 0.85 },
-
-  /* 34 Tunnel R        tunnel12,2 — dodecagon run (16 levels) */
-  { 12, 2, 4, 16, 8, 20, 4.40, 0.038, 5.90, 0.075, 0.0027, 0.22, 1.20 },
-
-  /* 35 Tunnel S        tunnel6,3 — hexagon twist (10 levels) */
-  { 6, 3, 0, 10, 5, 12, 3.90, 0.033, 5.00, 0.062, 0.0024, 0.19, 0.85 },
-
-  /* 36 Tunnel T        tunnel20,1 — icosagon (14 levels) */
-  { 20, 1, 1, 14, 7, 18, 4.80, 0.042, 6.70, 0.088, 0.0030, 0.25, 1.60 },
-
-  /* 37 Tunnel U        tunnel4,6 — ultra-wide square (10 levels) */
-  { 4, 6, 3, 10, 5, 12, 3.70, 0.031, 4.60, 0.058, 0.0023, 0.17, 0.70 },
-
-  /* 38 Tunnel V        tunnel8,2 — swift octagon (12 levels) */
-  { 8, 2, 0, 12, 6, 15, 4.10, 0.035, 5.30, 0.068, 0.0025, 0.20, 1.00 },
-
-  /* 39 Tunnel W        tunnel10,2 — decagon gauntlet (14 levels) */
-  { 10, 2, 4, 14, 7, 18, 4.30, 0.037, 5.70, 0.072, 0.0026, 0.21, 1.20 },
-
-  /* 40 Abyss           tunnel30,1 — the abyss (16 levels) */
-  { 30, 1, 4, 16, 8, 20, 5.30, 0.046, 7.50, 0.100, 0.0032, 0.26, 1.80 },
-
-  /* 41 Prism           tunnel14,2 — prism tunnel (10 levels) */
-  { 14, 2, 1, 10, 5, 12, 4.20, 0.036, 5.50, 0.070, 0.0026, 0.21, 1.40 },
-
-  /* 42 Nebula          tunnel18,1 — nebula corridor (12 levels) */
-  { 18, 1, 2, 12, 6, 15, 4.50, 0.039, 6.10, 0.078, 0.0028, 0.23, 1.60 },
-
-  /* 43 Supernova       tunnel24,1 — supernova rush (10 levels) */
-  { 24, 1, 3, 10, 5, 12, 5.00, 0.044, 7.20, 0.092, 0.0031, 0.25, 1.80 },
-
-  /* 44 Blackhole       tunnel16,1 — blackhole collapse (14 levels) */
-  { 16, 1, 4, 14, 7, 18, 5.20, 0.046, 7.50, 0.095, 0.0032, 0.26, 1.40 },
-
-  /* 45 Infinity        tunnel8,2 — infinite loop (20 levels) */
-  { 8, 2, 0, 20, 10, 25, 3.80, 0.032, 4.90, 0.060, 0.0024, 0.18, 1.00 },
-
-  /* 46 Comet           tunnel22,1 — comet streak (8 levels) */
-  { 22, 1, 1, 8, 4, 10, 4.90, 0.043, 6.90, 0.090, 0.0030, 0.25, 1.80 },
-
-  /* 47 Nova            tunnel10,3 — nova burst (10 levels) */
-  { 10, 3, 2, 10, 5, 12, 4.40, 0.038, 5.90, 0.075, 0.0027, 0.22, 1.20 },
 };
+/* NOTE: only the 30 original Run 3 tunnels ship (0-29). No extended/new stuff. */

@@ -190,6 +190,7 @@ static void open_level(int lvl) {
   G.state = S_RUN; /* instant start: the runner never waits */
   G.prog = G.rowStart;
   G.ring = (double)G.k * 0.5;
+  G.gravSide = (uint8_t)wrap_side(G.ring, G.k, G.shape);
   G.vRing = 0.0;
   G.jump = 0.0;
   G.jv = 0.0;
@@ -289,6 +290,7 @@ void run3_start_inf(void) {
   G.rowEnd = 999999.0;
   G.prog = 0.0;
   G.ring = (double)G.k * 0.5;
+  G.gravSide = (uint8_t)wrap_side(G.ring, G.k, G.shape);
   G.vRing = 0.0;
   G.jump = 0.0;
   G.jv = 0.0;
@@ -321,6 +323,7 @@ void run3_flap(void) {
       G.state = S_RUN;
       G.prog = 0.0;
       G.ring = (double)G.k * 0.5;
+      G.gravSide = (uint8_t)wrap_side(G.ring, G.k, G.shape);
       G.vRing = 0.0;
       G.jump = 0.0;
       G.jv = 0.0;
@@ -426,6 +429,11 @@ void run3_step(double dt) {
         G.state = S_DEAD;
         G.fallT = 0.0;
       }
+      /* gravity latches to the touched wall: grounded running (or a fresh
+         touchdown) adopts the wall below; mid-air ring drift does NOT */
+      if (G.state == S_RUN && !(G.jump > 0.0 || G.jv > 0.0)) {
+        G.gravSide = (uint8_t)side_under();
+      }
     }
   } else if (G.state == S_DEAD) {
     G.fallT += dt;
@@ -437,10 +445,12 @@ void run3_step(double dt) {
     }
   }
 
-  /* ease the view roll along the shortest path.
+  /* ease the view roll along the shortest path toward the LATCHED gravity
+     wall (not the live ring: mid-air drift must not swing gravity).
      Without the wrap, the wrap-around corner (side n-1 -> 0) eases almost a
      full turn instead of one step like every other corner. */
-  double target2 = -(TAU * (double)side_under()) / (double)n;
+  int gs = G.gravSide < n ? G.gravSide : 0;
+  double target2 = -(TAU * (double)gs) / (double)n;
   double d = target2 - G.rot;
   while (d > PI) d -= TAU;
   while (d <= -PI) d += TAU;
@@ -526,8 +536,6 @@ static int map_hovered = -1;  /* hovered tunnel id */
 static int map_hovered_level = -1; /* hovered checkpoint lvl */
 static uint8_t map_locked[MAX_TUNNELS];
 static uint8_t map_cleared[MAX_TUNNELS];
-static int map_parent[MAX_TUNNELS];
-static int map_parents_built = 0;
 
 /* menu state */
 static int menu_char = 0;     /* selected character on menu */
@@ -558,29 +566,16 @@ int run3_map_scroll_y(void) { return map_scroll_x; }
 int run3_map_scroll_x(void) { return map_scroll_x; }
 void run3_map_scroll(int dx) {
   map_scroll_x += dx;
-  /* 1D horizontal scroll — world extends past 4000px (root stub at 30px pitch),
-     so allow deep negative scroll to reach its far end */
-  if (map_scroll_x < -3200) map_scroll_x = -3200;
-  if (map_scroll_x > 600) map_scroll_x = 600;
+  /* 1D horizontal scroll — original map spans screen x ~55..3400 */
+  if (map_scroll_x < -2200) map_scroll_x = -2200;
+  if (map_scroll_x > 200) map_scroll_x = 200;
   map_scroll_y = map_scroll_x; // keep y in sync for legacy
 }
 void run3_map_scroll_delta(int dx) { run3_map_scroll(dx); }
 
 /* ---- checkpoints: every level of a continuous tunnel shows on the map ----
-   Checkpoints lie along the tunnel's incoming edge (parent -> node), so each
-   tunnel reads as one continuous playable run. The root tunnel (no parent)
-   extends checkpoints horizontally right of its node. */
-static void build_map_parents(void) {
-  if (map_parents_built) return;
-  for (int i = 0; i < MAX_TUNNELS; i++) map_parent[i] = -1;
-  for (int i = 0; i < MAP_EDGE_COUNT; i++) {
-    int a = map_edges[i].a, b = map_edges[i].b;
-    if (a < 0 || a >= MAX_TUNNELS || b < 0 || b >= MAX_TUNNELS) continue;
-    if (map_parent[b] < 0) map_parent[b] = a; /* first incoming wins */
-  }
-  map_parents_built = 1;
-}
-
+   Checkpoints are spaced evenly along the tunnel's ORIGINAL drawn polyline
+   (map_wp), so the map keeps the original game's curves. Node = path start. */
 int run3_map_checkpoint_count(int tun) {
   if (tun < 0 || tun >= MAP_TUNNEL_COUNT || tun >= MAX_TUNNELS) return 0;
   return TUNNELS[tun].levels;
@@ -599,44 +594,54 @@ int run3_map_best(int tun) {
   return map_best[tun];
 }
 
-#define MAP_CKPT_PITCH 30 /* px between connected checkpoints */
 void run3_map_checkpoint_pos(int tun, int lvl, int *x, int *y) {
-  build_map_parents();
   int nx = 0, ny = 0;
   if (tun >= 0 && tun < MAP_TUNNEL_COUNT) { nx = map_nodes[tun].x; ny = map_nodes[tun].y; }
   int count = run3_map_checkpoint_count(tun);
   if (count <= 0) { if (x) *x = nx; if (y) *y = ny; return; }
   if (lvl < 0) lvl = 0;
   if (lvl >= count) lvl = count - 1;
-  int p = (tun >= 0 && tun < MAX_TUNNELS) ? map_parent[tun] : -1;
-  if (p < 0) {
-    /* root: horizontal stub right of the node at fixed pitch */
-    if (x) *x = nx + (lvl + 1) * MAP_CKPT_PITCH;
+  int n = (tun >= 0 && tun < MAP_TUNNEL_COUNT) ? map_wp_n[tun] : 0;
+  if (n < 2) {
+    /* degenerate path: horizontal stub right of the node */
+    if (x) *x = nx + 30 * (lvl + 1);
     if (y) *y = ny;
-  } else {
-    /* trail back from the node toward the parent at fixed pitch, so every
-       connected pair is exactly 30px apart (overshoots past short parents) */
-    int px = map_nodes[p].x, py = map_nodes[p].y;
-    double dx = (double)(nx - px), dy = (double)(ny - py);
-    double len = ssqrt(dx * dx + dy * dy);
-    double back = (double)MAP_CKPT_PITCH * (double)(count - lvl);
-    if (len < 1.0) {
-      if (x) *x = nx + (int)back;
-      if (y) *y = ny;
-    } else {
-      double fx = nx - dx / len * back;
-      double fy = ny - dy / len * back;
-      if (x) *x = (int)(fx + (fx >= 0.0 ? 0.5 : -0.5));
-      if (y) *y = (int)(fy + (fy >= 0.0 ? 0.5 : -0.5));
-    }
+    return;
   }
+  /* walk the original polyline by arc length; dot j sits at (j+1)/(count+1) */
+  const int16_t *w = map_wp[tun];
+  double total = 0.0;
+  for (int i = 0; i + 1 < n; i++) {
+    double dx = (double)w[2 * i + 2] - (double)w[2 * i];
+    double dy = (double)w[2 * i + 3] - (double)w[2 * i + 1];
+    total += ssqrt(dx * dx + dy * dy);
+  }
+  double target = (total <= 0.0) ? 0.0 : total * (double)(lvl + 1) / (double)(count + 1);
+  double acc = 0.0;
+  for (int i = 0; i + 1 < n; i++) {
+    double x0 = w[2 * i], y0 = w[2 * i + 1];
+    double dx = (double)w[2 * i + 2] - x0;
+    double dy = (double)w[2 * i + 3] - y0;
+    double sl = ssqrt(dx * dx + dy * dy);
+    if (sl < 0.5) continue;
+    if (acc + sl >= target) {
+      double t = (sl <= 0.0) ? 0.0 : (target - acc) / sl;
+      double fx = x0 + dx * t, fy = y0 + dy * t;
+      if (x) *x = (int)(fx + 0.5);
+      if (y) *y = (int)(fy + 0.5);
+      return;
+    }
+    acc += sl;
+  }
+  /* rounding safety: clamp to path end */
+  if (x) *x = w[2 * (n - 1)];
+  if (y) *y = w[2 * (n - 1) + 1];
 }
 
 /* shared picker: nearest wins across nodes and checkpoint dots. Only discovered.
    (Short edges pack a tunnel's first dots inside the parent node's ring,
    so first-match would bury them — nearest-match keeps every dot hittable.) */
 static int map_pick(int mx, int my, int *lvlOut) {
-  build_map_parents();
   int bestI = -1, bestJ = -1, bestD = 24*24 + 1;
   for (int i = 0; i < MAP_TUNNEL_COUNT; i++) {
     if (run3_map_is_locked(i)) continue;

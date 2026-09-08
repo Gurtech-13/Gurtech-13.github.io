@@ -37,8 +37,18 @@ def write_frame_array(f, name, w, h, data):
 
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
-# Scale factor from original 1550x1100 viewBox to 640x360 canvas
-SX, SY = W / 1550.0, H / 1100.0
+# Map transform: UNIFORM scale of the original map space so the layout keeps its
+# shape (non-uniform SX/SY would shear it). S=0.82 fits y (-72..660) with room.
+MSX, MSY = 0.82, 0.82
+MOX, MOY = 150, 100
+SX, SY = MSX, MSY  # legacy names used below
+
+
+def map_sxy(ox, oy):
+    """Original map coords -> screen coords (rounded, always >= 0 here)."""
+    import math
+    return (int(math.floor(ox * MSX + MOX + 0.5)),
+            int(math.floor(oy * MSY + MOY + 0.5)))
 
 total_bytes = 0
 
@@ -137,73 +147,59 @@ with open(OUT, "w") as f:
     f.write("static const map_deco_t map_decorations[] = {\n")
     for dname, ox, oy in DECOR_POSITIONS:
         if dname in deco_entries:
-            cx = int((ox + 50) * SX)
-            cy = int((oy + 20) * SY)
+            cx, cy = map_sxy(ox, oy)
             f.write(f"  {{ {dname}, {dname}_W, {dname}_H, {cx}, {cy} }},\n")
     f.write("};\n\n")
 
     # ===== TUNNEL NODE POSITIONS =====
-    # Read from story.js - extract T[] array tunnel data
-    # We'll hardcode the 48 tunnel positions from story.js, scaled to WxH
-    # Format: { x, y, r, g, b, kind }
-    # Original viewBox: -50 -20 1550 1100
-    # We scale: (x+50)*SX, (y+20)*SY
-
-    # These are the tunnel positions from story.js — MUST stay in sync
+    # ===== TUNNEL NODES: first waypoints straight from the original map =====
+    # (orig_map.json, vendored from the decompiled SWF's mapcontents).
+    # Format: id, kind(0=name,1=letter), x, y, r, g, b — x/y MUST match the
+    # path's first waypoint (asserted below) and story.js T[] positions.
+    # Colors/kind are our display layer.
     TUNNELS_DATA = [
-        # id, kind(0=name,1=letter), x, y, r, g, b
-        (0,  0, 600, 70,   125,211,252),   # Primary #7dd3fc
-        (1,  0, 290, 315,  147,197,253),   # Home 0 #93c5fd
-        (2,  0, 350, 280,  147,197,253),   # Home 1 #93c5fd
-        (3,  0, 210, 360,  147,197,253),   # Home 2 #93c5fd
-        (4,  0, 62,  314,  147,197,253),   # Home 3 #93c5fd
-        (5,  1, 330, 205,   94,234,212),   # A #5eead4
-        (6,  1, 870, 205,  252,211,77),    # B #fcd34d
-        (7,  1, 455, 345,  134,239,172),   # D #86efac
-        (8,  1, 600, 480,  216,180,254),   # G #d8b4fe
-        (9,  1, 620, 600,  196,181,253),   # L #c4b5fd
-        (10, 1, 130, 280,  240,171,252),   # M #f0abfc
-        (11, 1, 770, 480,  251,146,60),    # T #fb923c
-        (12, 0, 120, 140,  191,219,254),   # Winter #bfdbfe
-        (13, 0, 1050,130,   30,27,75),     # Dark #1e1b4b
-        (14, 0, 1120,260,  167,139,250),   # Boxes #a78bfa
-        (15, 0, 1020,50,    96,165,250),   # Memory #60a5fa
-        (16, 0, 940, 404,  103,232,249),   # River #67e8f9
-        (17, 1, 1180,420,  192,132,252),   # Wormhole C #c084fc
-        (18, 1, 1200,540,  192,132,252),   # Wormhole H #c084fc
-        (19, 1, 1280,480,  192,132,252),   # Wormhole I #c084fc
-        (20, 1, 1350,360,  192,132,252),   # Wormhole J #c084fc
-        (21, 1, 1380,220,  192,132,252),   # Wormhole K #c084fc
-        (22, 1, 1300,100,  192,132,252),   # Wormhole N #c084fc
-        (23, 1, 1400,600,  192,132,252),   # Wormhole Space #c084fc
-        (24, 0, 672, -22,   52,211,153),   # Newly Formed #34d399
-        (25, 0, 400, 420,  251,191,36),    # Runway 0 #fbbf24
-        (26, 0, 135, 430,  251,191,36),    # Runway 1 #fbbf24
-        (27, 0, 1305,133,   45,212,191),   # Coordination #2dd4bf
-        (28, 1, 870, 680,  167,139,250),   # U #a78bfa
-        (29, 1, 1120,500,   52,211,153),   # W #34d399
-        (30, 0, 1300,600,  239,68,68),     # Mega #ef4444
-        (31, 0, 330, 760,  253,224,71),    # Labyrinth #fde047
-        (32, 0, 700, 760,  251,146,60),    # Chaos #fb923c
-        (33, 0, 510, 680,  244,114,182),   # Pentarchy #f472b6
-        (34, 0, 1200,780,  134,239,172),   # Dodecahedron #86efac
-        (35, 0, 370, 600,  240,171,252),   # Twist #f0abfc
-        (36, 0, 1400,700,  253,224,71),    # Icosahedron #fde047
-        (37, 0, 80,  420,  147,197,253),   # Wide #93c5fd
-        (38, 0, 1050,600,  134,239,172),   # Swift #86efac
-        (39, 0, 1120,700,  251,191,36),    # Gauntlet #fbbf24
-        (40, 0, 1300,800,   30,58,95),     # Abyss #1e3a5f
-        (41, 0, 1020,850,  244,114,182),   # Prism #f472b6
-        (42, 0, 820, 880,  192,132,252),   # Nebula #c084fc
-        (43, 0, 620, 920,  239,68,68),     # Supernova #ef4444
-        (44, 0, 220, 920,   15,23,42),     # Blackhole #0f172a
-        (45, 0, 600,1000,  245,158,11),    # Infinity #f59e0b
-        (46, 0, 420, 880,  253,224,71),    # Comet #fde047
-        (47, 0, 780, 680,  251,146,60),    # Nova #fb923c
+        # id, kind, x, y, r, g, b
+        (0,  0, 0, 0,         125,211,252),   # Primary
+        (1,  0, 400, 420,     147,197,253),   # Home 0
+        (2,  0, 290, 315,     147,197,253),   # Home 1
+        (3,  0, 290, 315,     147,197,253),   # Home 2
+        (4,  0, 62, 314,      147,197,253),   # Home 3
+        (5,  1, 1796, 0,       94,234,212),   # A
+        (6,  1, 1440, 264,    252,211,77),    # B
+        (7,  1, 1285, 637,    134,239,172),   # D
+        (8,  1, 1817, 306,    216,180,254),   # G
+        (9,  1, 2040, 324,    196,181,253),   # L
+        (10, 1, 1200, 240,    240,171,252),   # M
+        (11, 1, 2160, 394,    251,146,60),    # T
+        (12, 0, 540, 138,     191,219,254),   # Winter
+        (13, 0, 1000, 212,     30,27,75),     # Dark
+        (14, 0, 1200, 240,    167,139,250),   # Boxes
+        (15, 0, 1016, 47,      96,165,250),   # Memory
+        (16, 0, 940, 404,     103,232,249),   # River
+        (17, 1, 2476, 103,    192,132,252),   # Wormhole C
+        (18, 1, 2509, 250,    192,132,252),   # Wormhole H
+        (19, 1, 2476, -14,    192,132,252),   # Wormhole I
+        (20, 1, 3021, 219,    192,132,252),   # Wormhole J
+        (21, 1, 2767, 188,    192,132,252),   # Wormhole K
+        (22, 1, 2180, -40,    192,132,252),   # Wormhole N
+        (23, 1, 2950, 89,     192,132,252),   # Wormhole Space
+        (24, 0, 672, -22,      52,211,153),   # Newly Formed
+        (25, 0, 3327, 204,    251,191,36),    # Runway 0
+        (26, 0, 3784, 310,    251,191,36),    # Runway 1
+        (27, 0, 1305, 133,     45,212,191),   # Coordination
+        (28, 1, 1440, 264,    167,139,250),   # U
+        (29, 1, 400, 420,      52,211,153),   # W
     ]
 
-    f.write("/* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b */\n")
-    f.write("#define MAP_TUNNEL_COUNT 48\n\n")
+    import json as _json
+    _omap = _json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         "orig_map.json")))
+    _wp_by_id = {t['id']: t['waypoints'] for t in _omap['tunnels']}
+    assert sorted(_wp_by_id) == list(range(30)), "orig_map.json must hold ids 0-29"
+
+    f.write("/* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b.\n")
+    f.write(" * Node coords = original first waypoints (uniform map transform). */\n")
+    f.write("#define MAP_TUNNEL_COUNT 30\n\n")
 
     f.write("typedef struct {\n")
     f.write("  int16_t x, y;\n")
@@ -213,78 +209,43 @@ with open(OUT, "w") as f:
 
     f.write("static const map_node_t map_nodes[MAP_TUNNEL_COUNT] = {\n")
     for tid, kind, ox, oy, r, g, b in TUNNELS_DATA:
-        cx = int((ox + 50) * SX)
-        cy = int((oy + 20) * SY)
+        # node MUST equal the path's first waypoint (original layout guarantee)
+        w0 = _wp_by_id[tid][0]
+        assert map_sxy(w0[0], w0[1]) == map_sxy(ox, oy), f"node {tid} != first waypoint"
+        cx, cy = map_sxy(ox, oy)
         f.write(f"  {{ {cx}, {cy}, {r}, {g}, {b}, {kind} }}, /* {tid} */\n")
     f.write("};\n\n")
 
-    # ===== TUNNEL EDGES =====
-    # EXACT copy of story.js EDGES (branching topology) — MUST stay in sync
-    EDGES = [
-        (0,  [1, 5, 6, 24]),   # Primary -> Home0, A, B, NewlyFormed
-        (1,  [2]),             # Home0 -> Home1
-        (2,  [3]),             # Home1 -> Home2
-        (3,  [4]),             # Home2 -> Home3
-        (5,  [7, 10, 12]),     # A -> D, M, Winter
-        (6,  [8, 14]),         # B -> G, Boxes
-        (7,  [9, 11]),         # D -> L, T
-        (8,  [13, 15]),        # G -> Dark, Memory
-        (9,  [16, 17]),        # L -> River, WormholeC
-        (10, [25]),            # M -> Runway0
-        (11, [18]),            # T -> WormholeH
-        (12, [19]),            # Winter -> WormholeI
-        (13, [20]),            # Dark -> WormholeJ
-        (14, [21]),            # Boxes -> WormholeK
-        (15, [22]),            # Memory -> WormholeN
-        (16, [23]),            # River -> WormholeSpace
-        (17, [26]),            # WormholeC -> Runway1
-        (18, [27]),            # WormholeH -> Coordination
-        (24, [28, 29]),        # NewlyFormed -> U, W
-        (25, [30]),            # Runway0 -> Mega
-        (26, [31]),            # Runway1 -> Labyrinth
-        (27, [32]),            # Coordination -> Chaos
-        (28, [33]),            # U -> Pentarchy
-        (29, [34]),            # W -> Dodecahedron
-        (30, [35]),            # Mega -> Twist
-        (31, [36]),            # Labyrinth -> Icosahedron
-        (32, [37]),            # Chaos -> Wide
-        (33, [38]),            # Pentarchy -> Swift
-        (34, [39]),            # Dodecahedron -> Gauntlet
-        (35, [40]),            # Twist -> Abyss
-        (36, [41]),            # Icosahedron -> Prism
-        (37, [42]),            # Wide -> Nebula
-        (38, [43, 47]),        # Swift -> Supernova, Nova
-        (39, [44]),            # Gauntlet -> Blackhole
-        (40, [45]),            # Abyss -> Infinity
-        (41, [45]),            # Prism -> Infinity
-        (42, [45]),            # Nebula -> Infinity
-        (43, [45]),            # Supernova -> Infinity
-        (44, [45, 46]),        # Blackhole -> Infinity, Comet
-    ]
-
-    f.write("/* Tunnel edges: pairs (from, to) */\n")
-    f.write("typedef struct { int16_t a, b; } map_edge_t;\n\n")
-
-    edge_pair_count = sum(len(bs) for _, bs in EDGES)
-    f.write(f"#define MAP_EDGE_COUNT {edge_pair_count}\n\n")
-
-    f.write("static const map_edge_t map_edges[MAP_EDGE_COUNT] = {\n")
-    for a, bs in EDGES:
-        for b in bs:
-            f.write(f"  {{ {a}, {b} }},\n")
+    # ===== PATH POLYLINES: the original drawn curves (screen coords) =====
+    # Checkpoints are spaced evenly along these; the map draws them as-is.
+    f.write("/* Path polylines: x0,y0,x1,y1,... per tunnel (screen coords). */\n")
+    for tid, kind, ox, oy, r, g, b in TUNNELS_DATA:
+        pts = []
+        for wx, wy in _wp_by_id[tid]:
+            cx, cy = map_sxy(wx, wy)
+            pts.append(f"{cx},{cy}")
+        f.write(f"static const int16_t map_wp_{tid}[] = {{{','.join(pts)}}};\n")
+    f.write("static const int16_t *map_wp[MAP_TUNNEL_COUNT] = {\n")
+    for tid, kind, ox, oy, r, g, b in TUNNELS_DATA:
+        f.write(f"  map_wp_{tid},\n")
+    f.write("};\n")
+    f.write("static const uint8_t map_wp_n[MAP_TUNNEL_COUNT] = {\n")
+    for tid, kind, ox, oy, r, g, b in TUNNELS_DATA:
+        n = len(_wp_by_id[tid])
+        assert 2 <= n <= 255, f"path {tid} waypoint count {n}"
+        f.write(f"  {n}, /* {tid} */\n")
     f.write("};\n\n")
 
-    # ===== TUNNEL NAMES (short, for display) =====
+    # ===== TUNNEL NAMES (short, for display) — ids 0-29 only =====
     NAMES = [
         "Primary", "Home 0", "Home 1", "Home 2", "Home 3",
         "A", "B", "D", "G", "L", "M", "T",
         "Winter", "Dark", "Boxes", "Memory", "River",
         "WH C", "WH H", "WH I", "WH J", "WH K", "WH N", "WH Spc",
         "Newly", "Runway0", "Runway1", "Coord",
-        "U", "W", "Mega", "Labyr", "Chaos", "Pent", "Dodeca",
-        "Twist", "Icosa", "Wide", "Swift", "Gaunt", "Abyss",
-        "Prism", "Nebula", "Super", "Black", "Infinit", "Comet", "Nova"
+        "U", "W",
     ]
+    assert len(NAMES) == len(TUNNELS_DATA) == 30
 
     f.write("/* Tunnel name strings */\n")
     f.write("static const char *map_tunnel_names[MAP_TUNNEL_COUNT] = {\n")

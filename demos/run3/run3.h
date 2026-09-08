@@ -32,7 +32,7 @@
 #define FLIGHT 0.84
 #define SPEED_MUL 2.0     /* forward speed multiplier */
 
-#define MAX_TUNNELS 48
+#define MAX_TUNNELS 30 /* original Run 3 map paths only, no invented tunnels */
 #define MAX_LEVELS 200
 #define MAX_RPS 7.0
 #define MAX_HOLE 0.26
@@ -101,7 +101,8 @@ typedef struct {
   double jump;               /* height above the wall surface */
   double jv;
   double fallT;
-  double rot, rotT;          /* view roll (eases toward side_under flat) */
+  double rot, rotT;          /* view roll (eases toward gravity wall flat) */
+  uint8_t gravSide;          /* latched gravity wall: changes only on landing */
   double input;              /* steering axis -1..1 */
   double animT;              /* animation clock (s), drives frame cycling */
   double landT;              /* landing-pose timer (s), counts down */
