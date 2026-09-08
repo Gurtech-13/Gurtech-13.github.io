@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DnDiablo — CheerpJ edition</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; height: 100%; }
+  #display { display: flex; justify-content: center; align-items: flex-start; }
+  #loading {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    background: #000; color: #cfd6e4; font-family: system-ui, sans-serif;
+    text-align: center; padding: 24px; transition: opacity 0.4s;
+  }
+  #loading.gone { opacity: 0; pointer-events: none; }
+  #loadmsg { font-size: 0.95rem; }
+  #loadhint { font-size: 0.8rem; color: #8a93a6; max-width: 420px; }
+  #fail { color: #f2a7a7; font-size: 0.9rem; max-width: 460px; display: none; }
+  .spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid #333a46; border-top-color: #7aa2f7;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="display"></div>
+<div id="loading">
+  <div class="spinner"></div>
+  <div id="loadmsg">Loading the Java runtime…</div>
+  <div id="loadhint">First load downloads the WebAssembly JVM (~10&nbsp;MB) and the game JAR, then caches them. This can take a minute on a slow connection.</div>
+  <div id="fail"></div>
+</div>
+<script src="https://cjrtnc.leaningtech.com/4.3/loader.js"></script>
+<script>
+(function () {
+  "use strict";
+  var loading = document.getElementById("loading");
+  var msg = document.getElementById("loadmsg");
+  var fail = document.getElementById("fail");
+
+  function showFail(text) {
+    fail.style.display = "block";
+    fail.textContent = text;
+    msg.textContent = "Something went wrong.";
+  }
+
+  // Hide the overlay once the game's AWT window is on screen.
+  var display = document.getElementById("display");
+  var overlayGone = false;
+  function hideOverlay() {
+    if (overlayGone) return;
+    overlayGone = true;
+    loading.classList.add("gone");
+  }
+  var observer = new MutationObserver(function () {
+    if (display.querySelector("canvas, jvm-display, div")) hideOverlay();
+  });
+  observer.observe(display, { childList: true, subtree: true });
+  setTimeout(hideOverlay, 45000); // fallback: never block the view forever
+
+  window.addEventListener("error", function (e) {
+    showFail("Runtime error: " + (e.message || e));
+  });
+
+  (async function () {
+    try {
+      if (typeof cheerpjInit !== "function") {
+        throw new Error("CheerpJ loader failed to load (network blocked?)");
+      }
+      await cheerpjInit();
+      cheerpjCreateDisplay(800, 600);
+      msg.textContent = "Starting DnDiablo…";
+      await cheerpjRunJar("/app/dndiablo.jar");
+      hideOverlay();
+    } catch (err) {
+      showFail("Could not start the game: " + (err && err.message ? err.message : err));
+    }
+  })();
+})();
+</script>
+</body>
+</html>
