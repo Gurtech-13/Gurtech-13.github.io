@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DnDiablo — playable game</title>
+<link rel="stylesheet" href="../../style.css">
+<style>
+  .demo-wrap { display: flex; flex-direction: column; align-items: center; padding: 24px 16px 48px; }
+  .back { align-self: flex-start; margin-bottom: 4px; }
+  .stage {
+    width: 100%; max-width: 960px;
+    border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; background: #000;
+  }
+  .stage iframe { display: block; width: 100%; height: 600px; border: 0; background: #000; }
+  @media (max-width: 640px) { .stage iframe { height: 480px; } }
+  .panel {
+    width: 100%; max-width: 960px; margin-top: 14px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px;
+  }
+  .panel h2 { margin: 0 0 6px; font-size: 1.05rem; }
+  .panel p { margin: 6px 0; color: var(--muted); font-size: 0.92rem; }
+  .panel code {
+    background: var(--code-bg); border: 1px solid #262b35;
+    border-radius: 5px; padding: 0.1em 0.35em;
+  }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  #status { color: var(--faint); font-size: 0.85rem; margin: 10px 0 0; min-height: 1.2em; text-align: center; }
+  #status.err { color: #f2a7a7; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap demo-wrap">
+<nav class="topnav back"><a class="back" href="../../index.html">&larr; All projects</a></nav>
+<h1 style="margin:0 0 4px">DnDiablo</h1>
+<p class="muted" style="margin:0 0 16px">Dungeon-crawler game — play it in the browser, or download the Java edition.</p>
+
+<div class="stage hidden" id="stage">
+  <iframe id="gameframe" title="DnDiablo game" src="dndiablo.html" allowfullscreen></iframe>
+</div>
+
+<div class="panel hidden" id="comingsoon">
+  <h2>Coming soon</h2>
+  <p>The playable build (<code>dndiablo.html</code>) hasn't landed in <code>demos/dndiablo/</code> yet — check back shortly.</p>
+</div>
+
+<div class="panel" id="jarpanel">
+  <h2>Java edition</h2>
+  <p id="jarmsg">Checking for the downloadable JAR…</p>
+  <div class="btn-row">
+    <a class="btn hidden" id="jarbtn" href="dndiablo.jar" download>Download dndiablo.jar</a>
+  </div>
+  <p class="muted" style="font-size:0.8rem">Requires a Java runtime: <code>java -jar dndiablo.jar</code></p>
+</div>
+
+<p id="status" role="status" aria-live="polite">Loading…</p>
+</div>
+
+<script>
+/* Feature slot for DnDiablo.
+ * Drop these files next to this page and everything lights up, no edits needed:
+ *   demos/dndiablo/dndiablo.html  -> embedded above as the playable game
+ *   demos/dndiablo/dndiablo.jar   -> offered as the Java download
+ */
+(function () {
+  "use strict";
+  var status = document.getElementById("status");
+  var stage = document.getElementById("stage");
+  var frame = document.getElementById("gameframe");
+  var comingsoon = document.getElementById("comingsoon");
+  var jarbtn = document.getElementById("jarbtn");
+  var jarmsg = document.getElementById("jarmsg");
+
+  function head(url) {
+    return fetch(url, { method: "HEAD", credentials: "same-origin" }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return true;
+    });
+  }
+
+  var hasHtml = false, hasJar = false;
+  head("dndiablo.html").then(function () { hasHtml = true; }, function () { hasHtml = false; })
+    .then(function () { return head("dndiablo.jar").then(function () { hasJar = true; }, function () { hasJar = false; }); })
+    .then(function () {
+      if (hasHtml) {
+        stage.classList.remove("hidden");
+        comingsoon.classList.add("hidden");
+        frame.src = "dndiablo.html";
+      } else {
+        stage.classList.add("hidden");
+        comingsoon.classList.remove("hidden");
+      }
+      if (hasJar) {
+        jarbtn.classList.remove("hidden");
+        jarmsg.textContent = "Grab the desktop build and run it anywhere you have Java.";
+      } else {
+        jarbtn.classList.add("hidden");
+        jarmsg.textContent = "The Java download (dndiablo.jar) hasn't landed in demos/dndiablo/ yet — check back shortly.";
+      }
+      if (hasHtml && hasJar) status.textContent = "DnDiablo is live — play above or download the JAR.";
+      else if (hasHtml) status.textContent = "Browser build live — Java JAR still on the way.";
+      else if (hasJar) status.textContent = "Java JAR live — browser build still on the way.";
+      else { status.textContent = "Waiting on game files."; status.className = "err"; }
+    });
+
+  frame.addEventListener("error", function () {
+    stage.classList.add("hidden");
+    comingsoon.classList.remove("hidden");
+  });
+  window.addEventListener("error", function (e) {
+    try { status.textContent = "Runtime error: " + (e.message || e); status.className = "err"; } catch (_) {}
+  });
+})();
+</script>
+</body>
+</html>
