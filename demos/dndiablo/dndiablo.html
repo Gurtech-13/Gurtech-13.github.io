@@ -30,7 +30,7 @@
 <div id="loading">
   <div class="spinner"></div>
   <div id="loadmsg">Loading the Java runtime…</div>
-  <div id="loadhint">First load downloads the WebAssembly JVM (~10&nbsp;MB) and the game JAR, then caches them. This can take a minute on a slow connection.</div>
+  <div id="loadhint">First load downloads the WebAssembly JVM (~10&nbsp;MB) and the game JARs (split into code + assets + music), then caches them. This can take a minute on a slow connection.</div>
   <div id="fail"></div>
 </div>
 <script src="https://cjrtnc.leaningtech.com/4.3/loader.js"></script>
@@ -73,7 +73,14 @@
       await cheerpjInit();
       cheerpjCreateDisplay(800, 600);
       msg.textContent = "Starting DnDiablo…";
-      await cheerpjRunJar("/app/dndiablo.jar");
+      var classpath = [
+        "/app/dndiablo-code.jar",
+        "/app/dndiablo-sprites.jar",
+        "/app/dndiablo-music-01.jar",
+        "/app/dndiablo-music-02.jar",
+        "/app/dndiablo-music-03.jar"
+      ].join(":");
+      await cheerpjRunJar(classpath);
       hideOverlay();
     } catch (err) {
       showFail("Could not start the game: " + (err && err.message ? err.message : err));

@@ -36,7 +36,7 @@
 <div class="wrap demo-wrap">
 <nav class="topnav back"><a class="back" href="../../index.html">&larr; All projects</a></nav>
 <h1 style="margin:0 0 4px">DnDiablo</h1>
-<p class="muted" style="margin:0 0 16px">Dungeon-crawler game — play the Java edition right in the browser via CheerpJ, or download the JAR.</p>
+<p class="muted" style="margin:0 0 16px">Dungeon-crawler game — play the Java edition right in the browser via CheerpJ, or download the JARs (split by code, sprites, and music).</p>
 
 <div class="stage hidden" id="stage">
   <iframe id="gameframe" title="DnDiablo game" src="dndiablo.html" allowfullscreen></iframe>
@@ -49,11 +49,15 @@
 
 <div class="panel" id="jarpanel">
   <h2>Java edition</h2>
-  <p id="jarmsg">Checking for the downloadable JAR…</p>
+  <p id="jarmsg">Checking for the downloadable JARs…</p>
   <div class="btn-row">
-    <a class="btn hidden" id="jarbtn" href="dndiablo.jar" download>Download dndiablo.jar</a>
+    <a class="btn hidden" id="jarbtn-code" href="dndiablo-code.jar" download>code (0.1 MB)</a>
+    <a class="btn hidden" id="jarbtn-sprites" href="dndiablo-sprites.jar" download>sprites (1 MB)</a>
+    <a class="btn hidden" id="jarbtn-music1" href="dndiablo-music-01.jar" download>music-01 (86 MB)</a>
+    <a class="btn hidden" id="jarbtn-music2" href="dndiablo-music-02.jar" download>music-02 (84 MB)</a>
+    <a class="btn hidden" id="jarbtn-music3" href="dndiablo-music-03.jar" download>music-03 (72 MB)</a>
   </div>
-  <p class="muted" style="font-size:0.8rem">Requires a Java runtime: <code>java -jar dndiablo.jar</code></p>
+  <p class="muted" style="font-size:0.8rem">Requires a Java runtime. Place all JARs in the same directory, then: <code>java -cp "dndiablo-code.jar;dndiablo-sprites.jar;dndiablo-music-01.jar;dndiablo-music-02.jar;dndiablo-music-03.jar" com.jscratch.GameBootstrap</code></p>
 </div>
 
 <p id="status" role="status" aria-live="polite">Loading…</p>
@@ -62,8 +66,8 @@
 <script>
 /* Feature slot for DnDiablo.
  * Drop these files next to this page and everything lights up, no edits needed:
- *   demos/dndiablo/dndiablo.html  -> embedded above as the playable game (CheerpJ runs dndiablo.jar)
- *   demos/dndiablo/dndiablo.jar   -> offered as the Java download
+ *   demos/dndiablo/dndiablo.html  -> embedded above as the playable game
+ *   demos/dndiablo/dndiablo-code.jar, dndiablo-sprites.jar, dndiablo-music-*.jar -> Java download
  */
 (function () {
   "use strict";
@@ -71,8 +75,15 @@
   var stage = document.getElementById("stage");
   var frame = document.getElementById("gameframe");
   var comingsoon = document.getElementById("comingsoon");
-  var jarbtn = document.getElementById("jarbtn");
   var jarmsg = document.getElementById("jarmsg");
+
+  var JAR_FILES = [
+    { id: "jarbtn-code",   file: "dndiablo-code.jar" },
+    { id: "jarbtn-sprites", file: "dndiablo-sprites.jar" },
+    { id: "jarbtn-music1",  file: "dndiablo-music-01.jar" },
+    { id: "jarbtn-music2",  file: "dndiablo-music-02.jar" },
+    { id: "jarbtn-music3",  file: "dndiablo-music-03.jar" }
+  ];
 
   function head(url) {
     return fetch(url, { method: "HEAD", credentials: "same-origin" }).then(function (r) {
@@ -81,9 +92,16 @@
     });
   }
 
-  var hasHtml = false, hasJar = false;
+  var hasHtml = false, jarCount = 0;
   head("dndiablo.html").then(function () { hasHtml = true; }, function () { hasHtml = false; })
-    .then(function () { return head("dndiablo.jar").then(function () { hasJar = true; }, function () { hasJar = false; }); })
+    .then(function () {
+      return Promise.all(JAR_FILES.map(function (j) {
+        return head(j.file).then(function () {
+          document.getElementById(j.id).classList.remove("hidden");
+          jarCount++;
+        }, function () {});
+      }));
+    })
     .then(function () {
       if (hasHtml) {
         stage.classList.remove("hidden");
@@ -93,16 +111,14 @@
         stage.classList.add("hidden");
         comingsoon.classList.remove("hidden");
       }
-      if (hasJar) {
-        jarbtn.classList.remove("hidden");
-        jarmsg.textContent = "Grab the desktop build and run it anywhere you have Java.";
+      if (jarCount > 0) {
+        jarmsg.textContent = "Grab the desktop builds and run anywhere you have Java. Place all JARs in the same folder.";
       } else {
-        jarbtn.classList.add("hidden");
-        jarmsg.textContent = "The Java download (dndiablo.jar) hasn't landed in demos/dndiablo/ yet — check back shortly.";
+        jarmsg.textContent = "The Java downloads haven't landed in demos/dndiablo/ yet — check back shortly.";
       }
-      if (hasHtml && hasJar) status.textContent = "DnDiablo is live — play above or download the JAR.";
-      else if (hasHtml) status.textContent = "Browser build live — Java JAR still on the way.";
-      else if (hasJar) status.textContent = "Java JAR live — browser build still on the way.";
+      if (hasHtml && jarCount > 0) status.textContent = "DnDiablo is live — play above or download the JARs.";
+      else if (hasHtml) status.textContent = "Browser build live — Java JARs still on the way.";
+      else if (jarCount > 0) status.textContent = "Java JARs live — browser build still on the way.";
       else { status.textContent = "Waiting on game files."; status.className = "err"; }
     });
 
