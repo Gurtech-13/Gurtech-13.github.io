@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Run 3-style — branching tunnels (C &rarr; WASM)</title>
+<title>Run 3</title>
 <link rel="stylesheet" href="../../style.css">
 <link rel="stylesheet" href="run3.css">
 </head>
@@ -11,56 +11,27 @@
 <div class="wrap demo-wrap">
 <nav class="topnav"><a class="back" href="../../index.html">&larr; All projects</a></nav>
 
-<!-- ============ WORLD MAP ============ -->
-<section id="mapview">
-  <div class="mapwrap">
-    <div class="mhead">
-      <h1>&#127757; Tunnel map</h1>
-    </div>
-    <p id="legend" class="legend">The Runner charts the tunnels. Clear a tunnel to open the branches beyond it &mdash; a few of them earn proper names.</p>
-  </div>
-  <div id="charrow" class="charrow"></div>
-</section>
-
-<!-- ============ GAME ============ -->
-<section id="gameview" style="display:none">
-  <div style="width:100%; max-width:640px; display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
-    <button type="button" id="backbtn" style="font:inherit;cursor:pointer;background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:999px;padding:4px 14px">&larr; Map</button>
-    <span style="color:var(--muted);font-size:.78rem">checkpoints last 45 seconds &mdash; falling is the only way to lose</span>
-  </div>
-  <div class="stage">
-    <canvas id="cv" width="640" height="360"></canvas>
-    <div class="hud">
-      <div class="toprow">
-        <div>
-          <div class="checkpoint" id="checkpoint">Level 1</div>
-          <div class="tunname" id="tunname"></div>
-        </div>
-        <div class="state" id="hudstate">READY</div>
-      </div>
-      <div class="progress"><i id="bar"></i></div>
-      <div class="msg" id="msg">Tap to run</div>
-    </div>
-  </div>
-  <p style="margin-top:10px;color:var(--muted);font-size:.88rem;text-align:center">
-    Jump: <kbd>Space</kbd>/<kbd>&uarr;</kbd>/<kbd>W</kbd>/tap &middot; steer: <kbd>&larr;</kbd> <kbd>&rarr;</kbd> (hold) or drag &middot; <kbd>Esc</kbd> to the map
-  </p>
-</section>
-
-<p id="status" class="statusline" role="status" aria-live="polite">Loading run3.wasm&hellip;</p>
-<p class="footnote">All code and levels are original; gameplay and lore modeled after Player_03&rsquo;s <em>Run 3</em> (world map, branching lettered tunnels, characters, the Runner charting tunnels &mdash; see <a href="story.js">story.js</a>). Engine files: <a href="run3.c">run3.c</a> + <a href="render.c">render.c</a>; level data: <a href="levels/levels.c">levels/levels.c</a>; build: <a href="build.sh">build.sh</a></p>
+<canvas id="cv" width="1280" height="720" style="display:block;cursor:pointer"></canvas>
+<div style="position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;justify-content:center;gap:8px;z-index:20">
+  <button type="button" id="backbtn" style="font:inherit;cursor:pointer;background:rgba(15,23,42,.85);color:rgba(255,255,255,.85);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:6px 16px;display:none;backdrop-filter:blur(6px)">&#8592; Menu</button>
+  <button type="button" id="musicToggle" style="font:inherit;cursor:pointer;background:rgba(255,255,255,.1);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15);border-radius:999px;padding:6px 12px;font-size:.82rem;display:none;backdrop-filter:blur(6px)" title="Toggle music (M)">&#127925;</button>
 </div>
 
-<!-- ============ STORY CARD ============ -->
-<div class="card" id="card">
-  <div class="inner">
-    <h2 id="cardtitle"></h2>
-    <p id="cardtext"></p>
-    <p class="who" id="cardwho"></p>
-    <button type="button" id="cardbtn">Continue</button>
-  </div>
-</div>
+<div class="card" id="card"><div class="inner">
+  <img class="card-img" id="cardimg" style="display:none" alt="">
+  <h2 id="cardtitle"></h2><p id="cardtext"></p><p class="who" id="cardwho"></p>
+  <button type="button" id="cardbtn">Continue</button>
+</div></div>
 
+<div class="card" id="shopview" style="display:none"><div class="inner" style="max-width:400px">
+  <h2>&#x1F6D2; Power Cell Shop</h2>
+  <p style="color:var(--muted);font-size:.85rem">Earn cells by clearing checkpoints.</p>
+  <div class="shop-list"></div>
+  <button type="button" id="shopClose" style="margin-top:12px;font:inherit;cursor:pointer;background:var(--accent);color:#04131d;font-weight:700;border:none;border-radius:999px;padding:8px 20px;width:100%">Close</button>
+</div></div>
+
+<p id="status" class="statusline">Loading&hellip;</p>
+</div>
 <script src="story.js"></script>
 <script src="app.js"></script>
 </body>

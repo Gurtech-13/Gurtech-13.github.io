@@ -24,6 +24,19 @@ fi
   -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows \
   -Wl,--export=run3_tile -Wl,--export=run3_solid \
   -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height \
+  -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
+  -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
+  -Wl,--export=run3_enter_map -Wl,--export=run3_map_click -Wl,--export=run3_map_hover \
+  -Wl,--export=run3_map_scroll -Wl,--export=run3_map_scroll_y -Wl,--export=run3_map_scroll_x -Wl,--export=run3_map_scroll_delta -Wl,--export=run3_map_selected \
+  -Wl,--export=run3_map_hovered -Wl,--export=run3_map_set_hover \
+  -Wl,--export=run3_map_set_locked -Wl,--export=run3_map_set_cleared \
+  -Wl,--export=run3_map_is_locked -Wl,--export=run3_map_is_cleared -Wl,--export=run3_map_is_discovered -Wl,--export=run3_map_sync_state \
+  -Wl,--export=run3_map_checkpoint_count -Wl,--export=run3_map_hover_level -Wl,--export=run3_map_selected_level -Wl,--export=run3_map_set_hover_level \
+  -Wl,--export=run3_map_set_best -Wl,--export=run3_map_best \
+  -Wl,--export=run3_enter_menu -Wl,--export=run3_menu_click -Wl,--export=run3_menu_hover \
+  -Wl,--export=run3_menu_select_char -Wl,--export=run3_menu_char -Wl,--export=run3_set_char_count \
+  -Wl,--export=run3_char_set_locked -Wl,--export=run3_char_is_locked \
+  -Wl,--export=render_map -Wl,--export=render_menu -Wl,--export=render_frame \
   -o run3.wasm run3.c render.c levels/levels.c
 
 echo "built $(pwd)/run3.wasm ($(wc -c < run3.wasm) bytes)"
