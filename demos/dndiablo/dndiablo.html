@@ -80,7 +80,7 @@
         "/app/dndiablo-music-02.jar",
         "/app/dndiablo-music-03.jar"
       ].join(":");
-      await cheerpjRunJar(classpath);
+      await cheerpjRunMain("com.jscratch.GameBootstrap", classpath);
       hideOverlay();
     } catch (err) {
       showFail("Could not start the game: " + (err && err.message ? err.message : err));
