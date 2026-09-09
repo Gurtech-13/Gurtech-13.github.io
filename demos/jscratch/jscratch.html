@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JScratch — CheerpJ edition</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; height: 100%; }
+  #display { display: flex; justify-content: center; align-items: flex-start; }
+  #loading {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    background: #000; color: #cfd6e4; font-family: system-ui, sans-serif;
+    text-align: center; padding: 24px; transition: opacity 0.4s;
+  }
+  #loading.gone { opacity: 0; pointer-events: none; }
+  #loadmsg { font-size: 0.95rem; }
+  #loadhint { font-size: 0.8rem; color: #8a93a6; max-width: 460px; }
+  #fail { color: #f2a7a7; font-size: 0.9rem; max-width: 480px; display: none; }
+  .spinner {
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid #333a46; border-top-color: #7aa2f7;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="display"></div>
+<div id="loading">
+  <div class="spinner"></div>
+  <div id="loadmsg">Loading the Java runtime…</div>
+  <div id="loadhint">First load downloads the WebAssembly JVM (~10&nbsp;MB), the JScratch JAR, and its <code>libs/</code> dependencies, then caches them. This can take a minute on a slow connection.</div>
+  <div id="fail"></div>
+</div>
+<script src="https://cjrtnc.leaningtech.com/4.3/loader.js"></script>
+<script>
+(function () {
+  "use strict";
+  var loading = document.getElementById("loading");
+  var msg = document.getElementById("loadmsg");
+  var fail = document.getElementById("fail");
+
+  function showFail(text) {
+    fail.style.display = "block";
+    fail.textContent = text;
+    msg.textContent = "Something went wrong.";
+  }
+
+  // Hide the overlay once the Swing editor window is on screen.
+  var display = document.getElementById("display");
+  var overlayGone = false;
+  function hideOverlay() {
+    if (overlayGone) return;
+    overlayGone = true;
+    loading.classList.add("gone");
+  }
+  var observer = new MutationObserver(function () {
+    if (display.querySelector("canvas, jvm-display, div")) hideOverlay();
+  });
+  observer.observe(display, { childList: true, subtree: true });
+  setTimeout(hideOverlay, 60000); // fallback: never block the view forever
+
+  window.addEventListener("error", function (e) {
+    showFail("Runtime error: " + (e.message || e));
+  });
+
+  (async function () {
+    try {
+      if (typeof cheerpjInit !== "function") {
+        throw new Error("CheerpJ loader failed to load (network blocked?)");
+      }
+      await cheerpjInit();
+      cheerpjCreateDisplay(1280, 800);
+      msg.textContent = "Starting JScratch…";
+      var classpath = [
+        "/app/jscratch-0.0.1-SNAPSHOT.jar",
+        "/app/libs/autocomplete-3.3.1.jar",
+        "/app/libs/gson-2.10.1.jar",
+        "/app/libs/jna-5.19.1.jar",
+        "/app/libs/jna-platform-5.19.1.jar",
+        "/app/libs/org.eclipse.core.commands-3.13.0.jar",
+        "/app/libs/org.eclipse.core.contenttype-3.9.900.jar",
+        "/app/libs/org.eclipse.core.expressions-3.9.700.jar",
+        "/app/libs/org.eclipse.core.filesystem-1.11.500.jar",
+        "/app/libs/org.eclipse.core.jobs-3.15.900.jar",
+        "/app/libs/org.eclipse.core.resources-3.24.100.jar",
+        "/app/libs/org.eclipse.core.runtime-3.35.0.jar",
+        "/app/libs/org.eclipse.equinox.app-1.7.600.jar",
+        "/app/libs/org.eclipse.equinox.common-3.21.0.jar",
+        "/app/libs/org.eclipse.equinox.preferences-3.12.100.jar",
+        "/app/libs/org.eclipse.equinox.registry-3.12.600.jar",
+        "/app/libs/org.eclipse.jdt.core-3.12.3.jar",
+        "/app/libs/org.eclipse.osgi-3.24.300.jar",
+        "/app/libs/org.eclipse.text-3.14.800.jar",
+        "/app/libs/org.osgi.service.prefs-1.1.2.jar",
+        "/app/libs/osgi.annotation-8.0.1.jar",
+        "/app/libs/rsyntaxtextarea-3.3.3.jar"
+      ].join(":");
+      await cheerpjRunMain("com.jscratch.ScratchEditor", classpath);
+      hideOverlay();
+    } catch (err) {
+      showFail("Could not start the editor: " + (err && err.message ? err.message : err));
+    }
+  })();
+})();
+</script>
+</body>
+</html>
