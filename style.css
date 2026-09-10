@@ -253,6 +253,64 @@ h2 + .muted { margin-top: -6px; }
 }
 .section-list li { padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
 
+/* ------------------------------ mc feature card --------------------------- */
+
+.mc-feature {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  background: linear-gradient(90deg, #14301c, #0f2417 60%, var(--panel));
+  border: 1px solid #3d7a45;
+  border-radius: var(--radius);
+}
+.mc-feature:hover { border-color: #6fd08a; }
+
+.mc-kicker {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.mc-badge {
+  display: inline-block;
+  background: #3fb950;
+  color: #06210f;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 1px 8px;
+  margin-right: 6px;
+}
+.mc-name { margin: 0 0 4px; font-size: 1.35rem; letter-spacing: -0.3px; }
+.mc-desc { margin: 0; color: var(--muted); font-size: 0.93rem; max-width: 46ch; }
+
+.mc-connect {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.mc-ip {
+  background: rgba(63, 185, 80, 0.12);
+  border: 1px dashed #4d9c5f;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #7ee79c;
+  cursor: text;
+}
+.mc-note { color: var(--faint); font-size: 0.8rem; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .mc-feature { flex-direction: column; align-items: flex-start; }
+  .mc-connect { align-items: flex-start; }
+}
+
 /* -------------------------------- demo banner ----------------------------- */
 
 .demo-banner {
