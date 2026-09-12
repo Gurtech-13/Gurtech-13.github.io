@@ -190,16 +190,6 @@ static int is_low_power(void) {
   return (G.theme == 5);
 }
 
-/* scale an opaque color toward black (authored per-level tints) */
-static uint32_t shade(uint32_t c, double f) {
-  int r = (int)(((c >> 16) & 0xff) * f);
-  int g = (int)(((c >> 8) & 0xff) * f);
-  int b = (int)((c & 0xff) * f);
-  if (r > 255) r = 255; if (g > 255) g = 255; if (b > 255) b = 255;
-  if (r < 0) r = 0; if (g < 0) g = 0; if (b < 0) b = 0;
-  return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-}
-
 /* ==================== CHARACTER RENDERING ==================== */
 
 /*
@@ -532,11 +522,9 @@ void render_frame(void) {
     if (G.state == S_CUT || G.state == S_GATE)
       cam_pitch += run3_stage_liftf() * 0.06;
   }
-  /* authored per-level tile tints (0 = theme palette) */
+  /* authored per-level tile tint (0 = theme palette) */
   uint32_t lvlC0 = run3_level_color0();
-  uint32_t lvlC1 = run3_level_color1();
   if (lvlC0) lvlC0 |= 0xFF000000u;
-  if (lvlC1) lvlC1 |= 0xFF000000u;
   double front = G.prog;
   double tile = G.tile;
   int gateRow = (int)G.rowEnd;
@@ -557,24 +545,12 @@ void render_frame(void) {
     double rx[MAXN+1], ry[MAXN+1];
     for (int c = 0; c <= n; c++) corner(c, &rx[c], &ry[c], R);
 
-    int su = wrap_side(G.ring, k, n);
     for (int side = 0; side < n; side++) {
       int mask = mask_at(side, ri);
-      uint32_t base;
-      if (lvlC0) {
-        /* authored level tint: bright wall, accent neighbors, dim rest */
-        if (side == su) base = lvlC0;
-        else if (side == (su+1)%n || side == (su+n-1)%n)
-          base = lvlC1 ? lvlC1 : shade(lvlC0, 0.72);
-        else base = shade(lvlC0, 0.5);
-      } else if (lpw) {
-        base = (side == su) ? LPAL[1] : ((side == (su+1)%n || side == (su+n-1)%n) ? LPAL[2] : LPAL[3]);
-      } else {
-        if (side == su) base = PAL[th][1];
-        else if (side == (su+1)%n || side == (su+n-1)%n) base = PAL[th][2];
-        else base = PAL[th][3];
-      }
-      if ((side & 1) && side != su) base = mixc(base, sky, 0.10);
+      /* every wall of the tube is at full brightness: no gravity shading
+         (floor brighter than ceiling) and no alternating side tint. Only
+         distance fog and the low-power dim vary a tile's colour. */
+      uint32_t base = lvlC0 ? lvlC0 : (lpw ? LPAL[1] : PAL[th][1]);
       uint32_t col = mixc(base, sky, fog);
       int isGate = (ri == gateRow);
       if (isGate) col = mixc(col, rgb(255,236,170), 0.55);
