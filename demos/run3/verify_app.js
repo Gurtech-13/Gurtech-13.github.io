@@ -2,11 +2,14 @@
 // Full-stack smoke test: boots the real app.js + real run3.wasm behind a
 // minimal DOM stub and drives:
 //   menu -> map (no scene on tunnel entry) -> gallery open/close ->
-//   Side Path F end-to-end: injected mid-gate scene (pause/resume),
+//   Side Path F end-to-end: injected mid-gate scene staged on the completed
+//   level (engine S_GATE pause + staged cast + float camera, then release),
 //   tunnel-end scene, mapped card -> gallery seen-states.
 // A test-only trigger is appended to STORY_MID_CUTS below (same machinery
 // as the real ComingThrough-at-Primary-10 trigger, which is validated
 // statically in verify_stage.js but needs blind-unplayable tunnels).
+// The wasm exports are captured so the test can watch the engine state and
+// probe the framebuffer while a staged scene is up.
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
@@ -60,12 +63,18 @@ function makeEl() {
   canvas.setPointerCapture = () => {};
   canvas.addEventListener = (t, fn) => { canvasHandlers[t] = fn; };
 
-  const MISSING = process.env.SIMULATE_CACHED_INDEX ? { cutleft: 1, cutright: 1 } : {};
+  // SIMULATE_CACHED_INDEX hides the cutscene viewer, i.e. a stale cached
+  // index.html: scenes must fail open (play nothing, never soft-lock).
+  const MISSING = process.env.SIMULATE_CACHED_INDEX ? { cutview: 1, cutstage: 1 } : {};
   function el(id) {
     if (id === "cv") return canvas;
     if (MISSING[id]) return null;
     if (!els[id]) els[id] = makeEl();
     return els[id];
+  }
+  function sceneOn() {
+    const v = el("cutview");
+    return !!(v && v.classList.contains("on"));
   }
 
   // Primary cleared -> Side Path F (tun 30) unlocked
@@ -82,6 +91,21 @@ function makeEl() {
   AudioStub.prototype.play = function () { return Promise.resolve(); };
   AudioStub.prototype.pause = function () {};
 
+  let wasmExports = null;
+  const wasmWrapper = {
+    instantiateStreaming: async (r, i) => {
+      const res = await WebAssembly.instantiateStreaming(r, i);
+      wasmExports = res.instance.exports;
+      return res;
+    },
+    instantiate: WebAssembly.instantiate,
+    compile: WebAssembly.compile,
+    validate: WebAssembly.validate,
+    Memory: WebAssembly.Memory,
+    Module: WebAssembly.Module,
+    Global: WebAssembly.Global,
+  };
+
   const sandbox = {
     console,
     performance: { now: () => now },
@@ -93,7 +117,7 @@ function makeEl() {
     requestAnimationFrame: (cb) => { rafCb = cb; return 1; },
     fetch: async () => new Response(wasmBytes, { headers: { "Content-Type": "application/wasm" } }),
     Audio: AudioStub,
-    WebAssembly,
+    WebAssembly: wasmWrapper,
     Uint8Array, Uint8ClampedArray, Uint32Array, Int32Array, Float64Array,
     ArrayBuffer, DataView, Promise, JSON, Math, Object, Array, Error, Set, Map,
   };
@@ -173,8 +197,22 @@ function makeEl() {
   await frames(2);
   click(1233, 215);
   await frames(5);
-  if (el("cutview").classList.contains("on")) throw new Error("scene played on tunnel entry");
+  if (sceneOn()) throw new Error("scene played on tunnel entry");
   console.log("no scene on entry OK");
+
+  if (MISSING.cutview) {
+    /* stale cached index (no viewer): the whole run must still finish */
+    let done = false;
+    for (let i = 0; i < 3000 && !done; i++) {
+      await frames(10);
+      done = save().cleared.indexOf(30) >= 0;
+      if (sceneOn()) throw new Error("viewer ran without its elements");
+    }
+    if (!done) throw new Error("stale index soft-locked the run");
+    if (errors.length) throw new Error("stale index errors: " + JSON.stringify(errors));
+    console.log("stale cached index fail-open OK");
+    return;
+  }
 
   // gallery opens (all locked), then close
   fire(el("sceneBtn"), "click");
@@ -187,17 +225,41 @@ function makeEl() {
   await frames(1);
   if (el("sceneMenu").classList.contains("on")) throw new Error("gallery did not close");
 
-  // play F to the injected gate 3->4: scene pauses, then resumes the run
-  let opened = false;
+  // play F to the injected gate 3->4: the engine PAUSES on the completed
+  // level (S_GATE), the scene stages the cast there, then the gate releases
+  let opened = false, sawGate = 0;
   for (let i = 0; i < 1500 && !opened; i++) {
     await frames(10);
-    opened = el("cutview").classList.contains("on");
+    if (wasmExports && wasmExports.run3_state() === 3) sawGate++;
+    opened = sceneOn();
   }
   if (!opened) throw new Error("mid-gate scene never opened");
-  console.log("mid-gate scene opened OK; bubble:", JSON.stringify(el("cuttext").textContent.slice(0, 40)));
+  if (!sawGate) throw new Error("scene did not stage on an S_GATE pause");
+  const gateLvl = wasmExports.run3_lvl();
+  if (gateLvl !== 3) throw new Error("gate paused on the wrong level: " + gateLvl);
+  // the engine is drawing the staged cast into the held frame: clear the
+  // slots for one render and the picture must change (the app re-pushes them
+  // on the next frame)
+  const W3 = wasmExports.run3_width(), H3 = wasmExports.run3_height();
+  const snap = () => {
+    wasmExports.render_frame();
+    return new Uint32Array(wasmExports.memory.buffer, wasmExports.run3_buffer(), W3 * H3).slice();
+  };
+  const withCast = snap();
+  for (let i = 0; i < 8; i++) wasmExports.run3_stage_actor(i, 0, 4, 6, 0);
+  for (let p = 0; p < 4; p++) wasmExports.run3_stage_prop(p, 1, 4, 6, 2, 0);
+  const noCast = snap();
+  let castDiff = 0;
+  for (let i = 0; i < W3 * H3; i++) if (withCast[i] !== noCast[i]) castDiff++;
+  if (castDiff < 100) throw new Error("no staged cast drawn on the gate frame: " + castDiff);
+  console.log(`gate pause OK (lvl ${gateLvl}, ${sawGate} frames in S_GATE,`,
+    `${castDiff} cast pixels); bubble:`,
+    JSON.stringify(el("cuttext").textContent.slice(0, 40)));
   await finishScene();
   await frames(10);
   if (el("cutview").classList.contains("on")) throw new Error("mid-gate scene stuck");
+  if (wasmExports.run3_state() === 3) throw new Error("gate never released");
+  if (wasmExports.run3_lvl() < 4) throw new Error("gate release did not advance the run");
   if (!save().cuts.m30_3) throw new Error("m30_3 not marked seen");
   console.log("mid-gate pause/resume OK");
 

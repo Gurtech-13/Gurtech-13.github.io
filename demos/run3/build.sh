@@ -28,6 +28,9 @@ fi
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
   -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
   -Wl,--export=run3_cutscene_resume -Wl,--export=run3_level_color0 -Wl,--export=run3_level_color1 -Wl,--export=run3_level_music -Wl,--export=run3_stage_cam -Wl,--export=run3_dislodged -Wl,--export=run3_is_inf \
+  -Wl,--export=run3_stage_liftf -Wl,--export=run3_stage_sidef \
+  -Wl,--export=run3_stage_actor -Wl,--export=run3_stage_prop \
+  -Wl,--export=run3_mid_arm -Wl,--export=run3_mid_clear -Wl,--export=run3_gate_resume \
   -Wl,--export=run3_enter_map -Wl,--export=run3_map_click -Wl,--export=run3_map_hover \
   -Wl,--export=run3_map_scroll -Wl,--export=run3_map_scroll_y -Wl,--export=run3_map_scroll_x -Wl,--export=run3_map_scroll_delta -Wl,--export=run3_map_selected \
   -Wl,--export=run3_map_hovered -Wl,--export=run3_map_set_hover \

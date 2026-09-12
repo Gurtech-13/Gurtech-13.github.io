@@ -284,28 +284,8 @@ html, body {
   box-shadow: 0 24px 80px rgba(0,0,0,.7);
   overflow: hidden;
 }
-/* cast portraits on stage: dim side rests, bubble side steps forward */
-.cutactor {
-  position: absolute;
-  bottom: 52px;
-  height: 52%;
-  max-width: 34%;
-  object-fit: contain;
-  object-position: bottom center;
-  pointer-events: none;
-  opacity: .42;
-  filter: saturate(.85);
-  transition: opacity .18s ease, transform .18s ease;
-  display: none;
-}
-.cutactor.left { left: 4%; transform: translateX(6%) scale(.96); }
-.cutactor.right { right: 4%; transform: translateX(-6%) scale(.96); }
-.cutactor.show { display: block; }
-.cutactor.active { opacity: .95; filter: none; }
-.cutactor.left.active { transform: translateX(0) scale(1); }
-.cutactor.right.active { transform: translateX(0) scale(1); }
-.cutstage.solo .cutactor.left { left: 50%; transform: translateX(-50%) scale(.96); }
-.cutstage.solo .cutactor.left.active { transform: translateX(-50%) scale(1); }
+/* the cast is staged INSIDE the tunnel render by the engine (staged-cast
+   slots), so the viewer no longer overlays portrait images */
 .cuttitle {
   position: absolute; top: 10px; left: 14px;
   font-family: 'Run3Title', 'Permanent Marker', cursive;

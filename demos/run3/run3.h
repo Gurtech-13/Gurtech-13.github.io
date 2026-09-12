@@ -212,8 +212,16 @@ void run3_spend_cells(int32_t n);
 void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl); /* seek + hold frame */
 void run3_cutscene_hold(void);                            /* freeze current frame */
 void run3_cutscene_resume(void);                          /* unfreeze, keep going */
-void run3_stage_cam(int side, int lift);                  /* staged camera angle */
-int run3_stage_lift(void);                                /* (renderer use) */
+void run3_stage_cam(double side, double lift);                  /* staged camera angle */
+double run3_stage_liftf(void);                                /* (renderer use) */
+double run3_stage_sidef(void);                                /* (renderer use) */
+#define NSTAGE_ACT 8
+#define NSTAGE_PROP 4
+void run3_stage_actor(int i, int ch, double ring, double zrow, int vis);
+void run3_stage_prop(int i, int kind, double ring, double zrow, double size, int vis);
+void run3_mid_arm(int32_t tun, int32_t lvl);                  /* pause gate at S_GATE */
+void run3_mid_clear(void);
+void run3_gate_resume(void);                              /* leave S_GATE, roll on */
 double run3_power(void);                                  /* light level 0..1 */
 uint32_t run3_level_color0(void);                         /* tile tint, 0 = theme */
 uint32_t run3_level_color1(void);                         /* accent tint, 0 = theme */

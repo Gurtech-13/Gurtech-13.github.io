@@ -10,7 +10,9 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
 (async () => {
   const { instance } = await WebAssembly.instantiate(bytes, {});
   const e = instance.exports;
-  for (const n of ["run3_cutscene_backdrop", "run3_cutscene_hold", "run3_power"]) {
+  for (const n of ["run3_cutscene_backdrop", "run3_cutscene_hold", "run3_power",
+                   "run3_stage_actor", "run3_stage_prop", "run3_stage_cam",
+                   "run3_mid_arm", "run3_mid_clear", "run3_gate_resume"]) {
     if (typeof e[n] !== "function") throw new Error("missing export " + n);
   }
   const W = e.run3_width(), H = e.run3_height();
@@ -78,14 +80,84 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   e.render_frame(); // must not trap
   console.log("S_CUT hold/backdrop OK");
 
+  // 2b. staged cast: slots are drawn in S_CUT (and S_GATE), and the host
+  //     float camera pans/raises the held frame
+  e.run3_cutscene_backdrop(0, 9);
+  e.run3_stage_actor(0, 0, 4, 6, 1);
+  e.run3_stage_actor(1, 1, 12, 6.6, 1);
+  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 1);
+  e.run3_stage_cam(0, 0);
+  e.render_frame();
+  const withCast = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  e.run3_stage_actor(0, 0, 4, 6, 0);
+  e.run3_stage_actor(1, 1, 12, 6.6, 0);
+  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 0);
+  e.render_frame();
+  const noCast = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  let castDiff = 0;
+  for (let i = 0; i < W * H; i++) if (withCast[i] !== noCast[i]) castDiff++;
+  if (castDiff < 200) throw new Error("staged cast drew nothing: " + castDiff);
+  e.run3_cutscene_backdrop(0, 9);
+  e.run3_stage_cam(0, 0);
+  e.render_frame();
+  const flat = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  e.run3_stage_cam(0.9, 0.8);
+  e.render_frame();
+  const panned = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  let camDiff = 0;
+  for (let i = 0; i < W * H; i++) if (flat[i] !== panned[i]) camDiff++;
+  if (camDiff < 2000) throw new Error("float stage camera did nothing: " + camDiff);
+  e.run3_stage_cam(0, 0);
+  console.log(`staged cast OK (cast pixels=${castDiff} camera pixels=${camDiff})`);
+
+  // 2c. mid-tunnel gate: an armed checkpoint PAUSES at S_GATE on the level
+  //     just completed (scene stages there); resume rolls into the next one
+  e.run3_mid_clear();
+  e.run3_seek(30, 3);
+  e.run3_set_input(0);
+  let gated = -1;
+  for (let i = 0; i < 3000; i++) {
+    e.run3_step(1 / 60);
+    if (e.run3_state() === 3) { gated = i; break; }
+  }
+  if (gated >= 0) throw new Error("unarmed checkpoint should never pause");
+  e.run3_mid_arm(30, 3);
+  e.run3_seek(30, 3);
+  e.run3_set_input(0);
+  let gated2 = -1;
+  for (let i = 0; i < 3000; i++) {
+    e.run3_step(1 / 60);
+    if (e.run3_state() === 3) { gated2 = i; break; }
+  }
+  if (gated2 < 0) throw new Error("armed checkpoint never paused (known bug path)");
+  if (e.run3_state() !== 3) throw new Error("gate state wrong: " + e.run3_state());
+  if (e.run3_lvl() !== 3) throw new Error("gate should hold the completed level, got " + e.run3_lvl());
+  const heldProg = e.run3_rowf(), heldEnd = e.run3_level_rows();
+  if (!(heldProg > 0 && heldEnd > 0)) throw new Error("gate row bookkeeping broken");
+  // the gate must hold still: no runner drift while the scene plays
+  const p0 = e.run3_rowf();
+  for (let i = 0; i < 60; i++) e.run3_step(1 / 60);
+  if (e.run3_state() !== 3 || e.run3_rowf() !== p0) throw new Error("gate did not hold");
+  // one-shot: the arm is consumed, so resuming never pauses on it again
+  e.run3_gate_resume();
+  if (e.run3_state() !== 1) throw new Error("gate resume should run, got " + e.run3_state());
+  if (e.run3_lvl() !== 4) throw new Error("gate resume did not advance, lvl=" + e.run3_lvl());
+  for (let i = 0; i < 600; i++) e.run3_step(1 / 60);
+  if (e.run3_state() === 3) throw new Error("consumed gate fired twice");
+  e.run3_mid_clear();
+  console.log(`mid-gate pause/resume OK (paused after ${gated2} steps, held on lvl 3)`);
+
   // 3. cutscene data: every voiced scene has a valid cast + portrait files
   const sandbox = { console };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
   sandbox.location = { search: "" };
   vm.createContext(sandbox);
+  let bakedNames = null;
   for (const f of ["story.js", "cutscenes.js", "custom_cutscenes.js", "achievements.js"]) {
     vm.runInContext(fs.readFileSync(path.join(dir, f), "utf8"), sandbox, { filename: f });
+    /* snapshot before custom_cutscenes.js merges its hand-written scenes in */
+    if (f === "cutscenes.js") bakedNames = Object.keys(sandbox.STORY_CUT);
   }
   const C = sandbox.STORY.C, CUT = sandbox.STORY_CUT, CAST = sandbox.STORY_CAST;
   const MID = sandbox.STORY_MID_CUTS, STAGE = sandbox.STORY_STAGE;
@@ -138,8 +210,38 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     }
   }
   if (!CAMSHOT.ComingThrough) throw new Error("ComingThrough has no stage framing");
+  // Continuous (-1..1) framing: the host eases the staged camera, so runs
+  // must carry real numbers, and every run must stay in range.
+  for (const name of Object.keys(CAMSHOT)) {
+    for (const r of CAMSHOT[name]) {
+      if (r.length !== 3) throw new Error("bad framing run in " + name + ": " + JSON.stringify(r));
+      for (const v of [r[1], r[2]]) {
+        if (typeof v !== "number" || !(v >= -1 && v <= 1))
+          throw new Error("framing out of range in " + name + ": " + JSON.stringify(r));
+      }
+    }
+  }
   const c0 = CAMSHOT.ComingThrough[0];
-  if (c0[1] !== 0 || c0[2] !== 1) throw new Error("ComingThrough framing wrong: " + JSON.stringify(c0));
-  console.log(`stage framing OK (${Object.keys(CAMSHOT).length} scenes with shot changes)`);
+  if (Math.abs(c0[1]) > 0.2 || c0[2] < 0.4)
+    throw new Error("ComingThrough framing wrong: " + JSON.stringify(c0));
+  // every BAKED scene with dialogue carries a timeline, and its segments keep
+  // the continuous framing the player eases (custom scenes synthesise one;
+  // unvoiced scenes fall back to CAMSHOT)
+  const TL = sandbox.STORY_TIMELINE || {};
+  for (const name of bakedNames) {
+    if (!CUT[name] || !CUT[name].length) continue;
+    const tl = TL[name];
+    if (!tl || !tl.segs || !tl.segs.length) throw new Error("no timeline for voiced scene " + name);
+    for (const s of tl.segs) {
+      if (!s.cam || typeof s.cam[0] !== "number" || !(s.cam[0] >= -1 && s.cam[0] <= 1) ||
+          typeof s.cam[1] !== "number" || !(s.cam[1] >= -1 && s.cam[1] <= 1))
+        throw new Error("bad timeline cam in " + name + ": " + JSON.stringify(s.cam));
+      if (!Array.isArray(s.actors)) throw new Error("bad timeline actors in " + name);
+    }
+    // the scene must place its cast at some point (later keyframes hold it)
+    if (!tl.segs.some((s) => s.actors.length))
+      throw new Error("timeline never places a cast in " + name);
+  }
+  console.log(`stage framing OK (${Object.keys(CAMSHOT).length} scenes, continuous camera)`);
   console.log("ALL STAGE CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", (err && err.message) || err); process.exit(1); });

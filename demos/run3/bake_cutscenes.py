@@ -33,7 +33,196 @@ DATA = open(os.path.join(HERE, "levels", "orig_levels.bin"), "rb").read().decode
 #   unlocks the Skater ("Choose your character!").
 EXTRA_CUTSCENES = ["ComingThrough"]
 
-# demo tunnel index -> original path (must match bake_levels.py TUN_PATH)
+# obfuscated actor vars -> character ids, resolved per scene from dialogue
+# roles + staging behavior (readable vars resolve via their constructors).
+# \u00a7 escapes keep this file plain ASCII.
+# obfuscated actor vars -> character ids, resolved per scene from dialogue
+# roles + staging behavior (readable vars resolve via their constructors).
+# Keys built from chr(0xA7) so this file stays plain ASCII.
+_obf = chr(0xA7)
+OBF_CHAR = {
+    ("AngelVsBunny", _obf + "#!P" + _obf): 3,
+    ("AngelVsBunny", _obf + "7W" + _obf): 10,
+    ("ComingThrough", _obf + "-P" + _obf): 0,
+    ("BoatRide", _obf + "#!P" + _obf): 13,
+    ("BoatRide", _obf + "7W" + _obf): 10,
+    ("BoatRide", "!V" + _obf): 12,
+    ("Sneaking", _obf + "#!P" + _obf): 3,
+    ("Obvious", _obf + "#!P" + _obf): 7,
+    ("MyTurn", _obf + "#!P" + _obf): 1,
+    ("MyTurn", _obf + "-P" + _obf): 0,
+    ("DontKnockIt", _obf + "#!P" + _obf): 0,
+    ("Naming", _obf + "-P" + _obf): 0,
+    ("Fame", _obf + "-P" + _obf): 7,
+    ("WormholeInSight", _obf + "-P" + _obf): 0,
+    ("SocraticMethod", _obf + "-P" + _obf): 0,
+    ("NiceToMeetYou", _obf + "#!P" + _obf): 3,
+    ("NiceToMeetYou", _obf + "-P" + _obf): 0,
+    ("Orbits", _obf + "-P" + _obf): 0,
+    ("Insanity", _obf + "-P" + _obf): 0,
+    ("PlanetStolen", _obf + "-P" + _obf): 7,
+    ("Candy", _obf + "52" + _obf): 1,
+    ("Candy", _obf + "#!P" + _obf): 2,
+    ("ABCD", _obf + "#!P" + _obf): 3,
+    ("StopSolvingProblems", _obf + "#!P" + _obf): 3,
+    ("Superpowers", _obf + "#!P" + _obf): 3,
+}
+# (OBF_SKIP retired: non-actor placement lookalikes are filtered by the
+# resolved-vars rule in build_timeline; vehicle/prop kinds live there too.)
+
+CHARIDS = {"runner": 0, "skater": 1, "child": 2, "angel": 3, "ghost": 4,
+           "lizard": 5, "ninja": 6, "student": 7, "gentleman": 8,
+           "pastafarian": 9, "bunny": 10, "climber": 11, "duplicator": 12,
+           "pirate": 13, "skier": 14, "iceskater": 15, "jackolantern": 16}
+
+
+def extract_staging(z, cname):
+    """Per-frame actor placements {frame: {var: [ring, row]}} + var->char."""
+    cands = [n for n in z.namelist() if n.endswith("/" + cname + ".as")]
+    if not cands:
+        return None
+    cands.sort(key=lambda x: (x.startswith("scripts"), len(x)))
+    d = z.read(cands[0]).decode("utf-8", errors="replace")
+    var2char = {}
+    for m in re.finditer(r"(?<![\w.])([A-Za-z_][A-Za-z0-9_]*|\S{1,12})\s*=\s*new\s+\S+?\(\s*\S+?\s*,\s*\S+?\.([A-Za-z]+)\s*,", d):
+        var, ch = m.group(1), m.group(2)
+        if ch in CHARIDS and var not in var2char:
+            var2char[var] = CHARIDS[ch]
+    for (sc, var), cid in OBF_CHAR.items():
+        if sc == cname:
+            var2char[var] = cid
+    segs = []
+    mi = re.search(r"function init\(\)", d)
+    if mi:
+        segs.append((-1, mi.start()))
+    for m in re.finditer(r"function (frame\d+)", d):
+        segs.append((int(m.group(1)[5:]), m.start()))
+    segs.sort(key=lambda x: x[1])
+    frames = {}
+    unresolved = set()
+    for si, (fnum, fstart) in enumerate(segs):
+        fend = segs[si + 1][1] if si + 1 < len(segs) else len(d)
+        seg = d[fstart:fend]
+        for m in re.finditer(r"(\S+?)\.(\S+?)\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*(?:,\s*(?:null|true|false|-?[\d.]+)\s*(?:,\s*(?:null|true|false|-?[\d.]+)\s*)?)?\)", seg):
+            var = m.group(1).split(";")[-1].split()[-1]
+            if var in ("Math", "Number") or "." in var:
+                continue
+            if var not in var2char:
+                unresolved.add(var)
+                continue
+            a, b = float(m.group(3)), float(m.group(4))
+            frames.setdefault(fnum, {})[var] = [a, b]
+    return {"vars": {v: var2char[v] for v in var2char}, "frames": frames,
+            "unresolved": sorted(unresolved)}
+
+
+def build_timeline(cut, shots, z):
+    """STORY_TIMELINE: per scene, dialogue segments with cam/actors/props.
+    Segments = distinct dialogue frames, ascending. Actor table carries
+    forward across frames (init = frame -1 base); only vars resolved to a
+    character (constructors + OBF_CHAR) become actors. Rows map to stage
+    depth z = 6 + (row - sceneMin) so every scene plays just ahead of the
+    camera. Props: map hovers past its runner (ComingThrough), candy arcs
+    from its tran keys (Candy), boat/hover ride under their party
+    (cluster mean z)."""
+    # (scene, var) props that are vehicles, not actors
+    vehicles = {}
+    ob = chr(0xA7)
+    vehicles[("BoatRide", ob + "7!!" + ob)] = "boat"
+    vehicles[("StopSolvingProblems", ob + "7!!" + ob)] = "hover"
+    # placement-shaped non-actors to stay quiet about
+    quiet = {"tunnel", "map", ob + "7!!" + ob, ob + "?I" + ob,
+             ob + "4!R" + ob, ob + "<!T" + ob}
+    tl = {}
+    for c, lines in cut.items():
+        if not lines:
+            continue
+        st = extract_staging(z, c)
+        if st is None:
+            continue
+        for v in st["unresolved"]:
+            if v in quiet or len(v) <= 1:
+                continue
+            if (c == "CantWait" and v == ob + "7W" + ob):
+                continue
+            print("  UNRESOLVED placement var %s in %s" % (ascii(v), c))
+        segframes = sorted(set(L["f"] for L in lines if isinstance(L.get("f"), int)))
+        if not segframes:
+            continue
+        # candy prop keys: tran(x, y, size*4) per frame
+        candykeys = {}
+        if c == "Candy":
+            dd = z.read([n for n in z.namelist() if n.endswith("/Candy.as")][0]).decode("utf-8", errors="replace")
+            fheads = [(m.group(1), m.start()) for m in re.finditer(r"function (frame\d+|init)", dd)]
+            for m in re.finditer(r"transform\.tran\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)", dd):
+                fr = -1
+                for fname, fstart in fheads:
+                    if fstart <= m.start():
+                        fr = -1 if fname == "init" else int(fname[5:])
+                candykeys[fr] = [float(m.group(1)), float(m.group(2)), float(m.group(3)) / 4.0]
+        # row spread for depth mapping (resolved actors + candy). The 5th
+        # percentile anchors the cluster so single far exits/entries
+        # (which cull naturally off-camera) don't shove the scene away.
+        allrows = []
+        for fnum, per in st["frames"].items():
+            for var, pos in per.items():
+                if var in st["vars"]:
+                    allrows.append(pos[1])
+        for pos in candykeys.values():
+            allrows.append(pos[1])
+        allrows.sort()
+        minr = allrows[max(0, int(len(allrows) * 0.05))] if allrows else 0.0
+        live = {}
+        candy = None
+        segs = []
+        for sf in segframes:
+            for fnum in sorted(f for f in st["frames"] if f <= sf):
+                for var, pos in st["frames"][fnum].items():
+                    if var in st["vars"]:
+                        live[var] = pos
+            if any(f <= sf for f in candykeys):
+                kf = max(f for f in candykeys if f <= sf)
+                candy = candykeys[kf]
+            actors = []
+            for var in sorted(live):
+                cid = st["vars"].get(var)
+                if cid is None:
+                    continue
+                actors.append({"ch": cid, "ring": live[var][0],
+                               "z": round(6.0 + (live[var][1] - minr), 2)})
+            props = []
+            if candy is not None:
+                props.append({"kind": "candy", "ring": candy[0],
+                              "z": round(6.0 + (candy[1] - minr), 2), "size": candy[2]})
+            if c == "ComingThrough":
+                # map hovers just past its runner (first ch-0 actor staged)
+                run = None
+                for var in sorted(live):
+                    if st["vars"].get(var) == 0:
+                        run = live[var]
+                        break
+                if run is None and actors:
+                    run = [actors[0]["ring"], minr]
+                if run is not None:
+                    props.append({"kind": "map", "ring": round(run[0] + 0.5, 2),
+                                  "z": round(6.0 + (run[1] - minr) + 1.5, 2), "size": 2.4})
+            for (vc, vv), kind in vehicles.items():
+                if vc == c and actors:
+                    near = [a["z"] for a in actors if 2.0 <= a["z"] <= 30.0] or \
+                        [a["z"] for a in actors]
+                    mz = sum(near) / len(near)
+                    props.append({"kind": kind, "ring": 2.0, "z": round(mz, 2),
+                                  "size": 3.4 if kind == "boat" else 2.6})
+            # cam run covering this dialogue frame
+            cam = [0, 0]
+            for r in shots.get(c, []):
+                if r[0] <= sf:
+                    cam = [r[1], r[2]]
+                else:
+                    break
+            segs.append({"f": sf, "cam": cam, "actors": actors, "props": props})
+        tl[c] = {"segs": segs}
+    return tl
 # ids 30+ are custom extended tunnels with hand-written dialogue in
 # custom_cutscenes.js (NOT baked here — the zip has no .as for them).
 TUN_PATH = [
@@ -174,28 +363,38 @@ def main():
         f.write("  /* start/end cutscene per demo tunnel (index 0-29) */\n")
         f.write("  var PATH_CUT = %s;\n\n" % json.dumps(tun_cut))
         # stage framing per scene: [[startFrame, side, lift], ...] runs.
-        # side: camera left(-1)/center(0)/right(1) by x; lift: low(-1)/mid(0)/
-        # high(1) by y. Consecutive frames sharing a bucket merge into runs.
-        def bucket(cam):
+        # side/lift are CONTINUOUS (-1..1) so the host can ease the staged
+        # camera instead of snapping between buckets:
+        #   side = authored pan (left -1 .. right +1, x scaled)
+        #   lift = authored height (low -1 .. high +1, y scaled)
+        # Consecutive frames that round to the same pair merge into one run.
+        def frame_shot(cam):
             x, y = cam.get("x", 0.0), cam.get("y", 0.0)
-            side = -1 if x < -100 else (1 if x > 100 else 0)
-            lift = 1 if y > 60 else (-1 if y < -60 else 0)
-            return (side, lift)
+            side = max(-1.0, min(1.0, x / 250.0))
+            lift = max(-1.0, min(1.0, y / 150.0))
+            return (round(side, 2), round(lift, 2))
         shots = {}
         for c, fc in cams.items():
             runs = []
             for fr in sorted(fc):
-                b = bucket(fc[fr])
+                b = frame_shot(fc[fr])
                 if runs and runs[-1][1] == b[0] and runs[-1][2] == b[1]:
                     continue
                 runs.append([fr, b[0], b[1]])
             if runs and not (len(runs) == 1 and runs[0][1] == 0 and runs[0][2] == 0):
                 shots[c] = runs
-        f.write("  /* stage camera runs per cutscene: [startFrame, side, lift] */\n")
+        f.write("  /* stage camera runs per cutscene: [startFrame, side, lift],")
+        f.write(" side/lift continuous -1..1 */\n")
         f.write("  var CAMSHOT = %s;\n\n" % json.dumps(shots))
+        tl = build_timeline(cut, shots, z)
+        f.write("  /* staged timeline per cutscene: dialogue segments with camera,\n")
+        f.write("   * actors [{ch, ring, z}] and props [{kind, ring, z, size}].\n")
+        f.write("   * z = rows ahead of the staging camera. */\n")
+        f.write("  var TIMELINE = %s;\n\n" % json.dumps(tl, ensure_ascii=False))
         f.write("  global.STORY_CUT = CUT;\n")
         f.write("  global.STORY_PATH_CUT = PATH_CUT;\n")
         f.write("  global.STORY_CAMSHOT = CAMSHOT;\n")
+        f.write("  global.STORY_TIMELINE = TIMELINE;\n")
         f.write("})(typeof window !== \"undefined\" ? window : globalThis);\n")
     total = sum(len(v) for v in cut.values())
     print("wrote %s (%d cutscenes, %d lines)" % (OUT, len(cut), total))

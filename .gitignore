@@ -8,3 +8,7 @@ zig-out/
 
 # Oversized decompiler bundle (exceeds GitHub 100MB file limit; keep local only)
 Run3.swf_Decompiler.com.zip
+
+# Python bytecode caches from the demos' bake scripts
+__pycache__/
+*.pyc

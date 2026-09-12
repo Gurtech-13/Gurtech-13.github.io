@@ -54,13 +54,54 @@ static int g_mus = 0;
 static double g_rotOff = 0.0;      /* authored camera roll offset (rad) */
 static int g_trigIdx = 0;          /* next power trigger to fire */
 static double g_prevProg = 0.0;    /* last prog seen (glimpse row clock) */
-/* staged scene camera: side -1/0/1 (roll), lift -1/0/1 (height) */
-static int g_stageSide = 0, g_stageLift = 0;
-void run3_stage_cam(int side, int lift) {
-  g_stageSide = side < -1 ? -1 : (side > 1 ? 1 : side);
-  g_stageLift = lift < -1 ? -1 : (lift > 1 ? 1 : lift);
+/* staged scene camera, continuous: side -1..1 (pan/roll), lift -1..1
+   (height); the host eases both, so they are never quantised */
+static double g_stageSide = 0.0, g_stageLift = 0.0;
+void run3_stage_cam(double side, double lift) {
+  if (side < -1.0) side = -1.0;
+  if (side > 1.0) side = 1.0;
+  if (lift < -1.0) lift = -1.0;
+  if (lift > 1.0) lift = 1.0;
+  g_stageSide = side;
+  g_stageLift = lift;
 }
-int run3_stage_lift(void) { return g_stageLift; }
+double run3_stage_liftf(void) { return g_stageLift; }
+double run3_stage_sidef(void) { return g_stageSide; }
+/* staged cast lives in render.c (drawn in S_CUT / S_GATE); mid-gate arming
+   lives here. Mid-level cutscene gates: an armed (tun, lvl) checkpoint
+   PAUSES at S_GATE instead of auto-advancing, so the scene stages on the
+   level just completed; a fired arm is consumed (one-shot). */
+#define MAXMID 8
+static int8_t g_midTun[MAXMID];
+static int16_t g_midLvl[MAXMID];
+static int g_midN = 0;
+void run3_mid_arm(int32_t tun, int32_t lvl) {
+  if (g_midN >= MAXMID) return;
+  for (int i = 0; i < g_midN; i++)
+    if (g_midTun[i] == tun && g_midLvl[i] == lvl) return;
+  g_midTun[g_midN] = (int8_t)tun;
+  g_midLvl[g_midN] = (int16_t)lvl;
+  g_midN++;
+}
+void run3_mid_clear(void) { g_midN = 0; }
+static int mid_armed(int tun, int lvl) {
+  for (int i = 0; i < g_midN; i++)
+    if (g_midTun[i] == tun && g_midLvl[i] == lvl) return 1;
+  return 0;
+}
+/* consume an arm: a gate fires once, so the host never has to clear the list */
+static void mid_disarm(int tun, int lvl) {
+  for (int i = 0; i < g_midN; i++) {
+    if (g_midTun[i] == tun && g_midLvl[i] == lvl) {
+      for (int j = i + 1; j < g_midN; j++) {
+        g_midTun[j - 1] = g_midTun[j];
+        g_midLvl[j - 1] = g_midLvl[j];
+      }
+      g_midN--;
+      return;
+    }
+  }
+}
 
 /* ---------------- math ---------------- */
 double ssin(double x) {
@@ -651,6 +692,21 @@ void run3_start_inf(void) {
   G.state = S_RUN; /* instant start */
 }
 
+/* leave S_GATE: roll into the next checkpoint (or finish the tunnel) keeping
+   the runner's placement, so a gated scene never teleports the player */
+static void gate_release(void) {
+  if (G.state != S_GATE) return;
+  double over = G.prog - G.rowEnd;
+  if (over < 0.0) over = 0.0;
+  if (G.lvl + 1 < tun()->levels) {
+    open_level_continue(G.lvl + 1, over);
+  } else {
+    g_powercells += 10; /* bonus for finishing a tunnel */
+    G.state = S_DONE;
+  }
+}
+void run3_gate_resume(void) { gate_release(); }
+
 void run3_flap(void) {
   if (G.state == S_READY) {
     G.state = S_RUN;
@@ -682,27 +738,9 @@ void run3_flap(void) {
       G.state = S_RUN;
     }
   } else if (G.state == S_GATE) {
-    /* earn power cells for clearing a checkpoint */
-    g_powercells += 5;
-    if (G.rowEnd > 900000.0) {
-      /* infinite mode: keep going, increase difficulty */
-      g_infSpeed += 0.3;
-      if (g_infSpeed > MAX_RPS) g_infSpeed = MAX_RPS;
-      g_infHoleP += 0.008;
-      if (g_infHoleP > MAX_HOLE) g_infHoleP = MAX_HOLE;
-      G.rowsPer = g_infSpeed;
-      G.holeP = g_infHoleP;
-      G.rowStart = G.prog;
-      G.rowEnd = G.prog + 999999.0;
-      G.state = S_READY;
-      build_inf_window((int)G.prog);
-    } else if (G.lvl + 1 < tun()->levels) {
-      open_level(G.lvl + 1);
-      G.state = S_RUN; /* fallback path also never waits */
-    } else {
-      g_powercells += 10; /* bonus for finishing a tunnel */
-      G.state = S_DONE;
-    }
+    /* host finished the mid-tunnel scene (or the tap is the fallback):
+       leave the pause and roll into the next checkpoint */
+    gate_release();
   }
 }
 
@@ -804,15 +842,24 @@ void run3_step(double dt) {
     }
 
     if (G.prog >= G.rowEnd && G.rowEnd < 900000.0) {
-      /* checkpoint reached — roll straight into the next one, no stopping.
-         Only respawns teleport; gates preserve the runner exactly. */
-      double over = G.prog - G.rowEnd;
+      /* checkpoint reached. A checkpoint with an armed mid-tunnel scene
+         PAUSES here (S_GATE) so the scene stages on the level just
+         completed; the host plays it and calls run3_gate_resume(). Every
+         other checkpoint rolls straight into the next one, no stopping.
+         Only respawns teleport; a gate preserves the runner exactly. */
       g_powercells += 5; /* checkpoint cleared */
-      if (G.lvl + 1 < tun()->levels) {
-        open_level_continue(G.lvl + 1, over);
+      if (mid_armed(G.tun, G.lvl)) {
+        mid_disarm(G.tun, G.lvl);
+        G.prog = G.rowEnd; /* sit on the tail of the finished level */
+        G.state = S_GATE;
       } else {
-        g_powercells += 10; /* bonus for finishing a tunnel */
-        G.state = S_DONE;
+        double over = G.prog - G.rowEnd;
+        if (G.lvl + 1 < tun()->levels) {
+          open_level_continue(G.lvl + 1, over);
+        } else {
+          g_powercells += 10; /* bonus for finishing a tunnel */
+          G.state = S_DONE;
+        }
       }
     } else {
       /* eased lateral steering (per-character speed and response) */
@@ -882,7 +929,7 @@ void run3_step(double dt) {
      full turn instead of one step like every other corner. */
    int gs = G.gravSide < n ? G.gravSide : 0;
     double target2 = -(TAU * (double)gs) / (double)n + g_rotOff;
-    if (G.state == S_CUT) target2 += -(double)g_stageSide * 0.28;
+    if (G.state == S_CUT || G.state == S_GATE) target2 += -g_stageSide * 0.28;
   double d = target2 - G.rot;
   while (d > PI) d -= TAU;
   while (d <= -PI) d += TAU;

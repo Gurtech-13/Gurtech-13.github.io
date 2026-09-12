@@ -354,6 +354,105 @@ static void draw_runner(double R) {
   }
 }
 
+/* ==================== STAGED CUTSCENE CAST ==================== */
+/* outlined rect lives with the map helpers below */
+static void stroke_rect(int x, int y, int w, int h, uint32_t c);
+/* Actors/props are placed by the host per timeline segment (ring = tiles
+   around the tube, zrow = rows ahead of the staging camera) and drawn in
+   S_CUT instead of the runner. Actor art is the gameplay run stance
+   (cutscene-only pose sheets are not extractable); motion comes from the
+   authored per-segment positions, linearly interpolated by the host. */
+typedef struct { int ch; double ring, zrow; int vis; } stage_actor_t;
+typedef struct { int kind; double ring, zrow, size; int vis; } stage_prop_t;
+static stage_actor_t g_sactors[NSTAGE_ACT];
+static stage_prop_t g_sprops[NSTAGE_PROP];
+void run3_stage_actor(int i, int ch, double ring, double zrow, int vis) {
+  if (i < 0 || i >= NSTAGE_ACT) return;
+  g_sactors[i].ch = ch < 0 ? 0 : (ch >= CHAR_COUNT ? CHAR_COUNT - 1 : ch);
+  g_sactors[i].ring = ring;
+  g_sactors[i].zrow = zrow < 0.5 ? 0.5 : zrow;
+  g_sactors[i].vis = vis ? 1 : 0;
+}
+void run3_stage_prop(int i, int kind, double ring, double zrow, double size, int vis) {
+  if (i < 0 || i >= NSTAGE_PROP) return;
+  g_sprops[i].kind = kind;
+  g_sprops[i].ring = ring;
+  g_sprops[i].zrow = zrow < 0.5 ? 0.5 : zrow;
+  g_sprops[i].size = size <= 0.0 ? 1.0 : size;
+  g_sprops[i].vis = vis ? 1 : 0;
+}
+/* wall point for a ring position (shared by runner + staged cast) */
+static void ring_point(double ring, double R, double *mx, double *my) {
+  int n = G.shape, k = G.k;
+  double tot = (double)(n * k);
+  while (ring < 0.0) ring += tot;
+  while (ring >= tot) ring -= tot;
+  int su = wrap_side(ring, k, n);
+  double f = ring / (double)k - (double)su;
+  double ax, ay, bx, by;
+  corner(su, &ax, &ay, R); corner(su + 1, &bx, &by, R);
+  *mx = ax + (bx - ax) * f;
+  *my = ay + (by - ay) * f;
+}
+static void draw_stage_actor(double R, int ch, double ring, double zrow) {
+  double mx, my, px, py, dd;
+  ring_point(ring, R, &mx, &my);
+  proj(mx, my, zrow * G.tile, &px, &py, &dd);
+  if (dd < 0.4) return;
+  int cm = ch < 0 ? 0 : (ch >= CHAR_COUNT ? CHAR_COUNT - 1 : ch);
+  anim_range_t ar = CHAR_ANIM_RANGE(cm, STATE_RUN, DIR_CENTER);
+  int fw = 0, fh = 0;
+  const uint32_t *pix = get_char_frame(cm, ar.start, &fw, &fh);
+  double sc = DCAM / dd; /* perspective size vs the runner plane */
+  if (sc < 0.15) sc = 0.15;
+  if (sc > 3.0) sc = 3.0;
+  int spriteH = (int)(24.0 * (H / 360.0) * sc);
+  if (!pix || fw <= 0 || fh <= 0) {
+    fill_rect((int)px - 4, (int)py - 12, 8, 12, rgb(200, 200, 200));
+    return;
+  }
+  int spriteW = spriteH * fw / (fh > 0 ? fh : 1);
+  int drawX = (int)px - spriteW / 2;
+  int drawY = (int)py - spriteH;
+  if (ar.mirror) blit_sprite_mirrored(drawX, drawY, spriteW, spriteH, pix, fw, fh, 1.0);
+  else blit_sprite(drawX, drawY, spriteW, spriteH, pix, fw, fh, 1.0);
+}
+/* prop kinds: 1 map, 4 boat, 5 candy, 6 hover platform */
+static void draw_stage_prop(double R, int kind, double ring, double zrow, double size) {
+  double mx, my, px, py, dd;
+  ring_point(ring, R, &mx, &my);
+  proj(mx, my, zrow * G.tile, &px, &py, &dd);
+  if (dd < 0.4) return;
+  double wpp = size * G.tile * FOCAL / dd;
+  if (wpp < 2.0) wpp = 2.0;
+  if (wpp > W / 2) wpp = W / 2;
+  int cx = (int)px, cy = (int)py;
+  if (kind == 1) { /* map: parchment sheet + border + fold */
+    int w = (int)wpp, h = (int)(wpp * 0.7);
+    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(216, 200, 144));
+    stroke_rect(cx - w / 2, cy - h / 2, w, h, rgb(90, 70, 40));
+    fill_rect(cx - w / 2 + 2, cy - 1, w - 4, 2, rgb(150, 128, 84));
+  } else if (kind == 5) { /* candy: magenta drop */
+    int w = (int)(wpp * 0.5), h = (int)(wpp * 0.7);
+    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(255, 150, 200));
+    fill_rect(cx - w / 2, cy - h / 2, w, 2, rgb(255, 210, 230));
+  } else if (kind == 4) { /* boat: brown hull + rim */
+    int w = (int)(wpp * 2.2), h = (int)(wpp * 0.8);
+    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(120, 84, 50));
+    fill_rect(cx - w / 2, cy - h / 2, w, 3, rgb(70, 48, 28));
+  } else { /* hover platform: slate + cyan glow */
+    int w = (int)(wpp * 2.0), h = (int)(wpp * 0.5);
+    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(90, 100, 130));
+    fill_rect(cx - w / 2, cy + h / 2, w, 2, rgb(120, 220, 255));
+  }
+}
+static void draw_stage(double R) {
+  for (int i = 0; i < NSTAGE_ACT; i++)
+    if (g_sactors[i].vis) draw_stage_actor(R, g_sactors[i].ch, g_sactors[i].ring, g_sactors[i].zrow);
+  for (int i = 0; i < NSTAGE_PROP; i++)
+    if (g_sprops[i].vis) draw_stage_prop(R, g_sprops[i].kind, g_sprops[i].ring, g_sprops[i].zrow, g_sprops[i].size);
+}
+
 /* ==================== MAIN FRAME ==================== */
 
 static void draw_runner(double R);
@@ -375,7 +474,8 @@ void render_frame(void) {
     double t = ((double)CY - 2.0 * (double)H / 3.0) / FOCAL;
     double x = (R + t * DCAM) / (t * R - DCAM);
     cam_pitch = x - x * x * x / 3.0;
-    if (G.state == S_CUT) cam_pitch += (double)run3_stage_lift() * 0.06;
+    if (G.state == S_CUT || G.state == S_GATE)
+      cam_pitch += run3_stage_liftf() * 0.06;
   }
   /* authored per-level tile tints (0 = theme palette) */
   uint32_t lvlC0 = run3_level_color0();
@@ -410,8 +510,8 @@ void render_frame(void) {
         /* authored level tint: bright wall, accent neighbors, dim rest */
         if (side == su) base = lvlC0;
         else if (side == (su+1)%n || side == (su+n-1)%n)
-          base = lvlC1 ? lvlC1 : shade(lvlC0, 0.62);
-        else base = shade(lvlC0, 0.34);
+          base = lvlC1 ? lvlC1 : shade(lvlC0, 0.72);
+        else base = shade(lvlC0, 0.5);
       } else if (lpw) {
         base = (side == su) ? LPAL[1] : ((side == (su+1)%n || side == (su+n-1)%n) ? LPAL[2] : LPAL[3]);
       } else {
@@ -487,9 +587,10 @@ void render_frame(void) {
     }
   }
 
-  /* cutscene staging: the tunnel is the backdrop, the cast plays in the
-     HTML overlay — no runner sprite on stage */
-  if (G.state != S_CUT) draw_runner(R);
+  /* cutscene staging: the tunnel is the backdrop (held frame at S_CUT /
+     S_GATE) and the host-placed cast plays on it — no runner sprite */
+  if (G.state == S_CUT || G.state == S_GATE) draw_stage(R);
+  else draw_runner(R);
 }
 
 /* ==================== TEXT HELPERS (forward decl for map) ==================== */

@@ -12,23 +12,176 @@
   var CAST = window.STORY_CAST || {};
   var MID_CUTS = window.STORY_MID_CUTS || [];
   var STAGE = window.STORY_STAGE || {};
+  var TIMELINE = window.STORY_TIMELINE || {};
   var CAMSHOT = window.STORY_CAMSHOT || {};
   var ACHIEVEMENTS = window.ACHIEVEMENTS || [];
   var ACH_NEED = window.ACH_PLANETSTOLEN_NEED || 8;
-  var lastShot = null;
-  function stageCam(name, fr) {
-    /* authored stage framing: switch the S_CUT camera when the shot changes */
-    var runs = CAMSHOT[name], cur = null;
-    if (runs) {
-      for (var i = 0; i < runs.length; i++) {
-        if (runs[i][0] <= fr) cur = runs[i];
-        else break;
+
+  /* ===== STAGED CUTSCENE CAST =====
+     The engine draws the cutscene cast inside the tunnel: in the staged
+     states it renders no runner and draws host-placed slots instead, so the
+     HTML portraits are retired. Baked scenes carry STORY_TIMELINE keyframes
+     (per dialogue frame: each actor's ring around the tube and z rows ahead
+     of the staged camera, plus props); custom scenes with no baked timeline
+     synthesise a keyframe per line from their cast. The host eases the slots
+     toward the current keyframe and pushes the float staged camera each
+     frame. */
+  var NACT = 8, NPROP = 4;
+  var KIND_ID = { map: 1, boat: 4, candy: 5, hover: 6, spoon: 1 };
+  var stage = null;
+  /* synthesised timelines for scenes with no baked one (the custom extended
+     tunnels): one keyframe per dialogue line, each cast member posted on its
+     own wall (opposite sides of the tube) and the speaker stepping nearer
+     the camera, which leans toward them. Bubble side (x) picks the speaker,
+     the same cue the original used. */
+  function synthSegs(name, lines) {
+    var cast = (CAST[name] || []).slice(0, 4);
+    if (!cast.length) return null;
+    var tot = 16.0;
+    try {
+      tot = (exps.run3_sides() | 0) * (exps.run3_lanes() | 0);
+      if (!(tot >= 4)) tot = 16.0;
+    } catch (e) {}
+    var n = cast.length, segs = [];
+    var count = (lines && lines.length) || 1;
+    for (var i = 0; i < count; i++) {
+      var L = lines && lines[i];
+      var speak = (L && typeof L.x === "number") ? (L.x < 0 ? 0 : 1) : 0;
+      var actors = [];
+      for (var k = 0; k < n; k++) {
+        var near = (n === 1) || (k === (speak % n));
+        actors.push({ ch: cast[k], ring: 4.0 + k * (tot / 2),
+                      z: near ? 5.7 : 6.6 });
+      }
+      segs.push({ f: i, cam: [speak === 0 ? -0.22 : 0.22, 0.04],
+                  actors: actors, props: [] });
+    }
+    return segs;
+  }
+  function timelineFor(name, lines) {
+    var tl = TIMELINE[name];
+    if (tl && tl.segs && tl.segs.length) return tl.segs;
+    return synthSegs(name, lines);
+  }
+  function segIndex(segs, f) {
+    var idx = 0;
+    for (var i = 0; i < segs.length; i++) {
+      if (typeof segs[i].f !== "number" || segs[i].f > f) break;
+      idx = i;
+    }
+    return idx;
+  }
+  function stageOpen(name, frame, lines) {
+    stage = null;
+    if (!exps || !exps.run3_stage_actor) return;
+    var baked = TIMELINE[name] && TIMELINE[name].segs && TIMELINE[name].segs.length;
+    var segs = timelineFor(name, lines);
+    if (!segs) return;
+    stage = { segs: segs, cur: [], tgt: [], curP: [], tgtP: [],
+              side: 0, lift: 0, tside: 0, tlift: 0,
+              /* synthesised scenes still take the authored camera runs */
+              cams: baked ? null : (CAMSHOT[name] || null) };
+    stageGoto(segIndex(segs, frame || 0), true);
+    stageShot(frame || 0);
+    /* a few scenes only place their cast a few frames in (the tunnel opens
+       empty): stand them up front instead of blinking them in later */
+    if (!stage.cur.length) {
+      for (var j = 0; j < segs.length; j++) {
+        var a = segs[j].actors || [];
+        if (!a.length) continue;
+        stage.cur = a.slice(0, NACT).map(function (x) { return { ch: x.ch, ring: x.ring, z: x.z }; });
+        stage.tgt = stage.cur.map(function (c) { return { ch: c.ch, ring: c.ring, z: c.z }; });
+        break;
       }
     }
-    var key = cur ? cur[1] + "," + cur[2] : "0,0";
-    if (key === lastShot) return;
-    lastShot = key;
-    try { if (exps.run3_stage_cam) exps.run3_stage_cam(cur ? cur[1] : 0, cur ? cur[2] : 0); } catch (e) {}
+  }
+  /* authored staged camera for a frame, when the scene has no baked timeline */
+  function stageShot(fr) {
+    if (!stage || !stage.cams) return;
+    var cur = null;
+    for (var i = 0; i < stage.cams.length; i++) {
+      if (stage.cams[i][0] <= fr) cur = stage.cams[i];
+      else break;
+    }
+    if (cur) { stage.tside = cur[1] || 0; stage.tlift = cur[2] || 0; }
+  }
+  /* move to the keyframe covering dialogue frame i; slots that exist in both
+     keyframes ease across, new ones start on their target so a growing cast
+     never streaks through the tunnel */
+  function stageGoto(i, snap) {
+    if (!stage || i < 0 || i >= stage.segs.length) return;
+    var s = stage.segs[i];
+    var prev = snap ? [] : stage.cur, prevP = snap ? [] : stage.curP;
+    /* a keyframe with no cast means "unchanged": carry the previous
+       positions forward so the scene never blinks its cast away */
+    var act = (s.actors || []).slice(0, NACT);
+    var pr = (s.props || []).slice(0, NPROP);
+    if (!act.length && prev.length && !snap)
+      act = prev.map(function (c) { return { ch: c.ch, ring: c.ring, z: c.z }; });
+    if (!pr.length && prevP.length && !snap)
+      pr = prevP.map(function (p) { return { kind: p.kind, ring: p.ring, z: p.z, size: p.size }; });
+    stage.tgt = act;
+    stage.tgtP = pr;
+    stage.cur = [];
+    for (var k = 0; k < act.length; k++) {
+      var p = prev[k];
+      stage.cur.push(p ? { ch: act[k].ch, ring: p.ring, z: p.z }
+                       : { ch: act[k].ch, ring: act[k].ring, z: act[k].z });
+    }
+    stage.curP = [];
+    for (var m = 0; m < pr.length; m++) {
+      var q = prevP[m];
+      stage.curP.push(q ? { kind: pr[m].kind, ring: q.ring, z: q.z, size: q.size || 2 }
+                        : { kind: pr[m].kind, ring: pr[m].ring, z: pr[m].z, size: pr[m].size || 2 });
+    }
+    if (s.cam) { stage.tside = s.cam[0] || 0; stage.tlift = s.cam[1] || 0; }
+  }
+  function stagePush() {
+    if (!stage) return;
+    for (var i = 0; i < NACT; i++) {
+      var c = stage.cur[i];
+      try {
+        if (c) exps.run3_stage_actor(i, c.ch, c.ring, c.z, 1);
+        else exps.run3_stage_actor(i, 0, 4, 6, 0);
+      } catch (e) {}
+    }
+    if (exps.run3_stage_prop) {
+      for (var p = 0; p < NPROP; p++) {
+        var q = stage.curP[p];
+        try {
+          if (q) exps.run3_stage_prop(p, KIND_ID[q.kind] || 1, q.ring, q.z, q.size || 2, 1);
+          else exps.run3_stage_prop(p, 1, 4, 6, 2, 0);
+        } catch (e2) {}
+      }
+    }
+    try { if (exps.run3_stage_cam) exps.run3_stage_cam(stage.side, stage.lift); } catch (e3) {}
+  }
+  /* eased toward the current keyframe; called once per rendered frame */
+  function stageTick() {
+    if (!stage) return;
+    var f = 0.18;
+    for (var i = 0; i < stage.cur.length; i++) {
+      var c = stage.cur[i], t = stage.tgt[i];
+      if (!t) continue;
+      c.ring += (t.ring - c.ring) * f;
+      c.z += (t.z - c.z) * f;
+    }
+    for (var p = 0; p < stage.curP.length; p++) {
+      var q = stage.curP[p], w = stage.tgtP[p];
+      if (!w) continue;
+      q.ring += (w.ring - q.ring) * f;
+      q.z += (w.z - q.z) * f;
+      q.size += ((w.size || 2) - q.size) * f;
+    }
+    stage.side += (stage.tside - stage.side) * f;
+    stage.lift += (stage.tlift - stage.lift) * f;
+    stagePush();
+  }
+  function stageClose() {
+    stage = null;
+    for (var i = 0; i < NACT; i++) { try { exps.run3_stage_actor(i, 0, 4, 6, 0); } catch (e) {} }
+    for (var p = 0; p < NPROP; p++) { try { exps.run3_stage_prop(p, 1, 4, 6, 2, 0); } catch (e2) {} }
+    try { if (exps.run3_stage_cam) exps.run3_stage_cam(0, 0); } catch (e3) {}
   }
   var prevLvl = -1, lastMusLvl = -1;
   function midKey(tun, lvl) { return "m" + tun + "_" + lvl; }
@@ -44,7 +197,7 @@
   var cv, ctx, imageData, view, words, exps;
   var W = 1280, H = 720; // will be updated from WASM after load (1280x720 fullscreen)
   var inGame = false, curTun = 0;
-  var lastState = -1, STEP = 1/60, last = 0, acc = 0;
+  var lastState = -1, STEP = 1/60, last = 0, acc = 0, gateBusy = false;
   var keys = { l: false, r: false };
   var pointer = { down: false, x0: 0, y0: 0, t0: 0, moved: 0 };
   var demo = /[?&]demo=1/.test(location.search), demoBusy = false;
@@ -98,7 +251,20 @@
       try { exps.run3_map_set_best(i, save.best[i]||0); } catch(e) {}
     }
   }
-  function syncAllToWasm() { syncMapToWasm(); syncCharsToWasm(); syncBestToWasm(); }
+  function syncAllToWasm() { syncMapToWasm(); syncCharsToWasm(); syncBestToWasm(); syncGatesToWasm(); }
+  /* mid-tunnel scene gates: the engine PAUSES (S_GATE) on an armed
+     checkpoint instead of rolling on, so the scene stages on the level just
+     completed. Only unseen scenes are armed — the engine consumes an arm
+     when it fires and the host re-arms after each scene. */
+  function syncGatesToWasm() {
+    if (!exps || !exps.run3_mid_arm) return;
+    try { if (exps.run3_mid_clear) exps.run3_mid_clear(); } catch (e) {}
+    for (var i = 0; i < MID_CUTS.length; i++) {
+      var m = MID_CUTS[i];
+      if (cutSeen(midKey(m.tun, m.lvl))) continue;
+      try { exps.run3_mid_arm(m.tun, m.lvl); } catch (e2) {}
+    }
+  }
 
   /* ===== MUSIC ===== */
   var musicAudio=null, currentMusic=null, musicMuted=false;
@@ -140,49 +306,27 @@
       return [{ m: "New hints unlocked! Replay the Coordination Challenges to view them.", small: false, x: 0, y: 120 }];
     return CUT[name] || null;
   }
-  /* Positioned-bubble cutscene viewer, staged like the original: the live
-     tunnel renders behind (see S_CUT), the cast stands left/right, and the
-     bubble's side brings the nearer portrait forward. */
-  function charPortrait(cid) {
-    var c = CHARS[cid];
-    if (!c) return null;
-    return "assets/images/" + (c.frontImg || c.img);
-  }
+  /* Positioned-bubble cutscene viewer, staged like the original: the held
+     tunnel renders behind (S_CUT / S_GATE) and the cast is placed inside it
+     by the staged-cast player above — the bubble keeps its authored spot. */
   function showCutscene(name, cb) {
     var lines = cutLines(name);
     if (!lines || !lines.length) { if (cb) cb(); return; }
     var view = document.getElementById("cutview"),
-        stage = document.getElementById("cutstage"),
+        stageEl = document.getElementById("cutstage"),
         bub = document.getElementById("cutbubble"),
         txt = document.getElementById("cuttext"),
         prog = document.getElementById("cutprog"),
-        leftImg = document.getElementById("cutleft"),
-        rightImg = document.getElementById("cutright"),
         cutbtn = document.getElementById("cutbtn"),
         cuttitle = document.getElementById("cuttitle");
     /* fail open (e.g. stale cached page): never soft-lock the game */
-    if (!view || !stage || !bub || !txt || !cutbtn) { if (cb) cb(); return; }
+    if (!view || !stageEl || !bub || !txt || !cutbtn) { if (cb) cb(); return; }
     if (cuttitle) cuttitle.textContent = cutTitle(name);
-    var cast = CAST[name] || [];
-    stage.classList.toggle("solo", cast.length <= 1);
-    function setActor(el, cid) {
-      if (!el) return;
-      el.classList.remove("show", "active");
-      try { el.removeAttribute("src"); } catch (e) {}
-      if (cid == null) return;
-      var src = charPortrait(cid);
-      if (!src) return;
-      el.onerror = function () { el.classList.remove("show", "active"); };
-      el.src = src;
-      el.classList.add("show");
-    }
-    setActor(leftImg, cast.length > 0 ? cast[0] : null);
-    setActor(rightImg, cast.length > 1 ? cast[1] : null);
-    lastShot = null;
+    stageOpen(name, typeof lines[0].f === "number" ? lines[0].f : 0, lines);
     var i = 0, done = false;
     view.classList.add("on");
     function place(L) {
-      var w = stage.clientWidth || 800, h = stage.clientHeight || 600;
+      var w = stageEl.clientWidth || 800, h = stageEl.clientHeight || 600;
       var s = Math.min(w / 800, h / 600);
       var x = (typeof L.x === "number") ? L.x : 0;
       var y = (typeof L.y === "number") ? L.y : 120;
@@ -199,6 +343,7 @@
         done = true;
         view.classList.remove("on");
         view.onclick = null;
+        stageClose();
         if (cb) cb();
         return;
       }
@@ -207,11 +352,13 @@
       bub.className = "cutbubble" + (L.small ? " small" : "");
       prog.textContent = (i < lines.length) ? (i + "/" + lines.length) : cutTitle(name);
       place(L);
-      /* bubble side cues the speaker: nearer portrait steps forward */
-      var side = (typeof L.x === "number") ? (L.x < 0 ? 0 : 1) : 0;
-      if (leftImg) leftImg.classList.toggle("active", cast.length > 0 && side === 0);
-      if (rightImg) rightImg.classList.toggle("active", cast.length > 1 && side === 1);
-      if (typeof L.f === "number") stageCam(name, L.f);
+      /* the cast walks to this line's keyframe (custom scenes key on the
+         line index, baked ones on the authored dialogue frame) */
+      if (stage) {
+        var lf = (typeof L.f === "number") ? L.f : (i - 1);
+        stageGoto(segIndex(stage.segs, lf), false);
+        stageShot(lf);
+      }
     }
     cutbtn.onclick = function (ev) { if (ev) ev.stopPropagation(); next(); };
     view.onclick = function () { next(); };
@@ -219,6 +366,12 @@
   }
   function cutSeen(key) { return !!(save.cuts && save.cuts[key]); }
   function markCutSeen(key) { save.cuts = save.cuts || {}; save.cuts[key] = 1; persist(); }
+  /* while a scene is open the world must not advance behind it (a tap or
+     Space would otherwise release a gate mid-scene) */
+  function sceneOpen() {
+    var v = document.getElementById("cutview");
+    return !!(v && v.classList && v.classList.contains("on"));
+  }
 
   /* ===== CHEAT ===== */
   function cheatUnlockAll() {
@@ -240,6 +393,8 @@
     requestAnimationFrame(frame);
     acc+=Math.min((now-last)/1000,0.1); last=now;
     if(!exps) { acc=0; return; }
+    /* staged cast: ease the slots + float staged camera before anything renders */
+    if (stage) stageTick();
     var st = exps.run3_state();
 
     if (st===7) { /* S_MENU */
@@ -426,11 +581,33 @@
     var t=curTun;
     if(st===2){/* dead */}
     else if(st===3){
-      /* checkpoint cleared inside a continuous tunnel — unlock its next dot */
+      /* S_GATE: the engine paused on a completed checkpoint so its scene
+         stages on the level just finished. Play the bound scene, then
+         release the gate (run3_gate_resume) to roll into the next one. */
+      var clvl = 0;
       try {
-        var clvl=exps.run3_lvl();
+        clvl=exps.run3_lvl();
         if((save.best[t]||0) < clvl+1){ save.best[t]=clvl+1; persist(); syncBestToWasm(); }
       } catch(e) {}
+      if (!gateBusy) {
+        var gq = midScenesFor(t, clvl);
+        var gda = drainAchScene();
+        if (gda) gq.push(gda);
+        if (gq.length) {
+          gateBusy = true;
+          playSeq(gq, function(){
+            gateBusy = false;
+            syncGatesToWasm();
+            try { if (exps.run3_gate_resume) exps.run3_gate_resume(); } catch(e2) {}
+            lastState = -1;
+          });
+        } else {
+          /* nothing bound (already seen, or a stale-cache engine armed one):
+             never soft-lock on the pause */
+          try { if (exps.run3_gate_resume) exps.run3_gate_resume(); } catch(e3) {}
+          lastState = -1;
+        }
+      }
     }
     else if(st===4){
       save.best[t]=Math.max(save.best[t]||0,exps.run3_tunnel_levels());
@@ -471,6 +648,7 @@
   function beginPlay(sel, lvl) {
     curTun=sel; lastState=-1; prevLvl=-1; lastMusLvl=-1;
     exps.run3_seek(sel,lvl);
+    syncGatesToWasm();
       exps.run3_set_char(Math.min(save.char,16));
     inGame=true;
     try { cellsRun0 = exps.run3_powercells() | 0; } catch (e) {}
@@ -586,8 +764,8 @@
         beginPlay(sel,sellvl>=0?sellvl:(save.best[sel]||0));
       }
     } else if(st===0||st===2||st===3) {
-      /* game: tap to start/restart/continue */
-      try{exps.run3_flap();}catch(e){}
+      /* game: tap to start/restart/continue (never while a scene is up) */
+      if (!sceneOpen()) { try{exps.run3_flap();}catch(e){} }
     }
   });
 
@@ -602,7 +780,8 @@
       if(c==="ArrowUp"||c==="KeyW"||c==="ArrowDown"||c==="KeyS"){ e.preventDefault(); try{exps.run3_map_scroll(c==="ArrowUp"||c==="KeyW"?30:-30);}catch(x){} return; }
     }
     if(c==="Space"||c==="ArrowUp"||c==="KeyW"){
-      e.preventDefault();try{exps.run3_flap();}catch(x){}
+      e.preventDefault();
+      if(!sceneOpen()){ try{exps.run3_flap();}catch(x){} }
     }
     else if(c==="ArrowDown"||c==="KeyS"){
       // handled above for map, for game do nothing (flap already)
