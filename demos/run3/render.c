@@ -455,6 +455,55 @@ static void draw_stage(double R) {
 
 /* ==================== MAIN FRAME ==================== */
 
+/* Draw a tile's texture along the tile's OWN quad: subdivide the tile in
+   world space, project every node and fill each cell with the texel its
+   centre lands on. An axis-aligned sprite blit cannot follow a tile that
+   runs down a wall of the tube (the quad is turned and foreshortened, so a
+   blit box lands beside the tile), which is why the surface is projected
+   per cell.
+   The texture is drawn RAW: a crumbling tile is never tinted by the level
+   palette, the wall shading or the distance fog, so it reads the same in
+   every tunnel — only the tunnel's light level dims it. */
+static void fill_tile_tex(double ax, double ay, double bx, double by,
+                          double zFar, double zn, double jx, double jy,
+                          double lightMul) {
+  /* cell count from the on-screen extent, so near tiles get fine detail
+     and distant ones cost almost nothing */
+  double s0x, s0y, s1x, s1y;
+  proj(ax, ay, zFar, &s0x, &s0y, NULL);
+  proj(bx, by, zn, &s1x, &s1y, NULL);
+  double wspan = s1x - s0x; if (wspan < 0.0) wspan = -wspan;
+  double hspan = s1y - s0y; if (hspan < 0.0) hspan = -hspan;
+  double span = wspan > hspan ? wspan : hspan;
+  int sub = 2 + (int)(span / 5.0);
+  if (sub > 12) sub = 12;
+  for (int i = 0; i < sub; i++) {
+    double u0 = (double)i / (double)sub, u1 = (double)(i + 1) / (double)sub;
+    double xa = ax + (bx - ax) * u0, ya = ay + (by - ay) * u0;
+    double xb = ax + (bx - ax) * u1, yb = ay + (by - ay) * u1;
+    for (int j = 0; j < sub; j++) {
+      double v0 = (double)j / (double)sub, v1 = (double)(j + 1) / (double)sub;
+      double z0 = zFar + (zn - zFar) * v0, z1 = zFar + (zn - zFar) * v1;
+      double q0x, q0y, d0, q1x, q1y, d1, q2x, q2y, d2, q3x, q3y, d3;
+      proj(xa, ya, z0, &q0x, &q0y, &d0);
+      proj(xb, yb, z0, &q1x, &q1y, &d1);
+      proj(xb, yb, z1, &q2x, &q2y, &d2);
+      proj(xa, ya, z1, &q3x, &q3y, &d3);
+      if (d0 < 0.4 || d1 < 0.4 || d2 < 0.4 || d3 < 0.4) continue;
+      int tx = (int)((u0 + u1) * 0.5 * (double)tex_crumbling_W);
+      int ty = (int)((v0 + v1) * 0.5 * (double)tex_crumbling_H);
+      if (tx < 0) tx = 0; if (tx >= tex_crumbling_W) tx = tex_crumbling_W - 1;
+      if (ty < 0) ty = 0; if (ty >= tex_crumbling_H) ty = tex_crumbling_H - 1;
+      uint32_t src = tex_crumbling[ty * tex_crumbling_W + tx];
+      if ((src >> 24) < 10) continue; /* nothing to lay down here */
+      uint32_t c = src | 0xFF000000u;
+      if (lightMul < 1.0) c = mixc(c, rgb(2,3,8), 1.0 - lightMul);
+      fill_quad(q0x + jx, q0y + jy, q1x + jx, q1y + jy,
+                q2x + jx, q2y + jy, q3x + jx, q3y + jy, c);
+    }
+  }
+}
+
 static void draw_runner(double R);
 static unsigned frameNo = 0; /* shake-jitter clock */
 void render_frame(void) {
@@ -462,15 +511,12 @@ void render_frame(void) {
   int n = G.shape, k = G.k;
   int th = G.theme % 5;
   int lpw = is_low_power();
-  /* crumbling-tile texture strength: dims with the lights so a low-power
-     tunnel stays dark, and never fades with distance — spotting a crumble
-     tile ahead is gameplay-relevant */
-  double crumbAlpha = 0.8;
-  if (lpw) {
-    double cp = run3_power();
-    if (cp < 0.15) cp = 0.15;
-    crumbAlpha = 0.8 * cp;
-  }
+  /* light level applied to raw tile textures: the low-power tunnel dims them
+     with everything else and they go black when the power is out; every
+     other tunnel draws them full brightness (a crumble tile is never tinted
+     by the level, so it stays spot-able ahead) */
+  double lightMul = 1.0;
+  if (lpw) lightMul = run3_power();
   uint32_t sky = lpw ? rgb(4,5,14) : PAL[th][0];
   for (int i = 0; i < W * H; i++) fb[i] = sky;
   for (int s = 0; s < STARS; s++)
@@ -556,23 +602,21 @@ void render_frame(void) {
           /* hole: authored gap, or a crumble tile that already fell through */
           fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, holeCol);
         } else {
-          /* solid tile. A crumbling tile wears the cracked texture (and
-             jitters while it lets go); everything else is the flat tint. */
-          double sh = run3_shake(side, ri, l);
-          if (sh > 0.0) {
-            double amp = sh * 5.0;
-            uint32_t hh = h32((uint32_t)(side * 73856093u ^ ri * 19349663u ^ l * 83492791u ^ (frameNo >> 2) * 2654435761u));
-            double jx = ((double)(hh & 7u) - 3.5) * 0.5 * amp;
-            double jy = ((double)((hh >> 3) & 7u) - 3.5) * 0.5 * amp;
-            p0x += jx; p1x += jx; p2x += jx; p3x += jx;
-            p0y += jy; p1y += jy; p2y += jy; p3y += jy;
-            col = mixc(col, rgb(2,3,8), sh * 0.9);
-          }
-          fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, col);
           if (run3_tile_tex(side, ri, l) == TEX_CRUMBLING) {
-            int sw2 = (int)(p1x-p0x), sh2 = (int)(p0y-p2y);
-            if (sw2 > 2 && sh2 > 2)
-              blit_sprite((int)p0x,(int)p2y,sw2,sh2, tex_crumbling,tex_crumbling_W,tex_crumbling_H, crumbAlpha);
+            /* crumbling tile: the raw cracked texture and nothing else (no
+               level tint, no shading, no fog), jittering while it lets go */
+            double jx = 0.0, jy = 0.0;
+            double sh = run3_shake(side, ri, l);
+            if (sh > 0.0) {
+              double amp = sh * 5.0;
+              uint32_t hh = h32((uint32_t)(side * 73856093u ^ ri * 19349663u ^ l * 83492791u ^ (frameNo >> 2) * 2654435761u));
+              jx = ((double)(hh & 7u) - 3.5) * 0.5 * amp;
+              jy = ((double)((hh >> 3) & 7u) - 3.5) * 0.5 * amp;
+            }
+            fill_tile_tex(ax2, ay2, bx2, by2, zFar, zn, jx, jy, lightMul);
+          } else {
+            /* plain solid tile: the flat level tint */
+            fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, col);
           }
         }
       }
