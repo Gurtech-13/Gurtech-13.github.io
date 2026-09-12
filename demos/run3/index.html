@@ -5,17 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Run 3</title>
 <link rel="stylesheet" href="../../style.css">
-<link rel="stylesheet" href="run3.css">
+<link rel="stylesheet" href="run3.css?v=0.7.0">
 </head>
 <body>
 <div class="wrap demo-wrap">
 <nav class="topnav"><a class="back" href="../../index.html">&larr; All projects</a></nav>
+<div id="ver" title="game version">v0.7.0</div>
 
 <canvas id="cv" width="1280" height="720" style="display:block;cursor:pointer"></canvas>
 <div style="position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;justify-content:center;gap:8px;z-index:20">
   <button type="button" id="backbtn" style="font:inherit;cursor:pointer;background:rgba(15,23,42,.85);color:rgba(255,255,255,.85);border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:6px 16px;display:none;backdrop-filter:blur(6px)">&#8592; Menu</button>
   <button type="button" id="musicToggle" style="font:inherit;cursor:pointer;background:rgba(255,255,255,.1);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15);border-radius:999px;padding:6px 12px;font-size:.82rem;display:none;backdrop-filter:blur(6px)" title="Toggle music (M)">&#127925;</button>
   <button type="button" id="sceneBtn" style="font:inherit;cursor:pointer;background:rgba(255,255,255,.1);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15);border-radius:999px;padding:6px 12px;font-size:.82rem;display:none;backdrop-filter:blur(6px)" title="Cutscene gallery">&#127916;</button>
+  <button type="button" id="achBtn" style="font:inherit;cursor:pointer;background:rgba(255,255,255,.1);color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.15);border-radius:999px;padding:6px 12px;font-size:.82rem;display:none;backdrop-filter:blur(6px)" title="Achievements">&#127942;</button>
 </div>
 
 <div class="card" id="card"><div class="inner">
@@ -46,11 +48,19 @@
   <button type="button" id="sceneClose" style="margin-top:12px;font:inherit;cursor:pointer;background:var(--accent);color:#04131d;font-weight:700;border:none;border-radius:999px;padding:8px 20px;width:100%">Close</button>
 </div></div>
 
+<div class="card" id="achMenu"><div class="inner" style="max-width:560px">
+  <h2>&#127942; Achievements</h2>
+  <p style="color:var(--muted);font-size:.85rem" id="achSub">Earn 8 to unlock something strange...</p>
+  <div class="ach-list" id="achList"></div>
+  <button type="button" id="achClose" style="margin-top:12px;font:inherit;cursor:pointer;background:var(--accent);color:#04131d;font-weight:700;border:none;border-radius:999px;padding:8px 20px;width:100%">Close</button>
+</div></div>
+
 <p id="status" class="statusline">Loading&hellip;</p>
 </div>
-<script src="story.js"></script>
-<script src="cutscenes.js"></script>
-<script src="custom_cutscenes.js"></script>
-<script src="app.js"></script>
+<script src="story.js?v=0.7.0"></script>
+<script src="cutscenes.js?v=0.7.0"></script>
+<script src="custom_cutscenes.js?v=0.7.0"></script>
+<script src="achievements.js?v=0.7.0"></script>
+<script src="app.js?v=0.7.0"></script>
 </body>
 </html>

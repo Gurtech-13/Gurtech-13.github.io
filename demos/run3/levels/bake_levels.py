@@ -98,6 +98,11 @@ def solid_layer(suffix):
     return True
 
 
+def crumble_layer(suffix):
+    """Tiles that shake and fall after the runner steps on them."""
+    return "~crumbling" in suffix.lower()
+
+
 # levelData music -> small enum (0 = tunnel default). The host maps these
 # to asset files; MapOfTheStars has no mp3 and falls back to default.
 MUSIC_IDS = {
@@ -205,7 +210,8 @@ def main():
             groups[cur].append(lid)
 
     bitstream = []  # list of 0/1, 1 = solid
-    baked = []  # (tun, lid, n, k, rows, spawn, bitoff)
+    crumblist = []  # parallel list, 1 = crumbles when stepped on
+    baked = []  # (tun, lid, n, k, rows, spawn, bitoff, ex)
     print("tunnel counts/layouts for levels.c sync:")
     for tun, pname in enumerate(TUN_PATH):
         ids = [i for i in groups.get(pname, []) if i in levels]
@@ -217,6 +223,7 @@ def main():
             n, k = L["n"], L["k"]
             chunk = n * k
             solids = []
+            crumbs = []
             for pos, suf in L["terr"]:
                 if not solid_layer(suf):
                     continue
@@ -226,6 +233,12 @@ def main():
                 for i, ch in enumerate(b):
                     if ch == "1":
                         solids[i] = 1
+                if crumble_layer(suf):
+                    if len(b) > len(crumbs):
+                        crumbs += [0] * (len(b) - len(crumbs))
+                    for i, ch in enumerate(b):
+                        if ch == "1":
+                            crumbs[i] = 1
             if 1 in solids:
                 last = len(solids) - 1 - solids[::-1].index(1)
                 solids = solids[: last + 1]
@@ -235,10 +248,15 @@ def main():
                 solids.append(0)
             rows = len(solids) // chunk
             assert rows <= 400, (tun, lid, rows)
+            # crumble mask shares the solid bit layout (padded to match)
+            while len(crumbs) < len(solids):
+                crumbs.append(0)
+            crumbs = crumbs[: len(solids)]
             bitoff = len(bitstream)
             bitstream += solids
             baked.append((tun, lid, n, k, rows, L["spawn"] % chunk, bitoff,
                           L["ex"]))
+            crumblist += crumbs
         count = len(baked) - start
         lay = Counter(levels[i]["n"] * 100 + levels[i]["k"] for i in ids)
         if ids:
@@ -252,6 +270,12 @@ def main():
     for i, v in enumerate(bitstream):
         if v:
             packed[i >> 3] |= 1 << (i & 7)
+    assert len(crumblist) == len(bitstream), "crumb/solid layout drift"
+    cpacked = bytearray(nbytes)
+    for i, v in enumerate(crumblist):
+        if v:
+            cpacked[i >> 3] |= 1 << (i & 7)
+    print("crumbling tiles: %d bits set" % sum(crumblist))
 
     with open(OUT, "w") as f:
         f.write("/* levels_baked.h - original Run 3 explore-mode level bitmaps.\n")
@@ -272,6 +296,12 @@ def main():
         f.write("static const uint8_t BAKED_BITS[%d] = {\n" % nbytes)
         for i in range(0, nbytes, 16):
             f.write("  " + ", ".join("0x%02X" % b for b in packed[i:i + 16]) + ",\n")
+        f.write("};\n\n")
+        f.write("/* BAKED_CRUMB: same layout as BAKED_BITS, 1 = tile shakes and\n")
+        f.write(" * falls after the runner steps on it (crumbling tiles). */\n")
+        f.write("static const uint8_t BAKED_CRUMB[%d] = {\n" % nbytes)
+        for i in range(0, nbytes, 16):
+            f.write("  " + ", ".join("0x%02X" % b for b in cpacked[i:i + 16]) + ",\n")
         f.write("};\n\n")
         f.write("static const baked_level_t BAKED_LEVELS[BAKED_NLEVELS] = {\n")
         for (tun, lid, n, k, rows, spawn, bitoff, _ex) in baked:

@@ -179,17 +179,17 @@
      and each path's unlockPath/unlockPoint for start scenes:
        ComingThrough staged primary-9 -> Primary 10, unlocks the Skater.
        AngelVsBunny: Home0 unlocks at Winter-9.
-       PlanetStolen: U unlocks at Primary-40 (unlockPoint 40).
        BoatRide: Home3 unlocks at Home1 completion (single level).
        SelfAssembly: NewlyFormed unlocks at Dark-15. */
   var MID_CUTS = global.STORY_MID_CUTS || [
     { tun: 0, lvl: 9, cut: "ComingThrough", skater: true },
     { tun: 12, lvl: 8, cut: "AngelVsBunny", unlock: 1 },
-    { tun: 0, lvl: 39, cut: "PlanetStolen", unlock: 28 },
     { tun: 2, lvl: 0, cut: "BoatRide", unlock: 4 },
     { tun: 13, lvl: 14, cut: "SelfAssembly", unlock: 24 },
   ];
   global.STORY_MID_CUTS = MID_CUTS;
+  /* PlanetStolen is NOT here: the original unlocks it via achievements
+     (8 earned). app.js queues it at the next level end once eligible. */
 
   /* Replay stage per cutscene (tunnel + level for the S_CUT backdrop).
      end:true resolves to the tunnel's last level at replay time. */

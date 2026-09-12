@@ -380,6 +380,34 @@ html, body {
 .scene-cell.locked { opacity: .38; cursor: not-allowed; }
 .scene-cell.locked img { filter: grayscale(1) brightness(.6); }
 
+/* ==================== ACHIEVEMENTS ==================== */
+.ach-list { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; max-height: 52vh; overflow-y: auto; }
+.ach-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 10px 14px; border-radius: 10px;
+  background: rgba(15,23,42,.8); border: 1px solid rgba(255,255,255,.08);
+}
+.ach-row .cup { font-size: 1.1rem; }
+.ach-row .nm { color: rgba(255,255,255,.92); font-weight: 700; font-size: .88rem; }
+.ach-row .ds { color: rgba(255,255,255,.5); font-size: .76rem; flex: 1; }
+.ach-row .pt { color: #fbbf24; font-weight: 700; font-size: .82rem; white-space: nowrap; }
+.ach-row.locked { opacity: .42; }
+.ach-row.locked .cup { filter: grayscale(1); }
+
+/* ==================== VERSION ==================== */
+#ver {
+  position: absolute;
+  top: 12px; right: 14px;
+  z-index: 20;
+  color: rgba(255,255,255,.45); font-size: .72rem;
+  letter-spacing: .08em;
+  background: rgba(2,6,23,.55);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 999px;
+  padding: 4px 12px;
+  pointer-events: none;
+}
+
 /* ==================== STATUS / FOOTER — overlay on fullscreen canvas ==================== */
 .statusline {
   position: absolute;

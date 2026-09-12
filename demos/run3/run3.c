@@ -16,6 +16,16 @@
 game_t G;
 uint8_t GMAP[MAXN][MAPW];
 int GMAP_BASE = 0;
+/* crumbling tiles: authored crumble lanes (GCR0, rebuilt per level window)
+   plus fallen lanes (GCRUMB, dynamic). A stepped-on crumble tile shakes
+   briefly (g_shake pool) then falls and counts as a hole. */
+static uint8_t GCR0[MAXN][MAPW];
+static uint8_t GCRUMB[MAXN][MAPW];
+#define MAXSHAKE 64
+#define CRUMB_TIME 0.5f
+typedef struct { int row; int8_t side; int8_t lane; float t; } shake_t;
+static shake_t g_shake[MAXSHAKE];
+static int32_t g_dislodged = 0;
 
 static double g_levelRows[MAX_LEVELS];
 static double g_rowStart[MAX_LEVELS + 1];
@@ -105,6 +115,44 @@ static int baked_tile(const baked_level_t *L, int row, int side, int lane) {
                  (uint32_t)side * (uint32_t)L->k + (uint32_t)lane;
   return (BAKED_BITS[idx >> 3] >> (idx & 7)) & 1;
 }
+/* 1 = crumbles when stepped on (parallel layout to baked_tile). */
+static int baked_crumb(const baked_level_t *L, int row, int side, int lane) {
+  if (!L || row < 0 || side < 0 || side >= L->n || lane < 0 || lane >= L->k) return 0;
+  if (row >= L->rows) return 0;
+  uint32_t idx = L->bit + (uint32_t)row * (uint32_t)L->n * (uint32_t)L->k +
+                 (uint32_t)side * (uint32_t)L->k + (uint32_t)lane;
+  return (BAKED_CRUMB[idx >> 3] >> (idx & 7)) & 1;
+}
+/* combined missing-lane mask (holes + fallen crumble tiles) */
+static int missmask(int side, int i) {
+  if (i < 0 || i >= MAPW || side < 0 || side >= MAXN) return 0;
+  return (int)(GMAP[side & (MAXN - 1)][i] | GCRUMB[side & (MAXN - 1)][i]);
+}
+int run3_missmask(int side, int rowAbs) { return missmask(side, rowAbs - GMAP_BASE); }
+/* seconds of shake left on a tile (0 = steady), for the renderer */
+double run3_shake(int side, int rowAbs, int lane) {
+  for (int i = 0; i < MAXSHAKE; i++)
+    if (g_shake[i].t > 0.0f && g_shake[i].row == rowAbs &&
+        g_shake[i].side == side && g_shake[i].lane == lane)
+      return (double)g_shake[i].t;
+  return 0.0;
+}
+static int shake_active(int row, int side, int lane) {
+  return run3_shake(side, row, lane) > 0.0;
+}
+static void shake_add(int row, int side, int lane) {
+  for (int i = 0; i < MAXSHAKE; i++)
+    if (g_shake[i].t <= 0.0f) {
+      g_shake[i].row = row;
+      g_shake[i].side = (int8_t)side;
+      g_shake[i].lane = (int8_t)lane;
+      g_shake[i].t = CRUMB_TIME;
+      return;
+    }
+}
+static void crumb_reset(void) {
+  for (int i = 0; i < MAXSHAKE; i++) g_shake[i].t = 0.0f;
+}
 
 /* ---------------- tunnel / level setup ---------------- */
 static const tunnel_t *tun(void) { return &TUNNELS[G.tun]; }
@@ -180,7 +228,7 @@ static void build_window(void) {
   if (rEnd > r0 + MAPW - 1) rEnd = r0 + MAPW - 1;
   GMAP_BASE = r0;
   for (int i = 0; i < MAPW; i++)
-    for (int s = 0; s < MAXN; s++) GMAP[s][i] = 0;
+    for (int s = 0; s < MAXN; s++) { GMAP[s][i] = 0; GCR0[s][i] = 0; GCRUMB[s][i] = 0; }
   int be = (int)G.blockEvery;
   for (int R = r0; R <= rEnd; R++) {
     int i = R - r0;
@@ -199,14 +247,17 @@ static void build_window(void) {
       }
     }
     for (int s2 = 0; s2 < n; s2++) {
-      uint8_t m = 0;
+      uint8_t m = 0, mc = 0;
       if (B) {
         int lr = R - r0;
         if (lr >= 0 && lr < B->rows) {
-          uint8_t mm = 0;
-          for (int ln = 0; ln < k; ln++)
+          uint8_t mm = 0, cm = 0;
+          for (int ln = 0; ln < k; ln++) {
             if (!baked_tile(B, lr, s2, ln)) mm |= (uint8_t)(1u << ln);
+            else if (baked_crumb(B, lr, s2, ln)) cm |= (uint8_t)(1u << ln);
+          }
           m = mm;
+          mc = cm;
         } /* past the baked rows (far lookahead): solid */
       } else if (voidSide >= 0) {
         m = (s2 == voidSide) ? (uint8_t)all : 0;
@@ -229,6 +280,7 @@ static void build_window(void) {
         }
       }
       GMAP[s2][i] = m;
+      GCR0[s2][i] = (uint8_t)(mc & ~m); /* crumble only where solid */
     }
   }
 }
@@ -279,6 +331,7 @@ static void open_level(int lvl) {
   G.rowStart = g_rowStart[lvl];
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
+  crumb_reset();
   G.state = S_RUN; /* instant start: the runner never waits */
   G.prog = G.rowStart;
   G.ring = (double)G.k * 0.5;
@@ -315,6 +368,7 @@ static void open_level_continue(int lvl, double over) {
   G.rowStart = g_rowStart[lvl];
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
+  crumb_reset();
   G.state = S_RUN;
   G.prog = G.rowStart + over;
   if (G.prog >= G.rowEnd) G.prog = G.rowEnd - 0.001;
@@ -448,7 +502,7 @@ static int lane_ok_at(int rowAbs) {
   if (i < 0 || i >= MAPW) return 1;
   int s = side_under();
   if (s >= G.shape) return 0;
-  return (GMAP[s][i] & (1u << lane_under())) ? 0 : 1;
+  return (missmask(s, i) & (1u << lane_under())) ? 0 : 1;
 }
 
 /* tile under an arbitrary ring position (1 = solid) */
@@ -458,7 +512,7 @@ static int tile_at(int rowAbs, double ring) {
   int s = wrap_side(ring, G.k, G.shape);
   int l = wrap_lane(ring, G.k);
   if (s >= G.shape || l >= G.k) return 0;
-  return (GMAP[s][i] & (1u << l)) ? 0 : 1;
+  return (missmask(s, i) & (1u << l)) ? 0 : 1;
 }
 
 /* proactive landing assist: while falling, predict the touchdown row and
@@ -538,6 +592,7 @@ void run3_init(uint32_t seed) {
   render_init_stars(seed);
   g_powercells = 0;
   g_power = 1.0;
+  g_dislodged = 0;
   if (NTUNNELS > 0) {
     G.tun = 0;
     g_seedT = h32(h32(seed) ^ (uint32_t)(G.tun * 2654435761u) ^ 0x9e3779b9u);
@@ -720,6 +775,25 @@ void run3_step(double dt) {
       if (G.landT < 0.0) G.landT = 0.0;
     }
 
+    /* crumbling shake timers: armed tiles fall, even mid-gate */
+    for (int qi = 0; qi < MAXSHAKE; qi++) {
+      if (g_shake[qi].t > 0.0f) {
+        g_shake[qi].t -= (float)dt;
+        if (g_shake[qi].t <= 0.0f) {
+          g_shake[qi].t = 0.0f;
+          int wi = g_shake[qi].row - GMAP_BASE;
+          int ss = g_shake[qi].side, ll = g_shake[qi].lane;
+          if (wi >= 0 && wi < MAPW && ss >= 0 && ss < MAXN && ll >= 0 && ll < 8) {
+            uint8_t bit = (uint8_t)(1u << ll);
+            if ((GCR0[ss][wi] & bit) && !(GCRUMB[ss][wi] & bit)) {
+              GCRUMB[ss][wi] |= bit;
+              g_dislodged++;
+            }
+          }
+        }
+      }
+    }
+
     /* infinite mode: rebuild window as we advance */
     if (G.rowEnd > 900000.0) {
       int curRow = (int)G.prog;
@@ -780,6 +854,16 @@ void run3_step(double dt) {
          touchdown) adopts the wall below; mid-air ring drift does NOT */
       if (G.state == S_RUN && !(G.jump > 0.0 || G.jv > 0.0)) {
         G.gravSide = (uint8_t)side_under();
+        /* the stepped-on crumbling tile starts shaking */
+        {
+          int r = (int)G.prog, wi = r - GMAP_BASE;
+          int s = side_under(), l = lane_under();
+          uint8_t bit = (uint8_t)(1u << l);
+          if (wi >= 0 && wi < MAPW && s < G.shape && l < G.k &&
+              !(GMAP[s][wi] & bit) && (GCR0[s][wi] & bit) &&
+              !(GCRUMB[s][wi] & bit) && !shake_active(r, s, l))
+            shake_add(r, s, l);
+        }
       }
     }
   } else if (G.state == S_DEAD) {
@@ -849,12 +933,12 @@ double run3_ring(void) { return G.ring; }
 int32_t run3_tile(int32_t side, int32_t row, int32_t lane) {
   int i = row - GMAP_BASE;
   if (i < 0 || i >= MAPW) return 1;
-  return (GMAP[side & (MAXN - 1)][i] & (1u << lane)) ? 0 : 1;
+  return (missmask(side, i) & (1u << lane)) ? 0 : 1;
 }
 int32_t run3_solid(int32_t side, int32_t row) {
   int i = row - GMAP_BASE;
   if (i < 0 || i >= MAPW) return 1;
-  return GMAP[side & (MAXN - 1)][i] == 0 ? 1 : 0;
+  return missmask(side, i) == 0 ? 1 : 0;
 }
 void run3_set_input(double lr) {
   if (lr < -1.0) lr = -1.0;
@@ -873,6 +957,10 @@ void run3_add_cells(int32_t n) { g_powercells += n; }
 void run3_spend_cells(int32_t n) { if (g_powercells >= n) g_powercells -= n; }
 int32_t run3_inf_score(void) { return g_infScore; }
 int32_t run3_inf_rows(void) { return g_infRows; }
+/* crumbling tiles dislodged this session (Galactic Vandalism) */
+int32_t run3_dislodged(void) { return g_dislodged; }
+/* 1 while riding endless (infinite) mode */
+int32_t run3_is_inf(void) { return G.rowEnd > 900000.0 ? 1 : 0; }
 
 /* low-power light level for the renderer and the host (music ducking) */
 double run3_power(void) { return g_power; }

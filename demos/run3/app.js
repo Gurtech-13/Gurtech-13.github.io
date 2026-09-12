@@ -13,6 +13,8 @@
   var MID_CUTS = window.STORY_MID_CUTS || [];
   var STAGE = window.STORY_STAGE || {};
   var CAMSHOT = window.STORY_CAMSHOT || {};
+  var ACHIEVEMENTS = window.ACHIEVEMENTS || [];
+  var ACH_NEED = window.ACH_PLANETSTOLEN_NEED || 8;
   var lastShot = null;
   function stageCam(name, fr) {
     /* authored stage framing: switch the S_CUT camera when the shot changes */
@@ -50,12 +52,14 @@
   var LS_KEY = "run3tribute-v3";
   var save;
   function loadSave() {
-    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, cuts: o.cuts||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0, unlockedExtra: o.unlockedExtra||[] }; } } catch(e) {}
-    return { cleared:[], best:{}, renames:{}, cuts:{}, char:0, musicVol:0.5, powercells:0, unlockedExtra:[] };
+    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, cuts: o.cuts||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0, unlockedExtra: o.unlockedExtra||[], ach: o.ach||{}, achProg: o.achProg||{dislodged:0} }; } } catch(e) {}
+    return { cleared:[], best:{}, renames:{}, cuts:{}, char:0, musicVol:0.5, powercells:0, unlockedExtra:[], ach:{}, achProg:{dislodged:0} };
   }
   function persist() { try { localStorage.setItem(LS_KEY, JSON.stringify(save)); } catch(e) {} }
   save = loadSave();
   if (!save.unlockedExtra) save.unlockedExtra = [];
+  if (!save.ach) save.ach = {};
+  if (!save.achProg) save.achProg = { dislodged: 0 };
 
   function cleared(t) { return save.cleared.indexOf(t)>=0; }
   function unlocked(t) {
@@ -285,6 +289,58 @@
     for(var i=0;i<n;i++){var v=words[i];view[i]=(v&0xff000000)|((v>>>16)&0xff)|(v&0x0000ff00)|((v&0xff)<<16);}
     ctx.putImageData(imageData,0,0);
   }
+  /* ===== ACHIEVEMENTS (roster copied from the original game) ===== */
+  var cellsRun0 = 0, infDeaths = 0;
+  var WORMHOLES = { 17: 1, 18: 1, 19: 1, 20: 1, 21: 1, 22: 1, 23: 1, 33: 1 };
+  function achCount() { return Object.keys(save.ach || {}).length; }
+  function achById(id) {
+    for (var i = 0; i < ACHIEVEMENTS.length; i++) {
+      if (ACHIEVEMENTS[i].id === id) return ACHIEVEMENTS[i];
+    }
+    return null;
+  }
+  function award(id) {
+    if (save.ach[id]) return;
+    var a = achById(id);
+    if (!a) return;
+    save.ach[id] = 1;
+    persist();
+    toast("\uD83C\uDFC6 " + a.name + " (+" + a.pts + ")");
+    if (achCount() === ACH_NEED && !cutSeen("m28_0")) {
+      toast("8 achievements! Something happened to the Planet...");
+    }
+  }
+  function isInf() {
+    try { return !!(exps.run3_is_inf && exps.run3_is_inf()); } catch (e) { return false; }
+  }
+  function checkAchievements() {
+    /* called every running frame; each award fires once ever */
+    try {
+      if (exps.run3_dislodged) {
+        var d = exps.run3_dislodged() | 0;
+        if (d > (save.achProg.dislodged || 0)) { save.achProg.dislodged = d; persist(); }
+        if ((save.achProg.dislodged || 0) >= 700) award(0);
+      }
+    } catch (e) {}
+    var inf = isInf();
+    try {
+      if (!inf && exps.run3_powercells && (exps.run3_powercells() - cellsRun0) >= 40) award(5);
+    } catch (e2) {}
+    if (inf) {
+      var rows = 0;
+      try { rows = exps.run3_inf_rows() | 0; } catch (e3) {}
+      if (rows >= 800) award(4);
+      if (rows >= 2000 && infDeaths === 0) award(9);
+      if (rows >= 5000) award(10);
+    }
+  }
+  /* Planet Stolen unlocks at 8 achievements; plays at the next level end */
+  function drainAchScene() {
+    if (achCount() >= ACH_NEED && !cutSeen("m28_0")) {
+      return { key: "m28_0", cut: "PlanetStolen", m: { tun: 28, lvl: 0, unlock: 28 } };
+    }
+    return null;
+  }
   /* mid-tunnel discovery: tunnels/characters unlocked by a scene */
   function midUnlock(m) {
     if (m.unlock != null && save.unlockedExtra.indexOf(m.unlock) < 0 && !cleared(m.unlock)) {
@@ -338,6 +394,8 @@
     /* continuous tunnels auto-advance past gates within a frame, so track the
        furthest checkpoint every frame (not just on state transitions) */
     if(st===0||st===1||st===2||st===3){
+      if (st===2 && st!==lastState && isInf()) infDeaths++;
+      checkAchievements();
       try{
         if(exps.run3_tun()===curTun){
           var lv=exps.run3_lvl();
@@ -348,6 +406,8 @@
             var gates = [];
             for (var gl = prevLvl; gl < lv; gl++) gates = gates.concat(midScenesFor(curTun, gl));
             prevLvl = lv;
+            var da = drainAchScene();
+            if (da) gates.push(da);
             if (gates.length) {
               try { if (exps.run3_cutscene_hold) exps.run3_cutscene_hold(); } catch(e2) {}
               playSeq(gates, function(){
@@ -375,6 +435,9 @@
     else if(st===4){
       save.best[t]=Math.max(save.best[t]||0,exps.run3_tunnel_levels());
       if(save.cleared.indexOf(t)<0)save.cleared.push(t);
+      if(t===0) award(1);
+      if(t===12) award(2);
+      if(save.cleared.length>=4) award(3);
       persist();
       syncAllToWasm();
       var showEnd=function(){
@@ -393,6 +456,8 @@
       /* finish queue: mid-tunnel scenes bound here (e.g. BoatRide on the
          single Home1 level), then the tunnel end scene, then any sequel */
       var queue = midScenesFor(t, exps.run3_tunnel_levels() - 1);
+      var daEnd = drainAchScene();
+      if (daEnd) queue.push(daEnd);
       if(pc1&&pc1.end&&!cutSeen(ekey)) queue.push({ key: ekey, cut: pc1.end });
       var seq=END_CHAIN[t], xkey="x"+t;
       if(seq&&!cutSeen(xkey)) queue.push({ key: xkey, cut: seq });
@@ -408,6 +473,8 @@
     exps.run3_seek(sel,lvl);
       exps.run3_set_char(Math.min(save.char,16));
     inGame=true;
+    try { cellsRun0 = exps.run3_powercells() | 0; } catch (e) {}
+    if (WORMHOLES[sel]) award(7);
     var mt=MUSIC_MAP[sel]||"leavethesolarsystem";
     playMusic(mt);
   }
@@ -487,7 +554,9 @@
       } else if(hv===1) {
         /* Infinite mode */
         exps.run3_start_inf();
-        inGame=true;
+        inGame=true; lastState=-1;
+        infDeaths=0;
+        try { cellsRun0 = exps.run3_powercells() | 0; } catch (e) {}
       } else if(hv>=2) {
         /* character select */
         var cid = hv-2;
@@ -576,6 +645,8 @@
     for (var k in END_CHAIN) {
       if (END_CHAIN[k] === name && save.cuts["x" + k]) return true;
     }
+    var stg = STAGE[name];
+    if (stg && !stg.end && save.cuts[midKey(stg.tun, stg.lvl)]) return true;
     return false;
   }
   function openGallery() {
@@ -637,6 +708,57 @@
     document.getElementById("sceneMenu").classList.remove("on");
   });
 
+  /* ===== ACHIEVEMENT GALLERY ===== */
+  function openAch() {
+    var list = document.getElementById("achList");
+    var menu = document.getElementById("achMenu");
+    if (!list || !menu) return;
+    list.innerHTML = "";
+    var sub = document.getElementById("achSub");
+    if (sub) sub.textContent = "Earned " + achCount() + " of " + ACHIEVEMENTS.length + " \u2014 earn " + ACH_NEED + " to unlock something strange...";
+    ACHIEVEMENTS.forEach(function (a) {
+      var got = !!save.ach[a.id];
+      var row = document.createElement("div");
+      row.className = "ach-row" + (got ? "" : " locked");
+      var cup = document.createElement("span");
+      cup.className = "cup";
+      cup.textContent = got ? "\uD83C\uDFC6" : "\uD83D\uDD12";
+      var nm = document.createElement("span");
+      nm.className = "nm";
+      nm.textContent = got ? a.name : "???";
+      var ds = document.createElement("span");
+      ds.className = "ds";
+      ds.textContent = a.desc;
+      var pt = document.createElement("span");
+      pt.className = "pt";
+      pt.textContent = "+" + a.pts;
+      row.appendChild(cup);
+      row.appendChild(nm);
+      row.appendChild(ds);
+      row.appendChild(pt);
+      list.appendChild(row);
+    });
+    menu.classList.add("on");
+  }
+  var achBtnEl = document.getElementById("achBtn");
+  if (achBtnEl) achBtnEl.addEventListener("click", openAch);
+  var achCloseEl = document.getElementById("achClose");
+  if (achCloseEl) achCloseEl.addEventListener("click", function () {
+    document.getElementById("achMenu").classList.remove("on");
+  });
+
+  /* version label (top-right) + gallery hotkey fallback */
+  try {
+    var verEl = document.getElementById("ver");
+    if (verEl && window.GAME_VERSION) verEl.textContent = "v" + window.GAME_VERSION;
+  } catch (e0) {}
+  window.addEventListener("keydown", function (e) {
+    if (!e || e.code !== "KeyG") return;
+    var cv = document.getElementById("cutview");
+    if (cv && cv.classList.contains("on")) return;
+    try { openGallery(); } catch (e2) {}
+  });
+
   /* ===== WASM LOAD ===== */
   document.getElementById("status").textContent="Loading run3.wasm\u2026";
   fetch("run3.wasm",{credentials:"same-origin"})
@@ -659,6 +781,7 @@
       document.getElementById("backbtn").style.display="";
       document.getElementById("musicToggle").style.display="";
       var sb2=document.getElementById("sceneBtn"); if(sb2) sb2.style.display="";
+      var ab2=document.getElementById("achBtn"); if(ab2) ab2.style.display="";
       last=performance.now();
       requestAnimationFrame(frame);
       // keep words view in sync if memory grows (WASM may grow on later allocs)

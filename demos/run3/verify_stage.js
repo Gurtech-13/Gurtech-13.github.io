@@ -84,7 +84,7 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   sandbox.globalThis = sandbox;
   sandbox.location = { search: "" };
   vm.createContext(sandbox);
-  for (const f of ["story.js", "cutscenes.js", "custom_cutscenes.js"]) {
+  for (const f of ["story.js", "cutscenes.js", "custom_cutscenes.js", "achievements.js"]) {
     vm.runInContext(fs.readFileSync(path.join(dir, f), "utf8"), sandbox, { filename: f });
   }
   const C = sandbox.STORY.C, CUT = sandbox.STORY_CUT, CAST = sandbox.STORY_CAST;
@@ -117,6 +117,14 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     if (m.unlock != null && !T[m.unlock]) throw new Error("bad mid unlock " + m.unlock);
   }
   console.log(`mid triggers OK (${MID.map((m) => `${m.cut}@${m.tun}:${m.lvl}`).join(" ")})`);
+  // achievements roster + PlanetStolen gating (8 earned, staged on U-0)
+  const ACH = sandbox.ACHIEVEMENTS || [];
+  if (ACH.length !== 9) throw new Error("achievement roster wrong: " + ACH.length);
+  if (sandbox.ACH_PLANETSTOLEN_NEED !== 8) throw new Error("planetstolen threshold wrong");
+  if (MID.some((m) => m.cut === "PlanetStolen")) throw new Error("PlanetStolen must be achievement-gated, not a mid trigger");
+  const pst = STAGE.PlanetStolen;
+  if (!pst || pst.tun !== 28 || pst.lvl !== 0 || pst.end) throw new Error("PlanetStolen stage wrong: " + JSON.stringify(pst));
+  console.log("achievements roster OK (" + ACH.length + " originals, PlanetStolen at 8)");
   // ComingThrough: the Primary-10 skater scene
   const ct = CUT.ComingThrough;
   if (!ct || ct.length !== 25) throw new Error("ComingThrough bake wrong");

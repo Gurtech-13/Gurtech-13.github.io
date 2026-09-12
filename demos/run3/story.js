@@ -7,6 +7,9 @@
  */
 "use strict";
 (function (global) {
+  /* Bump on every release AND mirror it into index.html script ?v= so browsers
+     never run stale cached JS/WASM against a fresh page. Shown top-right. */
+  global.GAME_VERSION = "0.7.0";
   /* Characters — all unlock through gameplay (clearing tunnels) */
   var C = [
     { id: 0, name: "The Runner", col: "#9fdcff", img: "character_runner.png",

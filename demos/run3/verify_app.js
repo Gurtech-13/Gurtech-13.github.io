@@ -104,9 +104,13 @@ function makeEl() {
     createElement: () => makeEl(),
     body: makeEl(),
   };
-  sandbox.window.addEventListener = (t, fn) => { listeners[t] = fn; };
+  sandbox.window.addEventListener = (t, fn) => {
+    if (!listeners[t]) listeners[t] = [];
+    listeners[t].push(fn);
+  };
+  function fireWin(t, ev) { (listeners[t] || []).forEach((fn) => fn(ev)); }
   vm.createContext(sandbox);
-  const files = ["story.js", "cutscenes.js", "custom_cutscenes.js", "app.js"];
+  const files = ["story.js", "cutscenes.js", "custom_cutscenes.js", "achievements.js", "app.js"];
   for (const f of files) {
     let src = fs.readFileSync(path.join(dir, f), "utf8");
     if (f === "custom_cutscenes.js") {
@@ -121,7 +125,6 @@ function makeEl() {
     vm.runInContext(src, sandbox, { filename: f });
   }
   sandbox.window.addEventListener("error", (e) => errors.push((e && e.message) || String(e)));
-
   async function frames(n) {
     for (let i = 0; i < n; i++) {
       now += 1000 / 60;
@@ -145,8 +148,8 @@ function makeEl() {
     canvasHandlers.pointerup({ clientX: x, clientY: y, pointerId: 1 });
   }
   function key(code) {
-    listeners.keydown({ code, preventDefault() {} });
-    listeners.keyup({ code });
+    fireWin("keydown", { code, preventDefault() {} });
+    fireWin("keyup", { code });
   }
   function save() { return JSON.parse(store["run3tribute-v3"]); }
   async function finishScene(budget) {
@@ -228,6 +231,16 @@ function makeEl() {
     if (seenTitles.indexOf(want) < 0) throw new Error(want + " not seen in gallery: " + JSON.stringify(seenTitles));
   }
   console.log("gallery seen-state OK:", JSON.stringify(seenTitles));
+
+  // achievements gallery: 9 originals, all locked on a fresh save
+  fire(el("achBtn"), "click");
+  await frames(1);
+  if (!el("achMenu").classList.contains("on")) throw new Error("ach gallery did not open");
+  const achRows = el("achList").children;
+  if (achRows.length !== 9) throw new Error("ach roster wrong: " + achRows.length);
+  const achLocked = achRows.filter((c) => c.className.indexOf("locked") >= 0).length;
+  if (achLocked !== 9) throw new Error("fresh save should lock all achievements");
+  console.log("achievements gallery OK (9 locked)");
   if (errors.length) throw new Error("window errors during flow: " + JSON.stringify(errors));
   console.log("APP SMOKE OK");
 })().catch((err) => { console.error("FAIL:", (err && err.message) || err); process.exit(1); });

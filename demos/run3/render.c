@@ -159,15 +159,20 @@ uint32_t *run3_buffer(void) { return fb; }
 
 /* ==================== PROJECTION ==================== */
 
-/* Camera height (world units, tube space): reframed every frame so the
-   grounded runner's feet sit at the top of the lower third (y = 2H/3).
-   The camera drops toward the runner's wall; the horizon (vanishing
-   point CY) is unchanged since the offset scales with depth. */
-static double cam_y = 0.0;
+/* Centered chase camera, pitched to hold the grounded runner's feet at the
+   top of the lower third (y = 2H/3). The camera stays on the tube axis;
+   orientation alone preserves the runner constraint:
+   tan(pitch) = (R + t*DCAM)/(t*R - DCAM), t = (CY-2H/3)/FOCAL. */
+static double cam_pitch = 0.0;
 
-static void proj(double x, double y, double z, double *sx, double *sy) {
-  double d = DCAM + z; double s = FOCAL / d;
-  *sx = CX + x * s; *sy = CY - (y - cam_y) * s;
+static void proj(double x, double y, double z, double *sx, double *sy, double *dd) {
+  double d = DCAM + z;
+  double c = scos(cam_pitch), s = ssin(cam_pitch);
+  double y1 = y * c - d * s;
+  double d1 = y * s + d * c;
+  double k = FOCAL / d1;
+  *sx = CX + x * k; *sy = CY - y1 * k;
+  if (dd) *dd = d1;
 }
 static void corner(int c, double *x, double *y, double R) {
   double a = -PI/2.0 - PI/(double)G.shape + TAU*(double)c/(double)G.shape + G.rot;
@@ -177,9 +182,7 @@ static double tube_R(void) {
   return (double)G.k * G.tile / (2.0 * ssin(PI / (double)G.shape));
 }
 static int mask_at(int side, int row) {
-  int i = row - GMAP_BASE;
-  if (i < 0 || i >= MAPW) return 0;
-  return GMAP[side][i];
+  return run3_missmask(side, row);
 }
 
 /* low power tunnel check */
@@ -269,8 +272,8 @@ static void draw_runner(double R) {
     lift = 0.02 - dd*1.6; shrink = 1.0 - dd*0.7; if (shrink < 0.5) shrink = 0.5;
   }
   double gx,gy,px,py;
-  proj(mx,my,0.0,&gx,&gy);
-  proj(mx+inx*lift,my+iny*lift,0.0,&px,&py);
+  proj(mx,my,0.0,&gx,&gy,NULL);
+  proj(mx+inx*lift,my+iny*lift,0.0,&px,&py,NULL);
 
   /* contact shadow — scale with resolution */
   double jh = G.jump, shr = 1.0/(1.0+5.0*jh);
@@ -354,7 +357,9 @@ static void draw_runner(double R) {
 /* ==================== MAIN FRAME ==================== */
 
 static void draw_runner(double R);
+static unsigned frameNo = 0; /* shake-jitter clock */
 void render_frame(void) {
+  frameNo++;
   int n = G.shape, k = G.k;
   int th = G.theme % 5;
   int lpw = is_low_power();
@@ -364,11 +369,14 @@ void render_frame(void) {
     fill_rect(star_x[s], star_y[s], star_s[s], star_s[s], star_c[s]);
 
   double R = tube_R();
-  /* grounded feet (world y=-R at z=0) -> screen 2H/3: with
-     sy = CY+(R+cam_y)*FOCAL/DCAM, cam_y = (2H/3-CY)*DCAM/FOCAL - R */
-  cam_y = ((2.0 * (double)H / 3.0) - (double)CY) * (DCAM / FOCAL) - R;
-  /* staged scenes also take the authored height offset (no runner to frame) */
-  if (G.state == S_CUT) cam_y += (double)run3_stage_lift() * 0.5;
+  /* pitch from the runner constraint (small-angle atan to 3rd order);
+     staged scenes add their authored height bias on top */
+  {
+    double t = ((double)CY - 2.0 * (double)H / 3.0) / FOCAL;
+    double x = (R + t * DCAM) / (t * R - DCAM);
+    cam_pitch = x - x * x * x / 3.0;
+    if (G.state == S_CUT) cam_pitch += (double)run3_stage_lift() * 0.06;
+  }
   /* authored per-level tile tints (0 = theme palette) */
   uint32_t lvlC0 = run3_level_color0();
   uint32_t lvlC1 = run3_level_color1();
@@ -429,9 +437,11 @@ void render_frame(void) {
         double ay2 = ry[side]+(ry[side+1]-ry[side])*t0;
         double bx2 = rx[side]+(rx[side+1]-rx[side])*t1;
         double by2 = ry[side]+(ry[side+1]-ry[side])*t1;
-        double p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y;
-        proj(ax2,ay2,zFar,&p0x,&p0y); proj(bx2,by2,zFar,&p1x,&p1y);
-        proj(bx2,by2,zn,&p2x,&p2y);  proj(ax2,ay2,zn,&p3x,&p3y);
+        double p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y,dd0,dd1,dd2,dd3;
+        proj(ax2,ay2,zFar,&p0x,&p0y,&dd0); proj(bx2,by2,zFar,&p1x,&p1y,&dd1);
+        proj(bx2,by2,zn,&p2x,&p2y,&dd2);  proj(ax2,ay2,zn,&p3x,&p3y,&dd3);
+        /* pitched camera: cull quads swung behind the view plane */
+        if (dd0 < 0.4 || dd1 < 0.4 || dd2 < 0.4 || dd3 < 0.4) continue;
 
         if (mask & (1u << l)) {
           fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, holeCol);
@@ -442,6 +452,17 @@ void render_frame(void) {
               blit_sprite((int)p0x,(int)p2y,sw2,sh2, tex_crumbling,tex_crumbling_W,tex_crumbling_H, fade*0.6);
           }
         } else {
+          /* shaking crumble tile: jitter + darken as it lets go */
+          double sh = run3_shake(side, ri, l);
+          if (sh > 0.0) {
+            double amp = sh * 5.0;
+            uint32_t hh = h32((uint32_t)(side * 73856093u ^ ri * 19349663u ^ l * 83492791u ^ (frameNo >> 2) * 2654435761u));
+            double jx = ((double)(hh & 7u) - 3.5) * 0.5 * amp;
+            double jy = ((double)((hh >> 3) & 7u) - 3.5) * 0.5 * amp;
+            p0x += jx; p1x += jx; p2x += jx; p3x += jx;
+            p0y += jy; p1y += jy; p2y += jy; p3y += jy;
+            col = mixc(col, rgb(2,3,8), sh * 0.9);
+          }
           fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, col);
         }
       }
@@ -454,7 +475,7 @@ void render_frame(void) {
         double ax3,ay3,bx3,by3;
         corner(side,&ax3,&ay3,R); corner(side+1,&bx3,&by3,R);
         double p0x,p0y,p1x,p1y;
-        proj(ax3,ay3,zFar,&p0x,&p0y); proj(bx3,by3,zFar,&p1x,&p1y);
+        proj(ax3,ay3,zFar,&p0x,&p0y,NULL); proj(bx3,by3,zFar,&p1x,&p1y,NULL);
         int lx0=(int)p0x, lx1=(int)p1x, ly=(int)p0y;
         if (ly >= 0 && ly < H) {
           if (lx0 > lx1) { int t=lx0; lx0=lx1; lx1=t; }
