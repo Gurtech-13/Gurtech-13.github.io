@@ -189,17 +189,38 @@ with open(OUT, "w") as f:
         (27, 0, 1305, 133,     45,212,191),   # Coordination
         (28, 1, 1440, 264,    167,139,250),   # U
         (29, 1, 400, 420,      52,211,153),   # W
+        # --- custom extended tunnels (node = first waypoint below) ---
+        (30, 1, 1650, 140,     94,234,212),   # F (Primary shortcut spur)
+        (31, 1, 650, 520,     191,219,254),   # S (Winter snow spur)
+        (32, 1, 1500, 80,     167,139,250),   # V (Boxes halls)
+        (33, 1, 2400, 300,    192,132,252),   # Wormhole X (Primary's end)
+        (34, 0, 2620, 220,    103,232,249),   # Far Shore (past Wormhole X)
+        (35, 0, 3000, 300,    240,171,252),   # Far Drift (beyond the Shore)
     ]
+
+    # Custom waypoint polylines (original map coords) for ids 30+.
+    CUSTOM_WP = {
+        30: [(1650, 140), (1500, 60), (1380, -20)],
+        31: [(650, 520), (500, 560), (380, 620)],
+        32: [(1500, 80), (1620, 140), (1740, 180)],
+        33: [(2400, 300), (2520, 260), (2620, 220)],
+        34: [(2620, 220), (2800, 260), (3000, 300)],
+        35: [(3000, 300), (3220, 340), (3440, 380)],
+    }
 
     import json as _json
     _omap = _json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                          "orig_map.json")))
     _wp_by_id = {t['id']: t['waypoints'] for t in _omap['tunnels']}
     assert sorted(_wp_by_id) == list(range(30)), "orig_map.json must hold ids 0-29"
+    for _cid, _pts in CUSTOM_WP.items():
+        assert _cid not in _wp_by_id, f"custom id {_cid} collides with original"
+        _wp_by_id[_cid] = [[float(x), float(y)] for x, y in _pts]
 
     f.write("/* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b.\n")
-    f.write(" * Node coords = original first waypoints (uniform map transform). */\n")
-    f.write("#define MAP_TUNNEL_COUNT 30\n\n")
+    f.write(" * Node coords = original first waypoints (uniform map transform).\n")
+    f.write(" * Ids 30+ are custom extended tunnels (hand-placed, node = path start). */\n")
+    f.write("#define MAP_TUNNEL_COUNT 36\n\n")
 
     f.write("typedef struct {\n")
     f.write("  int16_t x, y;\n")
@@ -236,7 +257,7 @@ with open(OUT, "w") as f:
         f.write(f"  {n}, /* {tid} */\n")
     f.write("};\n\n")
 
-    # ===== TUNNEL NAMES (short, for display) — ids 0-29 only =====
+    # ===== TUNNEL NAMES (short, for display) — ids 0-35 =====
     NAMES = [
         "Primary", "Home 0", "Home 1", "Home 2", "Home 3",
         "A", "B", "D", "G", "L", "M", "T",
@@ -244,8 +265,9 @@ with open(OUT, "w") as f:
         "WH C", "WH H", "WH I", "WH J", "WH K", "WH N", "WH Spc",
         "Newly", "Runway0", "Runway1", "Coord",
         "U", "W",
+        "F", "S", "V", "WH X", "Shore", "Drift",
     ]
-    assert len(NAMES) == len(TUNNELS_DATA) == 30
+    assert len(NAMES) == len(TUNNELS_DATA) == 36
 
     f.write("/* Tunnel name strings */\n")
     f.write("static const char *map_tunnel_names[MAP_TUNNEL_COUNT] = {\n")

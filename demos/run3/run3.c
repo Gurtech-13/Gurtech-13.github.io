@@ -800,8 +800,9 @@ int run3_map_scroll_y(void) { return map_scroll_x; }
 int run3_map_scroll_x(void) { return map_scroll_x; }
 void run3_map_scroll(int dx) {
   map_scroll_x += dx;
-  /* 1D horizontal scroll — original map spans screen x ~55..3400 */
-  if (map_scroll_x < -2200) map_scroll_x = -2200;
+  /* 1D horizontal scroll — original map spans screen x ~55..3400,
+     extended tunnels reach ~2970 (drift end) */
+  if (map_scroll_x < -3200) map_scroll_x = -3200;
   if (map_scroll_x > 200) map_scroll_x = 200;
   map_scroll_y = map_scroll_x; // keep y in sync for legacy
 }

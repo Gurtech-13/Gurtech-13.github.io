@@ -27,6 +27,8 @@ OUT = os.path.join(HERE, "cutscenes.js")
 DATA = open(os.path.join(HERE, "levels", "orig_levels.bin"), "rb").read().decode("latin-1")
 
 # demo tunnel index -> original path (must match bake_levels.py TUN_PATH)
+# ids 30+ are custom extended tunnels with hand-written dialogue in
+# custom_cutscenes.js (NOT baked here — the zip has no .as for them).
 TUN_PATH = [
     "primary", "home0", "home1", "home2", "home3", "sidePathA", "sidePathB",
     "sidePathD", "sidePathG", "sidePathL", "sidePathM", "sidePathT", "winter",

@@ -32,7 +32,7 @@
 #define FLIGHT 0.84
 #define SPEED_MUL 2.25    /* forward walk speed bumped a bit (was 2.0) */
 
-#define MAX_TUNNELS 30 /* original Run 3 map paths only, no invented tunnels */
+#define MAX_TUNNELS 40 /* 30 original Run 3 paths + custom extended tunnels */
 #define MAX_LEVELS 200
 #define NCHAR 17 /* playable characters (must match CHAR_COUNT in assets_data.h) */
 #define MAX_RPS 7.0

@@ -487,7 +487,7 @@ static void draw_line(int x0, int y0, int x1, int y1, uint32_t c) {
    Warm paper base with subtle fibre grain plus black/brown age spots, all in
    world space so it scrolls 1:1 with the dots. screen_x = world_x + scroll. */
 #define MAP_WORLD_MINX -800
-#define MAP_WORLD_W 3000
+#define MAP_WORLD_W 5000
 static int map_floor4(int v) { return v >= 0 ? v >> 2 : -(((-v) + 3) >> 2); }
 static void render_map_bg(int scroll) {
   /* paper base with a soft vertical tone */

@@ -8,6 +8,7 @@
   var MUSIC_MAP = STORY.MUSIC || {};
   var CUT = window.STORY_CUT || {};
   var PATH_CUT = window.STORY_PATH_CUT || [];
+  var END_CHAIN = window.STORY_END_CHAIN || {};
 
   var cv, ctx, imageData, view, words, exps;
   var W = 1280, H = 720; // will be updated from WASM after load (1280x720 fullscreen)
@@ -241,10 +242,19 @@
         }
       };
       var pc1=PATH_CUT[t], ekey="e"+t;
+      /* sequel cutscene (e.g. Primary -> the small wormhole), played once
+         after the tunnel's regular end cutscene, before the mapped card */
+      var playChain=function(){
+        var seq=END_CHAIN[t], xkey="x"+t;
+        if(seq&&!cutSeen(xkey)){
+          markCutSeen(xkey);
+          showCutscene(seq,showEnd);
+        } else showEnd();
+      };
       if(pc1&&pc1.end&&!cutSeen(ekey)){
         markCutSeen(ekey);
-        showCutscene(pc1.end,showEnd);
-      } else showEnd();
+        showCutscene(pc1.end,playChain);
+      } else playChain();
       document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped";
     }
   }

@@ -1,6 +1,8 @@
 /*
  * story.js - display metadata for the world map, lore and characters.
- * Faithfully matches the original Run 3 path structure with 48 tunnels.
+ * 30 original Run 3 paths (ids 0-29) plus 6 custom extended tunnels
+ * (ids 30-35): side spurs F/S/V, the small Wormhole X at the end of
+ * Primary, and the Far Shore / Far Drift on the other side.
  * Characters unlock through gameplay (clearing tunnels), no power cell cost.
  */
 "use strict";
@@ -74,9 +76,11 @@
     { img: "map_battery.png", x: 1070, y: 100, w: 36, h: 36, opacity: 0.4 },
     { img: "map_planetoidbelt0.png", x: 300, y: 130, w: 60, h: 60, opacity: 0.25 },
     { img: "map_planetoidbelt1.png", x: 850, y: 160, w: 50, h: 50, opacity: 0.25 },
+    { img: "map_wormhole.png", x: 2400, y: 300, w: 44, h: 44, opacity: 0.7 },
+    { img: "map_planet.png", x: 3050, y: 320, w: 56, h: 56, opacity: 0.5 },
   ];
 
-  /* Tunnel map — 48 tunnels matching original Run 3 */
+  /* Tunnel map — 30 original Run 3 paths + 6 custom extended tunnels */
   var T = [
     /* ===== ORIGINAL PATHS ===== */
     { id: 0, kind: "name", name: "Primary", col: "#7dd3fc", x: 0, y: 0,
@@ -171,30 +175,53 @@
     { id: 29, kind: "letter", name: "W", col: "#34d399", x: 400, y: 420,
       music: "WormholeToSomewhere",
       lore: "Hexagonal corridors. The Duplicator got lost here." },
+
+    /* ===== EXTENDED TUNNELS (custom) ===== */
+    { id: 30, kind: "letter", name: "F", col: "#5eead4", x: 1650, y: 140,
+      music: "LeaveTheSolarSystem",
+      lore: "A shortcut spur off the Primary tunnel. The Skater swears it saves time." },
+    { id: 31, kind: "letter", name: "S", col: "#bfdbfe", x: 650, y: 520,
+      music: "CrumblingWalls",
+      lore: "Snow-dusted corridors past Winter. Quiet, cold, easy to get lost in." },
+    { id: 32, kind: "letter", name: "V", col: "#a78bfa", x: 1500, y: 80,
+      music: "TravelTheGalaxy",
+      lore: "Box-lined halls beyond the Boxes tunnel. Somebody has been stacking." },
+    { id: 33, kind: "letter", name: "Wormhole X", col: "#c084fc", x: 2400, y: 300,
+      music: "WormholeToSomewhere",
+      lore: "A small, freshly-formed wormhole at the very end of the Primary tunnel." },
+    { id: 34, kind: "name", name: "Far Shore", col: "#67e8f9", x: 2620, y: 220,
+      music: "WormholeToSomewhere",
+      lore: "The far side of Wormhole X. Strange light, unfamiliar angles." },
+    { id: 35, kind: "name", name: "Far Drift", col: "#f0abfc", x: 3000, y: 300,
+      music: "TheVoid",
+      lore: "Deep drift beyond the Far Shore. The way back is a long one." },
   ];
 
-  /* Branching edges � unlock topology from the original game's
+  /* Branching edges � unlock topology from the original game's
      explorelevels (unlockPath/unlockPoint); Primary seeds the early map */
   var EDGES = [
-    [0, [5, 6, 8, 9, 10, 12, 13, 14, 28]], /* Primary -> A,B,G,L,M,Winter,Dark,Boxes,U */
+    [0, [5, 6, 8, 9, 10, 12, 13, 14, 28, 30, 33]], /* Primary -> A,B,G,L,M,Winter,Dark,Boxes,U,F + Wormhole X */
     [1, [2, 3]],          /* Home0 -> Home1, Home2 */
     [2, [4]],             /* Home1 -> Home3 */
     [6, [5, 22]],         /* B -> A, N */
     [9, [11]],            /* L -> T */
     [10, [16]],           /* M -> River */
-    [12, [1, 29]],        /* Winter -> Home0, W */
+    [12, [1, 29, 31]],    /* Winter -> Home0, W, S */
     [13, [15, 24]],       /* Dark -> Memory, NewlyFormed */
-    [14, [27]],           /* Boxes -> Coordination */
+    [14, [27, 32]],       /* Boxes -> Coordination, V */
     [17, [23, 25]],       /* WormholeC -> Space, Runway0 */
     [18, [20, 21]],       /* WormholeH -> J, K */
     [19, [17, 18]],       /* WormholeI -> C, H */
     [22, [19]],           /* WormholeN -> I */
     [25, [26]],           /* Runway0 -> Runway1 */
     [28, [7]],            /* U -> D */
+    [33, [34]],           /* Wormhole X -> Far Shore (through the small wormhole) */
+    [34, [35]],           /* Far Shore -> Far Drift */
   ];
 
-  /* NOTE: tunnels 0-29 are the original game's 30 map paths (no invented
-     tunnels). Node positions are the original first waypoints. */
+  /* NOTE: tunnels 0-29 are the original game's 30 map paths; 30-35 are
+     custom extended tunnels. Node positions are the original first
+     waypoints (custom ones are hand-placed, node = path start). */
 
   /* Rename beats */
   var RENAME = {

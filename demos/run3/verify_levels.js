@@ -15,6 +15,13 @@ const EXPECT = [
   [13, 25, null],
   [23, 12, null], // procedural fallback (no baked data)
   [29, 3, null],
+  // custom extended tunnels (procedural, no baked data)
+  [30, 8, null],
+  [31, 10, null],
+  [32, 7, null],
+  [33, 6, null],
+  [34, 8, null],
+  [35, 10, null],
 ];
 
 (async () => {
@@ -29,7 +36,7 @@ const EXPECT = [
   }
   e.run3_init(12345);
   console.log("tunnel_count =", e.run3_tunnel_count());
-  if (e.run3_tunnel_count() !== 30) throw new Error("bad tunnel count");
+  if (e.run3_tunnel_count() !== 36) throw new Error("bad tunnel count");
 
   for (const [tun, count, first] of EXPECT) {
     const got = e.run3_levels_in(tun);

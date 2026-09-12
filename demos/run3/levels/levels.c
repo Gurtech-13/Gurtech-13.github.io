@@ -12,7 +12,7 @@
  */
 #include "../run3.h"
 
-const uint16_t NTUNNELS = 30;
+const uint16_t NTUNNELS = 36;
 
 const tunnel_t TUNNELS[MAX_TUNNELS] = {
   /* =================================================================
@@ -109,5 +109,29 @@ const tunnel_t TUNNELS[MAX_TUNNELS] = {
 
   /* 29 Side Path W     tunnel4,4 — side path W (3 levels) */
   { 4, 4, 4, 3, 3, 8, 3.55, 0.029, 4.30, 0.053, 0.0021, 0.15, 0.70 },
+
+  /* =================================================================
+   * EXTENDED TUNNELS — custom paths past the original map (procedural
+   * hazards like Wormhole Space: no baked bitmaps, engine-generated).
+   * ================================================================= */
+
+  /* 30 Side Path F     tunnel8,2 — shortcut spur off Primary (8 levels) */
+  { 8, 2, 0, 8, 8, 15, 3.40, 0.028, 4.20, 0.050, 0.0020, 0.14, 1.00 },
+
+  /* 31 Side Path S     tunnel6,3 — snowy spur past Winter (10 levels) */
+  { 6, 3, 0, 10, 6, 12, 3.55, 0.029, 4.40, 0.053, 0.0021, 0.15, 0.85 },
+
+  /* 32 Side Path V     tunnel4,6 — box-lined halls past Boxes (7 levels) */
+  { 4, 6, 3, 7, 6, 12, 3.60, 0.030, 4.50, 0.055, 0.0022, 0.16, 0.70 },
+
+  /* 33 Wormhole X      tunnel5,3 — small fresh wormhole at Primary's end (6) */
+  { 5, 3, 2, 6, 6, 15, 4.10, 0.035, 5.30, 0.068, 0.0025, 0.20, 0.85 },
+
+  /* 34 Far Shore        tunnel7,3 — far side of Wormhole X (8 levels) */
+  { 7, 3, 1, 8, 6, 12, 4.00, 0.034, 5.20, 0.065, 0.0025, 0.20, 1.00 },
+
+  /* 35 Far Drift        tunnel5,4 — deep drift beyond the Shore (10 levels) */
+  { 5, 4, 4, 10, 8, 18, 4.30, 0.037, 5.70, 0.072, 0.0026, 0.21, 0.85 },
 };
-/* NOTE: only the 30 original Run 3 tunnels ship (0-29). No extended/new stuff. */
+/* NOTE: tunnels 0-29 are the original Run 3 paths; 30+ are custom extended
+   tunnels (procedural hazards, no baked bitmaps). */
