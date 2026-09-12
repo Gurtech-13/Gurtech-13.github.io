@@ -159,9 +159,15 @@ uint32_t *run3_buffer(void) { return fb; }
 
 /* ==================== PROJECTION ==================== */
 
+/* Camera height (world units, tube space): reframed every frame so the
+   grounded runner's feet sit at the top of the lower third (y = 2H/3).
+   The camera drops toward the runner's wall; the horizon (vanishing
+   point CY) is unchanged since the offset scales with depth. */
+static double cam_y = 0.0;
+
 static void proj(double x, double y, double z, double *sx, double *sy) {
   double d = DCAM + z; double s = FOCAL / d;
-  *sx = CX + x * s; *sy = CY - y * s;
+  *sx = CX + x * s; *sy = CY - (y - cam_y) * s;
 }
 static void corner(int c, double *x, double *y, double R) {
   double a = -PI/2.0 - PI/(double)G.shape + TAU*(double)c/(double)G.shape + G.rot;
@@ -348,6 +354,9 @@ void render_frame(void) {
     fill_rect(star_x[s], star_y[s], star_s[s], star_s[s], star_c[s]);
 
   double R = tube_R();
+  /* grounded feet (world y=-R at z=0) -> screen 2H/3: with
+     sy = CY+(R+cam_y)*FOCAL/DCAM, cam_y = (2H/3-CY)*DCAM/FOCAL - R */
+  cam_y = ((2.0 * (double)H / 3.0) - (double)CY) * (DCAM / FOCAL) - R;
   double front = G.prog;
   double tile = G.tile;
   int gateRow = (int)G.rowEnd;
