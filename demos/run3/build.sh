@@ -26,6 +26,7 @@ fi
   -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height \
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
+  -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
   -Wl,--export=run3_enter_map -Wl,--export=run3_map_click -Wl,--export=run3_map_hover \
   -Wl,--export=run3_map_scroll -Wl,--export=run3_map_scroll_y -Wl,--export=run3_map_scroll_x -Wl,--export=run3_map_scroll_delta -Wl,--export=run3_map_selected \
   -Wl,--export=run3_map_hovered -Wl,--export=run3_map_set_hover \

@@ -31,6 +31,10 @@ static uint32_t g_infSeed;      /* infinite mode seed */
 /* shop state (exported to host) */
 static int32_t g_powercells;
 
+/* low-power light level 0..1 (theme 5 tunnels: lights fade out and back
+   along the run; the host also ducks the music with it) */
+static double g_power = 1.0;
+
 /* ---------------- math ---------------- */
 double ssin(double x) {
   x -= TAU * (double)((long long)(x / TAU));
@@ -481,6 +485,7 @@ void run3_init(uint32_t seed) {
   g_infSeed = h32(seed ^ 0xdeadbeefu);
   render_init_stars(seed);
   g_powercells = 0;
+  g_power = 1.0;
   if (NTUNNELS > 0) {
     G.tun = 0;
     g_seedT = h32(h32(seed) ^ (uint32_t)(G.tun * 2654435761u) ^ 0x9e3779b9u);
@@ -598,6 +603,22 @@ void run3_step(double dt) {
   if (dt <= 0.0) dt = 1.0 / 60.0;
   if (dt > 0.1) dt = 0.1;
   int n = G.shape, k = G.k;
+
+  /* low-power lights: 150-row cycle along the run — on, smooth fade out,
+     dark stretch, smooth fade back in (mirrors the original triggers) */
+  if (tun()->theme == 5 && G.rowEnd < 900000.0) {
+    double q = G.prog / 150.0;
+    long long qi = (long long)(q < 0.0 ? q - 1.0 : q);
+    double ph = G.prog - 150.0 * (double)qi;
+    double p;
+    if (ph < 100.0) p = 1.0;
+    else if (ph < 112.0) { double t = (ph - 100.0) / 12.0; p = 1.0 - t * t * (3.0 - 2.0 * t); }
+    else if (ph < 138.0) p = 0.0;
+    else { double t = (ph - 138.0) / 12.0; if (t > 1.0) t = 1.0; p = t * t * (3.0 - 2.0 * t); }
+    g_power = p;
+  } else {
+    g_power = 1.0;
+  }
 
   if (G.state == S_RUN) {
     G.prog += G.rowsPer * SPEED_MUL * CHAR_FWD[char_idx()] * dt;
@@ -759,6 +780,30 @@ void run3_add_cells(int32_t n) { g_powercells += n; }
 void run3_spend_cells(int32_t n) { if (g_powercells >= n) g_powercells -= n; }
 int32_t run3_inf_score(void) { return g_infScore; }
 int32_t run3_inf_rows(void) { return g_infRows; }
+
+/* low-power light level for the renderer and the host (music ducking) */
+double run3_power(void) { return g_power; }
+
+/* cutscene staging: hold a tunnel frame behind the dialogue overlay.
+   hold() freezes the just-finished tunnel (end cutscenes); backdrop()
+   seeks to a tunnel/level first (start cutscenes). Neither runs the sim. */
+void run3_cutscene_hold(void) {
+  if (G.rowEnd > 900000.0) return; /* never stage infinite mode */
+  G.state = S_CUT;
+}
+void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl) {
+  if (tunIdx < 0 || tunIdx >= (int)NTUNNELS) return;
+  if (G.rowEnd > 900000.0) return;
+  G.tun = (uint16_t)tunIdx;
+  uint32_t base = h32(0x5eedu);
+  g_seedT = h32(base ^ (uint32_t)(tunIdx * 2654435761u) ^ 0x9e3779b9u);
+  const tunnel_t *t = tun();
+  if (lvl < 0) lvl = 0;
+  if (lvl >= (int)t->levels) lvl = (int)t->levels - 1;
+  g_power = 1.0; /* staged scenes play with the lights on */
+  open_level(lvl);
+  G.state = S_CUT;
+}
 
 /* ==================== MAP MODE ==================== */
 #include "levels/map_assets.h"

@@ -58,8 +58,9 @@ const tunnel_t TUNNELS[MAX_TUNNELS] = {
   /* 12 Winter          tunnel11,2 — ice tunnel (20 levels) */
   { 11, 2, 0, 20, 10, 22, 4.00, 0.034, 5.20, 0.065, 0.0025, 0.20, 1.20 },
 
-  /* 13 Dark            tunnel5,4 — dark void tunnel (25 levels) */
-  { 5, 4, 4, 25, 8, 18, 4.20, 0.036, 5.50, 0.070, 0.0026, 0.21, 0.85 },
+  /* 13 Dark            tunnel5,4 — LOW-POWER tunnel (25 levels):
+     lights fade out and back along the run (theme 5) */
+  { 5, 4, 5, 25, 8, 18, 4.20, 0.036, 5.50, 0.070, 0.0026, 0.21, 0.85 },
 
   /* 14 Boxes           tunnel4,6 — box puzzle tunnel (11 levels) */
   { 4, 6, 3, 11, 6, 15, 3.60, 0.030, 4.50, 0.055, 0.0022, 0.16, 0.70 },

@@ -392,6 +392,12 @@ void render_frame(void) {
       uint32_t col = mixc(base, sky, fog);
       int isGate = (ri == gateRow);
       if (isGate) col = mixc(col, rgb(255,236,170), 0.55);
+      if (lpw) {
+        /* low-power tunnel: tiles fade with the light level (the host ducks
+           the music along). Runner and stars stay lit. */
+        double pw = run3_power();
+        if (pw < 1.0) col = mixc(col, rgb(2,3,8), (1.0 - pw) * 0.92);
+      }
       uint32_t holeCol = mixc(voidc, sky, fog * 0.35);
 
       for (int l = 0; l < k; l++) {
@@ -437,7 +443,9 @@ void render_frame(void) {
     }
   }
 
-  draw_runner(R);
+  /* cutscene staging: the tunnel is the backdrop, the cast plays in the
+     HTML overlay — no runner sprite on stage */
+  if (G.state != S_CUT) draw_runner(R);
 }
 
 /* ==================== TEXT HELPERS (forward decl for map) ==================== */

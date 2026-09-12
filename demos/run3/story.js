@@ -124,7 +124,7 @@
       lore: "Frozen tunnels where ice coats every surface." },
     { id: 13, kind: "name", name: "Dark", col: "#1e1b4b", x: 1000, y: 212,
       music: "TheVoid",
-      lore: "Almost no light reaches here. The Ghost navigates by feel." },
+      lore: "The Low-Power Tunnel. The lights fade in and out — and the music goes with them." },
     { id: 14, kind: "name", name: "Boxes", col: "#a78bfa", x: 1200, y: 240,
       music: "TravelTheGalaxy",
       lore: "Movable boxes block the path. Push them aside." },

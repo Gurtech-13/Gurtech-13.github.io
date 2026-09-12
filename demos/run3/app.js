@@ -9,6 +9,7 @@
   var CUT = window.STORY_CUT || {};
   var PATH_CUT = window.STORY_PATH_CUT || [];
   var END_CHAIN = window.STORY_END_CHAIN || {};
+  var CAST = window.STORY_CAST || {};
 
   var cv, ctx, imageData, view, words, exps;
   var W = 1280, H = 720; // will be updated from WASM after load (1280x720 fullscreen)
@@ -97,9 +98,14 @@
       return [{ m: "New hints unlocked! Replay the Coordination Challenges to view them.", small: false, x: 0, y: 120 }];
     return CUT[name] || null;
   }
-  /* Positioned-bubble cutscene viewer. The original dialog calls carry each
-     bubble's on-screen position (dialog units, /2.5 = px on the 800x600
-     stage, center origin) — positions only, no speaker tracking. */
+  /* Positioned-bubble cutscene viewer, staged like the original: the live
+     tunnel renders behind (see S_CUT), the cast stands left/right, and the
+     bubble's side brings the nearer portrait forward. */
+  function charPortrait(cid) {
+    var c = CHARS[cid];
+    if (!c) return null;
+    return "assets/images/" + (c.frontImg || c.img);
+  }
   function showCutscene(name, cb) {
     var lines = cutLines(name);
     if (!lines || !lines.length) { if (cb) cb(); return; }
@@ -107,8 +113,24 @@
         stage = document.getElementById("cutstage"),
         bub = document.getElementById("cutbubble"),
         txt = document.getElementById("cuttext"),
-        prog = document.getElementById("cutprog");
+        prog = document.getElementById("cutprog"),
+        leftImg = document.getElementById("cutleft"),
+        rightImg = document.getElementById("cutright");
     document.getElementById("cuttitle").textContent = cutTitle(name);
+    var cast = CAST[name] || [];
+    stage.classList.toggle("solo", cast.length <= 1);
+    function setActor(el, cid) {
+      el.classList.remove("show", "active");
+      el.removeAttribute("src");
+      if (cid == null) return;
+      var src = charPortrait(cid);
+      if (!src) return;
+      el.onerror = function () { el.classList.remove("show", "active"); };
+      el.src = src;
+      el.classList.add("show");
+    }
+    setActor(leftImg, cast.length > 0 ? cast[0] : null);
+    setActor(rightImg, cast.length > 1 ? cast[1] : null);
     var i = 0, done = false;
     view.classList.add("on");
     function place(L) {
@@ -137,6 +159,10 @@
       bub.className = "cutbubble" + (L.small ? " small" : "");
       prog.textContent = (i < lines.length) ? (i + "/" + lines.length) : cutTitle(name);
       place(L);
+      /* bubble side cues the speaker: nearer portrait steps forward */
+      var side = (typeof L.x === "number") ? (L.x < 0 ? 0 : 1) : 0;
+      leftImg.classList.toggle("active", cast.length > 0 && side === 0);
+      rightImg.classList.toggle("active", cast.length > 1 && side === 1);
     }
     document.getElementById("cutbtn").onclick = function (ev) { if (ev) ev.stopPropagation(); next(); };
     view.onclick = function () { next(); };
@@ -175,6 +201,10 @@
       try { exps.render_map(); } catch(e) {}
       blit(); acc=0; return;
     }
+    if (st===8) { /* S_CUT: staged cutscene backdrop — render, never step */
+      try { exps.render_frame(); } catch(e) {}
+      blit(); acc=0; return;
+    }
 
     /* game mode */
     inGame=true;
@@ -185,6 +215,15 @@
     try { exps.render_frame(); } catch(e) {}
     blit();
     observe();
+    /* low-power tunnels duck the music with the lights */
+    try {
+      if (musicAudio && !musicMuted && exps.run3_power) {
+        var pw = exps.run3_power();
+        if (!(pw >= 0)) pw = 1;
+        if (pw > 1) pw = 1;
+        musicAudio.volume = save.musicVol * pw;
+      }
+    } catch(e) {}
   }
   function blit() {
     if(!words || !view) return;
@@ -253,6 +292,8 @@
       };
       if(pc1&&pc1.end&&!cutSeen(ekey)){
         markCutSeen(ekey);
+        /* freeze the finished tunnel as the stage backdrop (no runner) */
+        try { if (exps.run3_cutscene_hold) exps.run3_cutscene_hold(); } catch(e) {}
         showCutscene(pc1.end,playChain);
       } else playChain();
       document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped";
@@ -372,6 +413,8 @@
         var pc0=PATH_CUT[sel], skey="s"+sel;
         if(pc0&&pc0.start&&startLvl===0&&!cutSeen(skey)){
           markCutSeen(skey);
+          /* stage the tunnel behind the opening scene, then play it */
+          try { if (exps.run3_cutscene_backdrop) exps.run3_cutscene_backdrop(sel,startLvl); } catch(e) {}
           showCutscene(pc0.start,function(){beginPlay(sel,startLvl);});
         } else {
           beginPlay(sel,startLvl);
