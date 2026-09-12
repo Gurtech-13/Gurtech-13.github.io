@@ -27,8 +27,12 @@ static uint16_t g_crumble[MAXN][MAXK][MAPW]; /* wave timer, centiseconds */
 static int g_armedN = 0;
 static double g_crumbAcc = 0.0;  /* fractional centiseconds carried between steps */
 static int32_t g_dislodged = 0;
-/* hint route (H): on/needs a rebuild/waypoint count */
+/* hint route (H): on/needs a rebuild/waypoint count. The route is planned
+   from the runner's live position (row + lane), so it behaves as a GPS rather
+   than a route frozen where H was pressed: g_hintRow0/g_hintCol0 remember the
+   origin it was planned from. */
 static int g_hintOn = 0, g_hintDirty = 0, g_hintN = 0;
+static int g_hintRow0 = -1, g_hintCol0 = -1;
 
 static double g_levelRows[MAX_LEVELS];
 static double g_rowStart[MAX_LEVELS + 1];
@@ -60,6 +64,7 @@ static double g_prevProg = 0.0;    /* last prog seen (glimpse row clock) */
 /* staged scene camera, continuous: side -1..1 (pan/roll), lift -1..1
    (height); the host eases both, so they are never quantised */
 static double g_stageSide = 0.0, g_stageLift = 0.0;
+static double cam_rot_target(void); /* view roll for the current position */
 void run3_stage_cam(double side, double lift) {
   if (side < -1.0) side = -1.0;
   if (side > 1.0) side = 1.0;
@@ -638,7 +643,10 @@ int run3_tile_hit(int rowAbs, double ring) { return tile_hit(rowAbs, ring); }
    tube surface is an (n*k)-by-rows grid (col = side*k + lane, wrapping), so
    the route is a forward walk: run one row at a time with a little lateral
    drift, or leap over a gap of up to HINT_LEAP rows. Crumbling tiles are
-   avoided while an alternative exists, and fallen ones are never used. */
+   avoided while an alternative exists, and fallen ones are never used.
+   The route is replanned whenever the runner crosses a row or a lane, so the
+   dots always lead on from where the player actually is (a live GPS, not a
+   pre-planned line). */
 #define HINT_MAX 600
 #define HINT_COLS (MAXN * MAXK)
 #define HINT_MAXDC 2     /* lanes of drift over one row of running */
@@ -707,9 +715,19 @@ static int hint_pass(int r0, int R, int n, int k, int c0, int avoidCrumb) {
   return best;
 }
 
+/* the runner's surface column (side*k + lane), -1 when there is no tube */
+static int hint_col(void) {
+  int n = G.shape, k = G.k;
+  if (n <= 0 || n > MAXN || k <= 0 || k > MAXK) return -1;
+  return wrap_side(G.ring, k, n) * k + wrap_lane(G.ring, k);
+}
+
 static void hint_build(void) {
   g_hintDirty = 0;
   g_hintN = 0;
+  /* the origin this route is planned from (also what the live replan tests) */
+  g_hintRow0 = (int)G.prog;
+  g_hintCol0 = hint_col();
   int n = G.shape, k = G.k;
   if (n <= 0 || n > MAXN || k <= 0 || k > MAXK) return;
   int N = n * k;
@@ -747,7 +765,11 @@ static void hint_build(void) {
 void run3_hint_toggle(void) { g_hintOn = !g_hintOn; g_hintDirty = 1; }
 int run3_hint_on(void) { return g_hintOn; }
 int run3_hint_count(void) {
-  if (g_hintOn && g_hintDirty) hint_build();
+  if (!g_hintOn) return 0;
+  /* replan from the live position: the runner crossing a row or a lane is
+     exactly when the old plan stops leading on from where they are */
+  if (g_hintDirty || (int)G.prog != g_hintRow0 || hint_col() != g_hintCol0)
+    hint_build();
   return g_hintN;
 }
 int run3_hint_row(int i) { return (i >= 0 && i < g_hintN) ? g_hintRow[i] : 0; }
@@ -1054,8 +1076,7 @@ void run3_step(double dt) {
      wall (not the live ring: mid-air drift must not swing gravity).
      Without the wrap, the wrap-around corner (side n-1 -> 0) eases almost a
      full turn instead of one step like every other corner. */
-   int gs = G.gravSide < n ? G.gravSide : 0;
-    double target2 = -(TAU * (double)gs) / (double)n + g_rotOff;
+    double target2 = cam_rot_target();
     if (G.state == S_CUT || G.state == S_GATE) target2 += -g_stageSide * 0.28;
   double d = target2 - G.rot;
   while (d > PI) d -= TAU;
@@ -1144,6 +1165,13 @@ uint32_t run3_level_color0(void) { return g_col0; }
 uint32_t run3_level_color1(void) { return g_col1; }
 int32_t run3_level_music(void) { return g_mus; }
 
+/* the view roll the camera holds at the current position (the same target
+   the runner's camera eases toward in run3_step) */
+static double cam_rot_target(void) {
+  int n = G.shape > 0 ? G.shape : 1;
+  int gs = G.gravSide < n ? G.gravSide : 0;
+  return -(TAU * (double)gs) / (double)n + g_rotOff;
+}
 /* cutscene staging: hold a tunnel frame behind the dialogue overlay.
    hold() freezes the just-finished tunnel (end cutscenes); backdrop()
    seeks to a tunnel/level first (start cutscenes). Neither runs the sim. */
@@ -1156,7 +1184,13 @@ void run3_cutscene_hold(void) {
 void run3_cutscene_resume(void) {
   if (G.state == S_CUT) G.state = S_RUN;
 }
-void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl) {
+/* stage level lvl of tunnel tunIdx. atEnd stages the TAIL of the level
+   instead of its head: only a tunnel's opening scene happens at the start of
+   a tunnel, while a mid-tunnel scene fires as that checkpoint is completed
+   and a tunnel's end scene is the end of its last level — staging those at
+   the level start shows the wrong stretch of tunnel from the wrong camera
+   angle. */
+static void backdrop_at(int32_t tunIdx, int32_t lvl, int atEnd) {
   if (tunIdx < 0 || tunIdx >= (int)NTUNNELS) return;
   if (G.rowEnd > 900000.0) return;
   G.tun = (uint16_t)tunIdx;
@@ -1167,8 +1201,18 @@ void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl) {
   if (lvl >= (int)t->levels) lvl = (int)t->levels - 1;
   g_power = 1.0; /* staged scenes play with the lights on */
   open_level(lvl);
+  if (atEnd && G.rowEnd < 900000.0) G.prog = G.rowEnd - 0.001;
+  /* load the camera angle for the staged spot instead of easing in from the
+     level-start roll (open_level resets the view) */
+  G.rot = G.rotT = cam_rot_target();
   G.state = S_CUT;
   g_stageSide = 0; g_stageLift = 0;
+}
+void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl) {
+  backdrop_at(tunIdx, lvl, 0);
+}
+void run3_cutscene_backdrop_end(int32_t tunIdx, int32_t lvl) {
+  backdrop_at(tunIdx, lvl, 1);
 }
 
 /* ==================== MAP MODE ==================== */

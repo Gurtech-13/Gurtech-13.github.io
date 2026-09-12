@@ -23,10 +23,10 @@ fi
   -Wl,--export=run3_side -Wl,--export=run3_lane -Wl,--export=run3_ring \
   -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows \
   -Wl,--export=run3_tile -Wl,--export=run3_solid -Wl,--export=run3_tile_tex -Wl,--export=run3_tile_hit \
-  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height \
+  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_sky \
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
-  -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
+  -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_backdrop_end -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
   -Wl,--export=run3_cutscene_resume -Wl,--export=run3_level_color0 -Wl,--export=run3_level_color1 -Wl,--export=run3_level_music -Wl,--export=run3_stage_cam -Wl,--export=run3_dislodged -Wl,--export=run3_is_inf \
   -Wl,--export=run3_stage_liftf -Wl,--export=run3_stage_sidef \
   -Wl,--export=run3_stage_actor -Wl,--export=run3_stage_prop \

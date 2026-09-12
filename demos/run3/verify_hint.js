@@ -18,7 +18,10 @@ const HINT_MAXDC = 2, HINT_LEAPDC = 6;
     if (typeof e[n] !== "function") throw new Error("missing export " + n);
 
   const cases = [[0, 0], [0, 3], [0, 7], [0, 9], [2, 2], [5, 4], [8, 3], [13, 5],
-                 [23, 0], [28, 0], [30, 0], [31, 0], [32, 0], [33, 0], [34, 0], [35, 0]];
+                 [23, 0], [28, 0], [30, 0], [31, 0], [32, 0], [33, 0], [34, 0], [35, 0],
+                 /* Wormhole X runs long now: every added checkpoint must still
+                    have a way through, wall voids and all */
+                 [33, 5], [33, 12], [33, 16], [33, 19]];
   for (const c of cases) {
     const tun = c[0], lvl = c[1];
     e.run3_init(1234);
@@ -54,6 +57,31 @@ const HINT_MAXDC = 2, HINT_LEAPDC = 6;
       throw new Error(`tun${tun} lvl${lvl}: route stops at row ${last} of ${rows} — no way through`);
     console.log(`tun${tun} lvl${lvl} from row ${r0.toFixed(1)}: ${cnt} waypoints, covers ${rows} rows`);
   }
+
+  // live GPS: the route is replanned from the runner's position, so the first
+  // waypoint tracks the runner every frame. A route frozen where H was pressed
+  // would leave row(0) behind while the runner runs off it.
+  e.run3_init(21);
+  e.run3_seek(0, 0);
+  e.run3_set_input(0);
+  for (let i = 0; i < 90; i++) e.run3_step(1 / 60);
+  if (!e.run3_hint_on()) e.run3_hint_toggle();
+  let tracked = 0, lost = 0, moved = 0, first0 = null;
+  for (let i = 0; i < 300; i++) {
+    e.run3_step(1 / 60);
+    if (e.run3_state() !== 1) break; // dead / done / gate: stop watching
+    const pr = e.run3_rowf();
+    const cnt = e.run3_hint_count();
+    if (cnt <= 0) break;
+    const fr = e.run3_hint_row(0);
+    if (first0 === null) first0 = fr;
+    if (fr > first0) moved++;
+    if (fr - pr >= -1.0001 && fr - pr <= 1.0001) tracked++; else lost++;
+  }
+  if (tracked < 60) throw new Error("hint route did not follow the runner (tracked=" + tracked + ")");
+  if (lost) throw new Error("hint route fell behind the runner on " + lost + " frames");
+  if (moved < 5) throw new Error("hint route never advanced with the runner");
+  console.log(`live route: tracked the runner on ${tracked} frames, advanced ${moved} rows`);
 
   // the renderer must actually draw the route as billboards
   e.run3_init(9);

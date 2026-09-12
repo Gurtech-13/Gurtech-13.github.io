@@ -123,6 +123,7 @@ uint32_t h32(uint32_t x);
 /* renderer (render.c) */
 void render_init_stars(uint32_t seed);
 void render_frame(void);
+uint32_t run3_sky(void);   /* background colour of the last frame (tests) */
 
 /* hint route (engine -> renderer): a way to the level end, toggled with H */
 void run3_hint_toggle(void);
@@ -217,7 +218,8 @@ void run3_add_cells(int32_t n);
 void run3_spend_cells(int32_t n);
 
 /* cutscene staging + low-power lights (implemented in run3.c) */
-void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl); /* seek + hold frame */
+void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl); /* seek level head + hold */
+void run3_cutscene_backdrop_end(int32_t tunIdx, int32_t lvl); /* seek level tail + hold */
 void run3_cutscene_hold(void);                            /* freeze current frame */
 void run3_cutscene_resume(void);                          /* unfreeze, keep going */
 void run3_stage_cam(double side, double lift);                  /* staged camera angle */

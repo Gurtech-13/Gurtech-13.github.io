@@ -192,17 +192,22 @@
      (8 earned). app.js queues it at the next level end once eligible. */
 
   /* Replay stage per cutscene (tunnel + level for the S_CUT backdrop).
-     end:true resolves to the tunnel's last level at replay time. */
+     end:true resolves to the tunnel's last level at replay time.
+     at: "start" means the scene really plays at the tunnel's opening, so the
+     backdrop is that level's head; "end" (the default) means the scene plays
+     as a checkpoint is completed, so the backdrop is that level's TAIL —
+     staging it at the level head would show the wrong stretch of tunnel and
+     the wrong camera angle. */
   var STAGE = global.STORY_STAGE || {};
   var i, pc = global.STORY_PATH_CUT || [];
   for (i = 0; i < pc.length; i++) {
-    if (pc[i] && pc[i].end && !STAGE[pc[i].end]) STAGE[pc[i].end] = { tun: i, end: true };
-    if (pc[i] && pc[i].start && !STAGE[pc[i].start]) STAGE[pc[i].start] = { tun: i, lvl: 0 };
+    if (pc[i] && pc[i].end && !STAGE[pc[i].end]) STAGE[pc[i].end] = { tun: i, end: true, at: "end" };
+    if (pc[i] && pc[i].start && !STAGE[pc[i].start]) STAGE[pc[i].start] = { tun: i, lvl: 0, at: "start" };
   }
-  MID_CUTS.forEach(function (m) { STAGE[m.cut] = { tun: m.tun, lvl: m.lvl }; });
+  MID_CUTS.forEach(function (m) { STAGE[m.cut] = { tun: m.tun, lvl: m.lvl, at: "end" }; });
   var chain = global.STORY_END_CHAIN || {};
   Object.keys(chain).forEach(function (t) {
-    if (!STAGE[chain[t]]) STAGE[chain[t]] = { tun: +t, end: true };
+    if (!STAGE[chain[t]]) STAGE[chain[t]] = { tun: +t, end: true, at: "end" };
   });
   global.STORY_STAGE = STAGE;
 

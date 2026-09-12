@@ -876,7 +876,12 @@
     try {
       if (st && exps.run3_cutscene_backdrop) {
         var lvl = st.end ? exps.run3_levels_in(st.tun) - 1 : st.lvl;
-        exps.run3_cutscene_backdrop(st.tun, lvl);
+        /* only a tunnel-opening scene stages at the level head; every other
+           scene plays as its checkpoint completes, so it stages at the tail */
+        if (st.at !== "start" && exps.run3_cutscene_backdrop_end)
+          exps.run3_cutscene_backdrop_end(st.tun, lvl);
+        else
+          exps.run3_cutscene_backdrop(st.tun, lvl);
       } else if (exps.run3_cutscene_hold) exps.run3_cutscene_hold();
     } catch (e3) {}
     showCutscene(name, back);

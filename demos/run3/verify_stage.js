@@ -243,5 +243,82 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
       throw new Error("timeline never places a cast in " + name);
   }
   console.log(`stage framing OK (${Object.keys(CAMSHOT).length} scenes, continuous camera)`);
+
+  // 4. the staged camera must not punch a hole in the tube wall. A pitched and
+  //    ROLLED scene camera (the authored side pan) swings the far wall right
+  //    onto the view plane; culling those quads leaves the sky showing as a
+  //    strip down the rolled side of the tunnel. Sky is only legitimate at the
+  //    vanishing point, so count background pixels off the centre column.
+  for (const n of ["run3_sky", "run3_cutscene_backdrop", "run3_cutscene_backdrop_end"])
+    if (typeof e[n] !== "function") throw new Error("missing export " + n);
+  const CX = W / 2;
+  function skyOffCentre() {
+    e.render_frame();
+    const sky = e.run3_sky();
+    const fb = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H);
+    let n = 0;
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++)
+        if (Math.abs(x - CX) > 150 && fb[y * W + x] === sky) n++;
+    return n;
+  }
+  // the reproduction: a rolled staged camera on a square tunnel
+  e.run3_init(4);
+  e.run3_seek(0, 0);
+  e.run3_cutscene_backdrop(0, 0);
+  e.run3_stage_cam(0.9, 0.9);
+  e.run3_stage_actor(0, 1, 4, 6, 1);
+  for (let i = 0; i < 60; i++) e.run3_step(1 / 60);
+  const hole = skyOffCentre();
+  if (hole > 50) throw new Error("rolled staged camera shows " + hole + " sky pixels through the wall");
+  // every authored scene, at every framing angle, staged where it really plays
+  let worst = 0, worstAt = "";
+  for (const name of Object.keys(CAMSHOT)) {
+    const st = STAGE[name];
+    if (!st) continue;
+    const lvl = st.end ? e.run3_levels_in(st.tun) - 1 : st.lvl;
+    for (const r of CAMSHOT[name]) {
+      e.run3_init(5);
+      if (st.at === "start") e.run3_cutscene_backdrop(st.tun, lvl);
+      else e.run3_cutscene_backdrop_end(st.tun, lvl);
+      e.run3_stage_actor(0, 1, 4, 6, 1);
+      e.run3_stage_cam(r[1], r[2]);
+      for (let i = 0; i < 45; i++) e.run3_step(1 / 60);
+      const n = skyOffCentre();
+      if (n > worst) { worst = n; worstAt = name; }
+    }
+  }
+  if (worst > 200) throw new Error(`sky through the wall in ${worstAt}: ${worst} px`);
+  console.log(`staged wall OK (rolled repro ${hole} px, worst scene ${worst} px)`);
+
+  // 5. only a tunnel-opening scene stages at the level head; a mid-tunnel
+  //    scene plays as that checkpoint is completed and an end scene is the end
+  //    of the last level, so those stage on the level's TAIL with the camera
+  //    angle loaded for that spot.
+  let startN = 0, endN = 0;
+  for (const name of Object.keys(STAGE)) {
+    const st = STAGE[name];
+    if (st.at !== "start" && st.at !== "end")
+      throw new Error("stage " + name + " has no head/tail marker: " + JSON.stringify(st));
+    if (st.at === "start") {
+      startN++;
+      if (st.lvl !== 0) throw new Error("start scene not at the tunnel opening: " + name);
+    } else {
+      endN++;
+      const lvl = st.end ? e.run3_levels_in(st.tun) - 1 : st.lvl;
+      e.run3_init(5);
+      e.run3_cutscene_backdrop(st.tun, lvl);
+      const head = e.run3_rowf();
+      e.run3_init(5);
+      e.run3_cutscene_backdrop_end(st.tun, lvl);
+      const tail = e.run3_rowf();
+      const rows = e.run3_level_rows();
+      if (!(tail > head + 10 && tail - head <= rows + 0.01))
+        throw new Error(`${name} did not stage on the level tail (head=${head} tail=${tail} rows=${rows})`);
+      if (e.run3_state() !== 8) throw new Error(name + " backdrop did not hold a frame");
+    }
+  }
+  if (!startN || !endN) throw new Error(`no head/tail scenes (start=${startN} end=${endN})`);
+  console.log(`scene staging OK (${endN} scenes stage on the level tail, ${startN} at an opening)`);
   console.log("ALL STAGE CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", (err && err.message) || err); process.exit(1); });

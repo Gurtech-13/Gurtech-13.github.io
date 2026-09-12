@@ -125,8 +125,8 @@ const tunnel_t TUNNELS[MAX_TUNNELS] = {
   /* 32 Side Path V     tunnel4,6 — box-lined halls past Boxes (7 levels) */
   { 4, 6, 3, 7, 6, 12, 3.60, 0.030, 4.50, 0.055, 0.0022, 0.16, 0.70 },
 
-  /* 33 Wormhole X      tunnel5,3 — small fresh wormhole at Primary's end (6) */
-  { 5, 3, 2, 6, 6, 15, 4.10, 0.035, 5.30, 0.068, 0.0025, 0.20, 0.85 },
+  /* 33 Wormhole X      tunnel5,3 — fresh wormhole at Primary's end (20) */
+  { 5, 3, 2, 20, 6, 15, 4.10, 0.035, 5.30, 0.068, 0.0025, 0.20, 0.85 },
 
   /* 34 Far Shore        tunnel7,3 — far side of Wormhole X (8 levels) */
   { 7, 3, 1, 8, 6, 12, 4.00, 0.034, 5.20, 0.065, 0.0025, 0.20, 1.00 },

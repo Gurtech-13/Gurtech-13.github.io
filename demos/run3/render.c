@@ -22,6 +22,7 @@
 #include "levels/assets_data.h"
 
 static uint32_t fb[W * H];
+static uint32_t g_sky = 0; /* background colour of the last rendered frame */
 
 /* ==================== FRAMEBUFFER PRIMITIVES ==================== */
 
@@ -129,6 +130,17 @@ static void blit_sprite_mirrored(int dx, int dy, int dw, int dh,
 
 /* ==================== PALETTE ==================== */
 
+/* depth (rotated view space) at which a node is too close to the view plane
+   for its projection to mean anything. A quad is dropped only when one of its
+   corners reaches this, so the cutoff decides how far a tile may run *towards*
+   the camera and still draw: a pitched and rolled camera (the staged cutscene
+   angles) swings the near end of a wall tile right up to the plane, and a
+   tight cutoff drops that whole tile, leaving background showing through the
+   wall down the rolled side. The huge coordinates a near-plane projection
+   produces are clamped to the framebuffer when the quad is filled, so only
+   cull nodes sitting essentially on the plane. */
+#define VIEWPLANE_EPS 0.25
+
 static const uint32_t PAL[5][4] = {
   { rgb(10,12,26),  rgb(130,185,255), rgb(64,100,165), rgb(36,58,98) },
   { rgb(24,8,26),   rgb(255,150,235), rgb(170,84,152), rgb(104,48,94) },
@@ -156,6 +168,7 @@ void render_init_stars(uint32_t seed) {
   }
 }
 uint32_t *run3_buffer(void) { return fb; }
+uint32_t run3_sky(void) { return g_sky; } /* background of the last frame */
 
 /* ==================== PROJECTION ==================== */
 
@@ -389,7 +402,7 @@ static void draw_stage_actor(double R, int ch, double ring, double zrow) {
   double mx, my, px, py, dd;
   ring_point(ring, R, &mx, &my);
   proj(mx, my, zrow * G.tile, &px, &py, &dd);
-  if (dd < 0.4) return;
+  if (dd < VIEWPLANE_EPS) return;
   int cm = ch < 0 ? 0 : (ch >= CHAR_COUNT ? CHAR_COUNT - 1 : ch);
   anim_range_t ar = CHAR_ANIM_RANGE(cm, STATE_RUN, DIR_CENTER);
   int fw = 0, fh = 0;
@@ -413,7 +426,7 @@ static void draw_stage_prop(double R, int kind, double ring, double zrow, double
   double mx, my, px, py, dd;
   ring_point(ring, R, &mx, &my);
   proj(mx, my, zrow * G.tile, &px, &py, &dd);
-  if (dd < 0.4) return;
+  if (dd < VIEWPLANE_EPS) return;
   double wpp = size * G.tile * FOCAL / dd;
   if (wpp < 2.0) wpp = 2.0;
   if (wpp > W / 2) wpp = W / 2;
@@ -459,7 +472,7 @@ static void draw_hint(double R) {
     double mx, my, px, py, dd;
     ring_point(run3_hint_ring(i), R, &mx, &my);
     proj(mx, my, z, &px, &py, &dd);
-    if (dd < 0.4) continue;
+    if (dd < VIEWPLANE_EPS) continue;
     double sc = DCAM / dd;
     if (sc > 1.6) sc = 1.6;
     if (sc < 0.10) continue;
@@ -505,7 +518,8 @@ static void fill_tile_tex(double ax, double ay, double bx, double by,
       proj(xb, yb, z0, &q1x, &q1y, &d1);
       proj(xb, yb, z1, &q2x, &q2y, &d2);
       proj(xa, ya, z1, &q3x, &q3y, &d3);
-      if (d0 < 0.4 || d1 < 0.4 || d2 < 0.4 || d3 < 0.4) continue;
+      if (d0 < VIEWPLANE_EPS || d1 < VIEWPLANE_EPS ||
+          d2 < VIEWPLANE_EPS || d3 < VIEWPLANE_EPS) continue;
       int tx = (int)((u0 + u1) * 0.5 * (double)tex_crumbling_W);
       int ty = (int)((v0 + v1) * 0.5 * (double)tex_crumbling_H);
       if (tx < 0) tx = 0; if (tx >= tex_crumbling_W) tx = tex_crumbling_W - 1;
@@ -534,6 +548,7 @@ void render_frame(void) {
   double lightMul = 1.0;
   if (lpw) lightMul = run3_power();
   uint32_t sky = lpw ? rgb(4,5,14) : PAL[th][0];
+  g_sky = sky; /* exposed so tests can spot background showing through walls */
   for (int i = 0; i < W * H; i++) fb[i] = sky;
   for (int s = 0; s < STARS; s++)
     fill_rect(star_x[s], star_y[s], star_s[s], star_s[s], star_c[s]);
@@ -597,8 +612,9 @@ void render_frame(void) {
         double p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y,dd0,dd1,dd2,dd3;
         proj(ax2,ay2,zFar,&p0x,&p0y,&dd0); proj(bx2,by2,zFar,&p1x,&p1y,&dd1);
         proj(bx2,by2,zn,&p2x,&p2y,&dd2);  proj(ax2,ay2,zn,&p3x,&p3y,&dd3);
-        /* pitched camera: cull quads swung behind the view plane */
-        if (dd0 < 0.4 || dd1 < 0.4 || dd2 < 0.4 || dd3 < 0.4) continue;
+        /* pitched/rolled camera: drop only quads at the view plane */
+        if (dd0 < VIEWPLANE_EPS || dd1 < VIEWPLANE_EPS ||
+            dd2 < VIEWPLANE_EPS || dd3 < VIEWPLANE_EPS) continue;
 
         if (mask & (1u << l)) {
           /* hole: authored gap, or a crumble tile that already fell through */

@@ -19,7 +19,7 @@ const EXPECT = [
   [30, 8, null],
   [31, 10, null],
   [32, 7, null],
-  [33, 6, null],
+  [33, 20, null], /* Wormhole X: extended past a short 6-level hop */
   [34, 8, null],
   [35, 10, null],
 ];
