@@ -462,6 +462,15 @@ void render_frame(void) {
   int n = G.shape, k = G.k;
   int th = G.theme % 5;
   int lpw = is_low_power();
+  /* crumbling-tile texture strength: dims with the lights so a low-power
+     tunnel stays dark, and never fades with distance — spotting a crumble
+     tile ahead is gameplay-relevant */
+  double crumbAlpha = 0.8;
+  if (lpw) {
+    double cp = run3_power();
+    if (cp < 0.15) cp = 0.15;
+    crumbAlpha = 0.8 * cp;
+  }
   uint32_t sky = lpw ? rgb(4,5,14) : PAL[th][0];
   for (int i = 0; i < W * H; i++) fb[i] = sky;
   for (int s = 0; s < STARS; s++)
@@ -544,15 +553,11 @@ void render_frame(void) {
         if (dd0 < 0.4 || dd1 < 0.4 || dd2 < 0.4 || dd3 < 0.4) continue;
 
         if (mask & (1u << l)) {
+          /* hole: authored gap, or a crumble tile that already fell through */
           fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, holeCol);
-          if (zFar < 12.0 && zFar > 0.5) {
-            double fade = 1.0 - zFar / 12.0;
-            int sw2 = (int)(p1x-p0x), sh2 = (int)(p0y-p2y);
-            if (sw2 > 2 && sh2 > 2)
-              blit_sprite((int)p0x,(int)p2y,sw2,sh2, tex_crumbling,tex_crumbling_W,tex_crumbling_H, fade*0.6);
-          }
         } else {
-          /* shaking crumble tile: jitter + darken as it lets go */
+          /* solid tile. A crumbling tile wears the cracked texture (and
+             jitters while it lets go); everything else is the flat tint. */
           double sh = run3_shake(side, ri, l);
           if (sh > 0.0) {
             double amp = sh * 5.0;
@@ -564,6 +569,11 @@ void render_frame(void) {
             col = mixc(col, rgb(2,3,8), sh * 0.9);
           }
           fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, col);
+          if (run3_tile_tex(side, ri, l) == TEX_CRUMBLING) {
+            int sw2 = (int)(p1x-p0x), sh2 = (int)(p0y-p2y);
+            if (sw2 > 2 && sh2 > 2)
+              blit_sprite((int)p0x,(int)p2y,sw2,sh2, tex_crumbling,tex_crumbling_W,tex_crumbling_H, crumbAlpha);
+          }
         }
       }
     }

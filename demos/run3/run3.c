@@ -170,6 +170,18 @@ static int missmask(int side, int i) {
   return (int)(GMAP[side & (MAXN - 1)][i] | GCRUMB[side & (MAXN - 1)][i]);
 }
 int run3_missmask(int side, int rowAbs) { return missmask(side, rowAbs - GMAP_BASE); }
+/* surface texture a tile renders with (the renderer's choice, and what the
+   crumble tests pin): 0 = the flat tint, TEX_CRUMBLING = a crumbling tile
+   still standing, shaking or not. A hole — authored gap or a crumble tile
+   that already fell — has no surface at all. */
+int run3_tile_tex(int side, int rowAbs, int lane) {
+  int i = rowAbs - GMAP_BASE;
+  if (i < 0 || i >= MAPW || side < 0 || side >= MAXN || lane < 0 || lane >= 8) return 0;
+  uint8_t bit = (uint8_t)(1u << lane);
+  if (missmask(side, i) & bit) return 0;
+  if ((GCR0[side][i] & bit) && !(GCRUMB[side][i] & bit)) return TEX_CRUMBLING;
+  return 0;
+}
 /* seconds of shake left on a tile (0 = steady), for the renderer */
 double run3_shake(int side, int rowAbs, int lane) {
   for (int i = 0; i < MAXSHAKE; i++)

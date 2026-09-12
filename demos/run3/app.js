@@ -940,7 +940,9 @@
 
   /* ===== WASM LOAD ===== */
   document.getElementById("status").textContent="Loading run3.wasm\u2026";
-  fetch("run3.wasm",{credentials:"same-origin"})
+  /* version the engine URL too: the 30 MB wasm is otherwise cached forever
+     and a page refresh would keep running an old build */
+  fetch("run3.wasm?v=" + (window.GAME_VERSION || "0"),{credentials:"same-origin"})
     .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return WebAssembly.instantiateStreaming(r,{});})
     .then(function(res){
       exps=res.instance.exports;
