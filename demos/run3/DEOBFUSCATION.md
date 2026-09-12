@@ -9,11 +9,15 @@ lives in — so the decode survives without the original bundle.
 
 | thing | location | committed |
 | --- | --- | --- |
+| decompiled ActionScript sources | `demos/run3/src/` (`bake_src.py`) | yes — 867 classes, 15 MB |
 | decompiler output (all `.as`, assets, level text) | `Run3.swf_Decompiler.com.zip` (repo root) | no — >100 MB, see `.gitignore` |
 | extracted asset tree used by the older analysis scripts | `/tmp/run3assets/…` (`analyze_levels.py`) | no (scratch) |
 
-Nothing in the site reads the zip at runtime: every decoder below writes a
-committed artifact, so a fresh checkout runs with no original files present.
+The decompiled sources ship with the demo: `src/scripts/` is the game's own
+tree as the decompiler emitted it (including the `§`-obfuscated folders), and
+the two classes that only exist outside it sit at `src/`. Nothing in the site
+reads them (or the zip) at runtime — every decoder below writes a committed
+artifact, so a fresh checkout runs with no original files present.
 
 ## Shape of the decompiled source
 
@@ -92,6 +96,7 @@ frame counts and `CHAR_ANIM_RANGE(ch, STATE, DIR)` the run/jump/fall/land ranges
 ## Reproducing
 
 ```bash
+python3 bake_src.py                    # needs the zip (decompiled sources)
 python3 bake_cutscenes.py              # needs the zip (cutscene data)
 python3 levels/bake_levels.py          # needs levels/orig_levels.bin
 python3 levels/bake_map.py             # needs levels/orig_map.json
@@ -101,7 +106,7 @@ node verify_stage.js && node verify_app.js   # data + full-stack smoke tests
 
 ## Not committed / not decoded
 
-* The original bundle and its extracted `.as` tree (size + upstream content).
+* The original bundle itself (100 MB+; the extracted `.as` tree is committed).
 * Original cutscene-only pose sheets: they are not extractable from the packed
   atlases, so staged actors use the gameplay run stance.
 * Speaker-per-line tracking (the bytecode keeps it in obfuscated locals);
