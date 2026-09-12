@@ -187,6 +187,16 @@ static int is_low_power(void) {
   return (G.theme == 5);
 }
 
+/* scale an opaque color toward black (authored per-level tints) */
+static uint32_t shade(uint32_t c, double f) {
+  int r = (int)(((c >> 16) & 0xff) * f);
+  int g = (int)(((c >> 8) & 0xff) * f);
+  int b = (int)((c & 0xff) * f);
+  if (r > 255) r = 255; if (g > 255) g = 255; if (b > 255) b = 255;
+  if (r < 0) r = 0; if (g < 0) g = 0; if (b < 0) b = 0;
+  return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
 /* ==================== CHARACTER RENDERING ==================== */
 
 /*
@@ -357,6 +367,13 @@ void render_frame(void) {
   /* grounded feet (world y=-R at z=0) -> screen 2H/3: with
      sy = CY+(R+cam_y)*FOCAL/DCAM, cam_y = (2H/3-CY)*DCAM/FOCAL - R */
   cam_y = ((2.0 * (double)H / 3.0) - (double)CY) * (DCAM / FOCAL) - R;
+  /* staged scenes also take the authored height offset (no runner to frame) */
+  if (G.state == S_CUT) cam_y += (double)run3_stage_lift() * 0.5;
+  /* authored per-level tile tints (0 = theme palette) */
+  uint32_t lvlC0 = run3_level_color0();
+  uint32_t lvlC1 = run3_level_color1();
+  if (lvlC0) lvlC0 |= 0xFF000000u;
+  if (lvlC1) lvlC1 |= 0xFF000000u;
   double front = G.prog;
   double tile = G.tile;
   int gateRow = (int)G.rowEnd;
@@ -381,7 +398,13 @@ void render_frame(void) {
     for (int side = 0; side < n; side++) {
       int mask = mask_at(side, ri);
       uint32_t base;
-      if (lpw) {
+      if (lvlC0) {
+        /* authored level tint: bright wall, accent neighbors, dim rest */
+        if (side == su) base = lvlC0;
+        else if (side == (su+1)%n || side == (su+n-1)%n)
+          base = lvlC1 ? lvlC1 : shade(lvlC0, 0.62);
+        else base = shade(lvlC0, 0.34);
+      } else if (lpw) {
         base = (side == su) ? LPAL[1] : ((side == (su+1)%n || side == (su+n-1)%n) ? LPAL[2] : LPAL[3]);
       } else {
         if (side == su) base = PAL[th][1];

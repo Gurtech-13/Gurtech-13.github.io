@@ -98,6 +98,73 @@ def solid_layer(suffix):
     return True
 
 
+# levelData music -> small enum (0 = tunnel default). The host maps these
+# to asset files; MapOfTheStars has no mp3 and falls back to default.
+MUSIC_IDS = {
+    "LeaveTheSolarSystem": 1, "TheVoid": 2, "WormholeToSomewhere": 3,
+    "CrumblingWalls": 4, "TravelTheGalaxy": 5, "UnsafeSpeeds": 6,
+    "MapOfTheStars": 7, "none": 8,
+}
+
+# power-trigger fade modes -> enum (glimpse = brief flash, see engine)
+TRIG_MODES = {"instant": 0, "smooth": 1, "fast": 2, "slow": 3,
+              "slowSmooth": 4, "glimpse": 5}
+
+
+def parse_level_extra(parts):
+    """color/music/power/rotation/tileWidth/triggers/winRow per level."""
+    ex = {"color0": 0, "color1": 0, "tilew": 0, "music": 0,
+          "pbase": 255, "rot": 0, "win": 0, "trigs": []}
+    for p in parts:
+        if p.startswith("color0-0x") or p.startswith("color-0x"):
+            try:
+                ex["color0"] = int(p.split("-", 1)[1], 16) & 0xFFFFFF
+            except ValueError:
+                pass
+        elif p.startswith("color1-0x"):
+            try:
+                ex["color1"] = int(p.split("-", 1)[1], 16) & 0xFFFFFF
+            except ValueError:
+                pass
+        elif p.startswith("tileWidth-"):
+            try:
+                ex["tilew"] = max(0, min(600, int(float(p[10:]))))
+            except ValueError:
+                pass
+        elif p.startswith("music-"):
+            ex["music"] = MUSIC_IDS.get(p[6:], 0)
+        elif p.startswith("power-"):
+            try:
+                ex["pbase"] = max(0, min(254, int(round(float(p[6:]) * 254))))
+            except ValueError:
+                pass
+        elif p.startswith("rotation-"):
+            try:
+                ex["rot"] = max(-3600, min(3600, int(round(float(p[9:]) * 10))))
+            except ValueError:
+                pass
+        elif p.startswith("trigger-"):
+            # trigger-condition-z,Z,>~result-power-P[,MODE]  (skip ~if-... ones)
+            # trigger-condition-z,Z,>~result-win
+            if "~if-" in p:
+                continue
+            m = re.match(r"trigger-condition-z,(\d+),>~result-power-([0-9.]+)(?:,([A-Za-z]+))?", p)
+            if m:
+                z = min(65535, int(m.group(1)))
+                try:
+                    pv = max(0, min(254, int(round(float(m.group(2)) * 254))))
+                except ValueError:
+                    continue
+                mode = TRIG_MODES.get(m.group(3) or "smooth", 1)
+                ex["trigs"].append((z, pv, mode))
+                continue
+            m = re.match(r"trigger-condition-z,(\d+),>~result-win$", p)
+            if m:
+                ex["win"] = min(65535, int(m.group(1)))
+    ex["trigs"].sort()
+    return ex
+
+
 def main():
     data = open(SRC, "rb").read().decode("latin-1")
     lines = data.split("\r\n")
@@ -133,7 +200,8 @@ def main():
                         terr.append((m2.group(1), suf))
             n, k = [int(x) for x in layout.replace("tunnel", "").split(",")]
             assert 1 <= n <= 32 and 1 <= k <= 8, (lid, n, k)
-            levels[lid] = {"n": n, "k": k, "spawn": spawn, "terr": terr}
+            levels[lid] = {"n": n, "k": k, "spawn": spawn, "terr": terr,
+                           "ex": parse_level_extra(parts)}
             groups[cur].append(lid)
 
     bitstream = []  # list of 0/1, 1 = solid
@@ -169,7 +237,8 @@ def main():
             assert rows <= 400, (tun, lid, rows)
             bitoff = len(bitstream)
             bitstream += solids
-            baked.append((tun, lid, n, k, rows, L["spawn"] % chunk, bitoff))
+            baked.append((tun, lid, n, k, rows, L["spawn"] % chunk, bitoff,
+                          L["ex"]))
         count = len(baked) - start
         lay = Counter(levels[i]["n"] * 100 + levels[i]["k"] for i in ids)
         if ids:
@@ -205,15 +274,49 @@ def main():
             f.write("  " + ", ".join("0x%02X" % b for b in packed[i:i + 16]) + ",\n")
         f.write("};\n\n")
         f.write("static const baked_level_t BAKED_LEVELS[BAKED_NLEVELS] = {\n")
-        for (tun, lid, n, k, rows, spawn, bitoff) in baked:
+        for (tun, lid, n, k, rows, spawn, bitoff, _ex) in baked:
             f.write("  { %2d, %d, %3d, %3d, 0x%X }, /* t%d id-%d */\n" % (n, k, rows, spawn, bitoff, tun, lid))
         f.write("};\n\n")
+        # per-level presentation/automation, parallel to BAKED_LEVELS.
+        # color0/1: 0xRRGGBB tile tint (0 = theme default). tilew: tileWidth
+        # in hundredths of a tile (0 = tunnel default). music: MUSIC_IDS
+        # (0 = tunnel default). pbase: starting light 0..254 (255 = full).
+        # rot: initial camera roll, deci-degrees. win: early level-end row
+        # (0 = run to the baked end).
+        f.write("/* Per-level look/automation (index = BAKED_LEVELS order). */\n")
+        f.write("static const uint32_t BAKED_COLOR0[BAKED_NLEVELS] = {\n  " +
+                ", ".join("0x%06X" % b[7]["color0"] for b in baked) + ",\n};\n")
+        f.write("static const uint32_t BAKED_COLOR1[BAKED_NLEVELS] = {\n  " +
+                ", ".join("0x%06X" % b[7]["color1"] for b in baked) + ",\n};\n")
+        f.write("static const uint16_t BAKED_TILEW[BAKED_NLEVELS] = {\n  " +
+                ", ".join(str(b[7]["tilew"]) for b in baked) + ",\n};\n")
+        f.write("static const uint8_t BAKED_MUSIC[BAKED_NLEVELS] = {\n  " +
+                ", ".join(str(b[7]["music"]) for b in baked) + ",\n};\n")
+        f.write("static const uint8_t BAKED_PBASE[BAKED_NLEVELS] = {\n  " +
+                ", ".join(str(b[7]["pbase"]) for b in baked) + ",\n};\n")
+        f.write("static const int16_t BAKED_ROT[BAKED_NLEVELS] = {\n  " +
+                ", ".join(str(b[7]["rot"]) for b in baked) + ",\n};\n")
+        f.write("static const uint16_t BAKED_WIN[BAKED_NLEVELS] = {\n  " +
+                ", ".join(str(b[7]["win"]) for b in baked) + ",\n};\n\n")
+        # power triggers, packed (z row << 16) | (power << 8) | mode.
+        trig_flat, trig_start, trig_count = [], [], []
+        for b in baked:
+            trig_start.append(len(trig_flat))
+            trig_count.append(len(b[7]["trigs"]))
+            for (z, pv, mode) in b[7]["trigs"]:
+                trig_flat.append((z << 16) | (pv << 8) | mode)
+        f.write("static const uint32_t BAKED_TRIGS[%d] = {\n  " % max(1, len(trig_flat)) +
+                (", ".join("0x%08X" % t for t in trig_flat) if trig_flat else "0") + ",\n};\n")
+        f.write("static const uint16_t BAKED_TRIG_START[BAKED_NLEVELS] = {\n  " +
+                ", ".join(str(s) for s in trig_start) + ",\n};\n")
+        f.write("static const uint8_t BAKED_TRIG_COUNT[BAKED_NLEVELS] = {\n  " +
+                ", ".join(str(c) for c in trig_count) + ",\n};\n\n")
         # tunnel start/count table in demo tunnel order
         starts, counts = [], []
         idx = 0
         by_tun = {}
-        for bi, (tun, lid, n, k, rows, spawn, bitoff) in enumerate(baked):
-            by_tun.setdefault(tun, []).append(bi)
+        for bi, b in enumerate(baked):
+            by_tun.setdefault(b[0], []).append(bi)
         for tun in range(len(TUN_PATH)):
             lst = by_tun.get(tun, [])
             starts.append(lst[0] if lst else 0)

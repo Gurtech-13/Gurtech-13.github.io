@@ -26,6 +26,13 @@ OUT = os.path.join(HERE, "cutscenes.js")
 
 DATA = open(os.path.join(HERE, "levels", "orig_levels.bin"), "rb").read().decode("latin-1")
 
+# Extra original cutscenes NOT referenced by any path's start/endCutscene but
+# triggered mid-tunnel at level end (found via the scene's staged level +
+# IF_FOLLOWING_LEVEL_REACHED in the decompiled source):
+#   ComingThrough - staged on primary level 9, plays at end of Primary 10,
+#   unlocks the Skater ("Choose your character!").
+EXTRA_CUTSCENES = ["ComingThrough"]
+
 # demo tunnel index -> original path (must match bake_levels.py TUN_PATH)
 # ids 30+ are custom extended tunnels with hand-written dialogue in
 # custom_cutscenes.js (NOT baked here — the zip has no .as for them).
@@ -87,6 +94,28 @@ def extract(z, cname):
                      "scale": sc, "text": " ".join(txt.split()),
                      "x": x, "y": y})
     msgs.sort(key=lambda m: (m["frame"], m["pos"]))
+    # stage cameras: tunnel-camera Point3D setups per frame function
+    # (tunnel.<cam>.position = (x, y, z), original pixels, y+ = high).
+    cams = {}
+    for m in re.finditer(r"Point3D\s*=\s*tunnel\.[^;]{0,60};", d):
+        seg = d[m.start():m.start() + 2500]
+        xyz = re.findall(r"\.([xyz])\s*=\s*(-?[\d.]+)", seg)
+        got = {}
+        for ax, v in xyz[:9]:
+            if ax not in got:
+                try:
+                    got[ax] = float(v)
+                except ValueError:
+                    pass
+        if "x" not in got:
+            continue
+        frame = 0
+        for hpos, hnum in headers:
+            if hpos <= m.start():
+                frame = hnum
+            else:
+                break
+        cams.setdefault(frame, {"x": got.get("x", 0.0), "y": got.get("y", 0.0)})
     # missing positions continue at the previous bubble's spot
     lx, ly = None, None
     out = []
@@ -101,8 +130,8 @@ def extract(z, cname):
             ly = m["y"]
         out.append({"m": m["text"],
                     "small": bool(m["scale"] is not None and m["scale"] < 0.999),
-                    "x": m["x"], "y": m["y"]})
-    return {"file": cands[0], "messages": out}
+                    "x": m["x"], "y": m["y"], "f": m["frame"]})
+    return {"file": cands[0], "messages": out, "cams": cams}
 
 
 def main():
@@ -123,7 +152,8 @@ def main():
 
     z = zipfile.ZipFile(ZIP)
     cut = {}
-    for c in sorted(names):
+    cams = {}
+    for c in sorted(names.union(EXTRA_CUTSCENES)):
         r = extract(z, c)
         if r is None:
             print("  MISSING as for %s" % c)
@@ -131,6 +161,7 @@ def main():
         else:
             print("  %-22s %3d lines (%s)" % (c, len(r["messages"]), r["file"]))
             cut[c] = r["messages"]
+            cams[c] = r["cams"]
 
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("/* cutscenes.js - original Run 3 cutscene dialogue.\n")
@@ -142,8 +173,29 @@ def main():
         tun_cut = [path_cut.get(p, {"start": None, "end": None}) for p in TUN_PATH]
         f.write("  /* start/end cutscene per demo tunnel (index 0-29) */\n")
         f.write("  var PATH_CUT = %s;\n\n" % json.dumps(tun_cut))
+        # stage framing per scene: [[startFrame, side, lift], ...] runs.
+        # side: camera left(-1)/center(0)/right(1) by x; lift: low(-1)/mid(0)/
+        # high(1) by y. Consecutive frames sharing a bucket merge into runs.
+        def bucket(cam):
+            x, y = cam.get("x", 0.0), cam.get("y", 0.0)
+            side = -1 if x < -100 else (1 if x > 100 else 0)
+            lift = 1 if y > 60 else (-1 if y < -60 else 0)
+            return (side, lift)
+        shots = {}
+        for c, fc in cams.items():
+            runs = []
+            for fr in sorted(fc):
+                b = bucket(fc[fr])
+                if runs and runs[-1][1] == b[0] and runs[-1][2] == b[1]:
+                    continue
+                runs.append([fr, b[0], b[1]])
+            if runs and not (len(runs) == 1 and runs[0][1] == 0 and runs[0][2] == 0):
+                shots[c] = runs
+        f.write("  /* stage camera runs per cutscene: [startFrame, side, lift] */\n")
+        f.write("  var CAMSHOT = %s;\n\n" % json.dumps(shots))
         f.write("  global.STORY_CUT = CUT;\n")
         f.write("  global.STORY_PATH_CUT = PATH_CUT;\n")
+        f.write("  global.STORY_CAMSHOT = CAMSHOT;\n")
         f.write("})(typeof window !== \"undefined\" ? window : globalThis);\n")
     total = sum(len(v) for v in cut.values())
     print("wrote %s (%d cutscenes, %d lines)" % (OUT, len(cut), total))

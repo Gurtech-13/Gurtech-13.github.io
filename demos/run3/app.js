@@ -10,6 +10,34 @@
   var PATH_CUT = window.STORY_PATH_CUT || [];
   var END_CHAIN = window.STORY_END_CHAIN || {};
   var CAST = window.STORY_CAST || {};
+  var MID_CUTS = window.STORY_MID_CUTS || [];
+  var STAGE = window.STORY_STAGE || {};
+  var CAMSHOT = window.STORY_CAMSHOT || {};
+  var lastShot = null;
+  function stageCam(name, fr) {
+    /* authored stage framing: switch the S_CUT camera when the shot changes */
+    var runs = CAMSHOT[name], cur = null;
+    if (runs) {
+      for (var i = 0; i < runs.length; i++) {
+        if (runs[i][0] <= fr) cur = runs[i];
+        else break;
+      }
+    }
+    var key = cur ? cur[1] + "," + cur[2] : "0,0";
+    if (key === lastShot) return;
+    lastShot = key;
+    try { if (exps.run3_stage_cam) exps.run3_stage_cam(cur ? cur[1] : 0, cur ? cur[2] : 0); } catch (e) {}
+  }
+  var prevLvl = -1, lastMusLvl = -1;
+  function midKey(tun, lvl) { return "m" + tun + "_" + lvl; }
+  function toast(msg) {
+    var n=document.createElement("div");
+    n.textContent=msg;
+    n.style.cssText="position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.95);color:#fbbf24;padding:12px 24px;border-radius:999px;font-weight:700;font-size:.9rem;z-index:999;box-shadow:0 4px 20px rgba(0,0,0,.5)";
+    document.body.appendChild(n);
+    setTimeout(function(){n.style.opacity="0";},2000);
+    setTimeout(function(){if(n.parentNode)n.parentNode.removeChild(n);},2500);
+  }
 
   var cv, ctx, imageData, view, words, exps;
   var W = 1280, H = 720; // will be updated from WASM after load (1280x720 fullscreen)
@@ -22,15 +50,17 @@
   var LS_KEY = "run3tribute-v3";
   var save;
   function loadSave() {
-    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, cuts: o.cuts||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0 }; } } catch(e) {}
-    return { cleared:[], best:{}, renames:{}, cuts:{}, char:0, musicVol:0.5, powercells:0 };
+    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, cuts: o.cuts||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0, unlockedExtra: o.unlockedExtra||[] }; } } catch(e) {}
+    return { cleared:[], best:{}, renames:{}, cuts:{}, char:0, musicVol:0.5, powercells:0, unlockedExtra:[] };
   }
   function persist() { try { localStorage.setItem(LS_KEY, JSON.stringify(save)); } catch(e) {} }
   save = loadSave();
+  if (!save.unlockedExtra) save.unlockedExtra = [];
 
   function cleared(t) { return save.cleared.indexOf(t)>=0; }
   function unlocked(t) {
     if (t===0) return true;
+    if (save.unlockedExtra.indexOf(t)>=0) return true;
     return EDGES.some(function(e){ return e[0]!==t && e[1].indexOf(t)>=0 && cleared(e[0]); });
   }
   function syncMapToWasm() {
@@ -42,8 +72,15 @@
     }
   }
   function charLocked(cid) {
+    /* the Skater joins in Coming Through (end of Primary 10), not by count */
+    if (cid === 1) return !cutSeen(midKey(0, 9));
     var need = CHARS[cid] ? CHARS[cid].need : 999;
     return save.cleared.length < need;
+  }
+  function charLockText(cid) {
+    if (cid === 1) return "The Skater joins in Coming Through \u2014 clear Primary level 10.";
+    var need = CHARS[cid] ? CHARS[cid].need : 999;
+    return "Clear " + need + " tunnels to unlock. ("+save.cleared.length+"/"+need+")";
   }
   function syncCharsToWasm() {
     if (!exps || !exps.run3_char_set_locked) return;
@@ -73,7 +110,8 @@
   function stopMusic() { if(musicAudio){musicAudio.pause();musicAudio=null;} currentMusic=null; }
   function toggleMusic() {
     musicMuted=!musicMuted;
-    if(musicMuted) stopMusic(); else if(inGame && currentMusic) playMusic(currentMusic);
+    if(musicMuted) stopMusic();
+    else if(inGame) { if(currentMusic) playMusic(currentMusic); else playMusic(levelTrack(curTun)); }
   }
 
   /* ===== STORY CARD ===== */
@@ -115,13 +153,18 @@
         txt = document.getElementById("cuttext"),
         prog = document.getElementById("cutprog"),
         leftImg = document.getElementById("cutleft"),
-        rightImg = document.getElementById("cutright");
-    document.getElementById("cuttitle").textContent = cutTitle(name);
+        rightImg = document.getElementById("cutright"),
+        cutbtn = document.getElementById("cutbtn"),
+        cuttitle = document.getElementById("cuttitle");
+    /* fail open (e.g. stale cached page): never soft-lock the game */
+    if (!view || !stage || !bub || !txt || !cutbtn) { if (cb) cb(); return; }
+    if (cuttitle) cuttitle.textContent = cutTitle(name);
     var cast = CAST[name] || [];
     stage.classList.toggle("solo", cast.length <= 1);
     function setActor(el, cid) {
+      if (!el) return;
       el.classList.remove("show", "active");
-      el.removeAttribute("src");
+      try { el.removeAttribute("src"); } catch (e) {}
       if (cid == null) return;
       var src = charPortrait(cid);
       if (!src) return;
@@ -131,6 +174,7 @@
     }
     setActor(leftImg, cast.length > 0 ? cast[0] : null);
     setActor(rightImg, cast.length > 1 ? cast[1] : null);
+    lastShot = null;
     var i = 0, done = false;
     view.classList.add("on");
     function place(L) {
@@ -161,10 +205,11 @@
       place(L);
       /* bubble side cues the speaker: nearer portrait steps forward */
       var side = (typeof L.x === "number") ? (L.x < 0 ? 0 : 1) : 0;
-      leftImg.classList.toggle("active", cast.length > 0 && side === 0);
-      rightImg.classList.toggle("active", cast.length > 1 && side === 1);
+      if (leftImg) leftImg.classList.toggle("active", cast.length > 0 && side === 0);
+      if (rightImg) rightImg.classList.toggle("active", cast.length > 1 && side === 1);
+      if (typeof L.f === "number") stageCam(name, L.f);
     }
-    document.getElementById("cutbtn").onclick = function (ev) { if (ev) ev.stopPropagation(); next(); };
+    cutbtn.onclick = function (ev) { if (ev) ev.stopPropagation(); next(); };
     view.onclick = function () { next(); };
     next();
   }
@@ -240,6 +285,54 @@
     for(var i=0;i<n;i++){var v=words[i];view[i]=(v&0xff000000)|((v>>>16)&0xff)|(v&0x0000ff00)|((v&0xff)<<16);}
     ctx.putImageData(imageData,0,0);
   }
+  /* mid-tunnel discovery: tunnels/characters unlocked by a scene */
+  function midUnlock(m) {
+    if (m.unlock != null && save.unlockedExtra.indexOf(m.unlock) < 0 && !cleared(m.unlock)) {
+      save.unlockedExtra.push(m.unlock);
+      persist();
+      syncAllToWasm();
+      var tn = (T[m.unlock] && (T[m.unlock].kind === "letter" ? T[m.unlock].name + "-Tunnel" : T[m.unlock].name)) || ("Tunnel " + m.unlock);
+      toast("New tunnel discovered: " + tn);
+      document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped";
+    }
+    if (m.skater && !charLocked(1)) {
+      /* ComingThrough just played: the Skater joins */
+      syncCharsToWasm();
+      toast("The Skater joined!");
+    }
+  }
+  /* play a queue of cutscenes back-to-back, then done */
+  function playSeq(queue, done) {
+    var i = 0;
+    (function next() {
+      if (i >= queue.length) { if (done) done(); return; }
+      var q = queue[i++];
+      markCutSeen(q.key);
+      if (q.m) midUnlock(q.m);
+      showCutscene(q.cut, next);
+    })();
+  }
+  /* scenes bound to completing checkpoint lvl of tunnel tun */
+  function midScenesFor(tun, lvl) {
+    var out = [];
+    for (var i = 0; i < MID_CUTS.length; i++) {
+      var m = MID_CUTS[i];
+      if (m.tun === tun && m.lvl === lvl && !cutSeen(midKey(tun, lvl))) {
+        out.push({ key: midKey(tun, lvl), cut: m.cut, m: m });
+      }
+    }
+    return out;
+  }
+  /* per-level music (authored overrides; 8 = silence) */
+  var LEVEL_TRACKS = ["leavethesolarsystem", "thevoid", "wormholetosomewhere",
+    "crumblingwalls", "travelthegalaxy", "unsafespeeds"];
+  function levelTrack(tun) {
+    var id = 0;
+    try { if (exps.run3_level_music) id = exps.run3_level_music() | 0; } catch (e) {}
+    if (id === 8) return null;
+    if (id >= 1 && id <= 6) return LEVEL_TRACKS[id - 1];
+    return MUSIC_MAP[tun] || "leavethesolarsystem";
+  }
   function observe() {
     var st=exps.run3_state();
     /* continuous tunnels auto-advance past gates within a frame, so track the
@@ -249,6 +342,22 @@
         if(exps.run3_tun()===curTun){
           var lv=exps.run3_lvl();
           if(lv>(save.best[curTun]||0)){ save.best[curTun]=lv; persist(); syncBestToWasm(); }
+          /* checkpoint gate: fire level-end cutscene triggers, then resume */
+          if (prevLvl < 0) prevLvl = lv;
+          else if (lv > prevLvl) {
+            var gates = [];
+            for (var gl = prevLvl; gl < lv; gl++) gates = gates.concat(midScenesFor(curTun, gl));
+            prevLvl = lv;
+            if (gates.length) {
+              try { if (exps.run3_cutscene_hold) exps.run3_cutscene_hold(); } catch(e2) {}
+              playSeq(gates, function(){
+                try { if (exps.run3_cutscene_resume) exps.run3_cutscene_resume(); } catch(e3) {}
+                lastState = -1;
+              });
+            }
+          } else if (lv < prevLvl) prevLvl = lv;
+          /* authored per-level music */
+          if(lv!==lastMusLvl){ lastMusLvl=lv; var tr=levelTrack(curTun); if(tr) playMusic(tr); else stopMusic(); }
         }
       }catch(e){}
     }
@@ -281,27 +390,21 @@
         }
       };
       var pc1=PATH_CUT[t], ekey="e"+t;
-      /* sequel cutscene (e.g. Primary -> the small wormhole), played once
-         after the tunnel's regular end cutscene, before the mapped card */
-      var playChain=function(){
-        var seq=END_CHAIN[t], xkey="x"+t;
-        if(seq&&!cutSeen(xkey)){
-          markCutSeen(xkey);
-          showCutscene(seq,showEnd);
-        } else showEnd();
-      };
-      if(pc1&&pc1.end&&!cutSeen(ekey)){
-        markCutSeen(ekey);
-        /* freeze the finished tunnel as the stage backdrop (no runner) */
-        try { if (exps.run3_cutscene_hold) exps.run3_cutscene_hold(); } catch(e) {}
-        showCutscene(pc1.end,playChain);
-      } else playChain();
+      /* finish queue: mid-tunnel scenes bound here (e.g. BoatRide on the
+         single Home1 level), then the tunnel end scene, then any sequel */
+      var queue = midScenesFor(t, exps.run3_tunnel_levels() - 1);
+      if(pc1&&pc1.end&&!cutSeen(ekey)) queue.push({ key: ekey, cut: pc1.end });
+      var seq=END_CHAIN[t], xkey="x"+t;
+      if(seq&&!cutSeen(xkey)) queue.push({ key: xkey, cut: seq });
+      /* freeze the finished tunnel as the stage backdrop (no runner) */
+      try { if (exps.run3_cutscene_hold) exps.run3_cutscene_hold(); } catch(e) {}
+      playSeq(queue, showEnd);
       document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped";
     }
   }
 
   function beginPlay(sel, lvl) {
-    curTun=sel; lastState=-1;
+    curTun=sel; lastState=-1; prevLvl=-1; lastMusLvl=-1;
     exps.run3_seek(sel,lvl);
       exps.run3_set_char(Math.min(save.char,16));
     inGame=true;
@@ -390,7 +493,7 @@
         var cid = hv-2;
         if (charLocked(cid)) {
           var ch = CHARS[cid];
-          showCard(ch.name + " — Locked", "Clear " + ch.need + " tunnels to unlock. ("+save.cleared.length+"/"+ch.need+")", "Locked", "Close", function(){});
+          showCard(ch.name + " — Locked", charLockText(cid), "Locked", "Close", function(){});
           return;
         }
         exps.run3_menu_select_char(cid);
@@ -409,16 +512,9 @@
           showCard(T[sel].kind==="letter"?T[sel].name+"-Tunnel":T[sel].name,T[sel].lore,"The Runner's map","Close",function(){lastState=-1;});
           return;
         }
-        var startLvl=sellvl>=0?sellvl:(save.best[sel]||0);
-        var pc0=PATH_CUT[sel], skey="s"+sel;
-        if(pc0&&pc0.start&&startLvl===0&&!cutSeen(skey)){
-          markCutSeen(skey);
-          /* stage the tunnel behind the opening scene, then play it */
-          try { if (exps.run3_cutscene_backdrop) exps.run3_cutscene_backdrop(sel,startLvl); } catch(e) {}
-          showCutscene(pc0.start,function(){beginPlay(sel,startLvl);});
-        } else {
-          beginPlay(sel,startLvl);
-        }
+        /* cutscenes fire at level end now (mid-tunnel gates + tunnel ends),
+           never on tunnel entry */
+        beginPlay(sel,sellvl>=0?sellvl:(save.best[sel]||0));
       }
     } else if(st===0||st===2||st===3) {
       /* game: tap to start/restart/continue */
@@ -466,6 +562,81 @@
   });
   document.getElementById("musicToggle").addEventListener("click",toggleMusic);
 
+  /* ===== CUTSCENE GALLERY (icons = assets/cutscenes/<name>.png) ===== */
+  function sceneIcon(name) { return "assets/cutscenes/" + String(name).toLowerCase() + ".png"; }
+  function sceneSeen(name) {
+    if (!save.cuts) return false;
+    for (var i = 0; i < MID_CUTS.length; i++) {
+      if (MID_CUTS[i].cut === name && save.cuts[midKey(MID_CUTS[i].tun, MID_CUTS[i].lvl)]) return true;
+    }
+    for (var t = 0; t < PATH_CUT.length; t++) {
+      var pc = PATH_CUT[t];
+      if (pc && (pc.start === name || pc.end === name) && (save.cuts["s" + t] || save.cuts["e" + t])) return true;
+    }
+    for (var k in END_CHAIN) {
+      if (END_CHAIN[k] === name && save.cuts["x" + k]) return true;
+    }
+    return false;
+  }
+  function openGallery() {
+    var grid = document.getElementById("sceneGrid");
+    var menu = document.getElementById("sceneMenu");
+    if (!grid || !menu) return;
+    grid.innerHTML = "";
+    Object.keys(CUT).forEach(function (name) {
+      var lines = cutLines(name);
+      if (!lines || !lines.length) return;
+      var seen = sceneSeen(name);
+      var cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "scene-cell" + (seen ? "" : " locked");
+      var img = document.createElement("img");
+      img.alt = "";
+      img.src = sceneIcon(name);
+      img.onerror = function () { img.style.display = "none"; };
+      var label = document.createElement("div");
+      label.className = "t";
+      label.textContent = seen ? cutTitle(name) : "???";
+      cell.appendChild(img);
+      cell.appendChild(label);
+      if (seen) {
+        (function (nm) {
+          cell.onclick = function () { replayScene(nm); };
+        })(name);
+      }
+      grid.appendChild(cell);
+    });
+    menu.classList.add("on");
+  }
+  function replayScene(name) {
+    var menu = document.getElementById("sceneMenu");
+    if (menu) menu.classList.remove("on");
+    var ret = -1;
+    try { ret = exps.run3_state(); } catch (e) {}
+    var back = function () {
+      lastState = -1;
+      try {
+        if (ret === 6) { exps.run3_enter_map(); syncAllToWasm(); }
+        else if (ret === 7) { exps.run3_enter_menu(); }
+        else if (exps.run3_cutscene_resume) exps.run3_cutscene_resume();
+      } catch (e2) {}
+    };
+    var st = STAGE[name];
+    try {
+      if (st && exps.run3_cutscene_backdrop) {
+        var lvl = st.end ? exps.run3_levels_in(st.tun) - 1 : st.lvl;
+        exps.run3_cutscene_backdrop(st.tun, lvl);
+      } else if (exps.run3_cutscene_hold) exps.run3_cutscene_hold();
+    } catch (e3) {}
+    showCutscene(name, back);
+  }
+  var sceneBtnEl = document.getElementById("sceneBtn");
+  if (sceneBtnEl) sceneBtnEl.addEventListener("click", openGallery);
+  var sceneCloseEl = document.getElementById("sceneClose");
+  if (sceneCloseEl) sceneCloseEl.addEventListener("click", function () {
+    document.getElementById("sceneMenu").classList.remove("on");
+  });
+
   /* ===== WASM LOAD ===== */
   document.getElementById("status").textContent="Loading run3.wasm\u2026";
   fetch("run3.wasm",{credentials:"same-origin"})
@@ -487,6 +658,7 @@
       document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped — scroll to pan, click to play";
       document.getElementById("backbtn").style.display="";
       document.getElementById("musicToggle").style.display="";
+      var sb2=document.getElementById("sceneBtn"); if(sb2) sb2.style.display="";
       last=performance.now();
       requestAnimationFrame(frame);
       // keep words view in sync if memory grows (WASM may grow on later allocs)

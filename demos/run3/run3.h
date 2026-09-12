@@ -211,6 +211,12 @@ void run3_spend_cells(int32_t n);
 /* cutscene staging + low-power lights (implemented in run3.c) */
 void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl); /* seek + hold frame */
 void run3_cutscene_hold(void);                            /* freeze current frame */
+void run3_cutscene_resume(void);                          /* unfreeze, keep going */
+void run3_stage_cam(int side, int lift);                  /* staged camera angle */
+int run3_stage_lift(void);                                /* (renderer use) */
 double run3_power(void);                                  /* light level 0..1 */
+uint32_t run3_level_color0(void);                         /* tile tint, 0 = theme */
+uint32_t run3_level_color1(void);                         /* accent tint, 0 = theme */
+int32_t run3_level_music(void);                           /* music id, 0 = tunnel */
 
 #endif

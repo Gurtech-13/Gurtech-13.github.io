@@ -165,11 +165,46 @@
     Landfall: [0, 7],
     BeyondTheWormhole: [7, 0],
     TheLongWayBack: [0, 2],
+    ComingThrough: [0, 1],   /* Runner + Skater: the map, the jumps */
   };
   var k;
   for (k in BAKED_CAST) CAST[k] = BAKED_CAST[k];
   for (k in CUSTOM_CAST) CAST[k] = CUSTOM_CAST[k];
   global.STORY_CAST = CAST;
+
+  /* Mid-tunnel cutscene triggers: {tun, lvl, cut, unlock?}. When checkpoint
+     lvl of tunnel tun is completed, cut plays (once ever), staged on that
+     same level. Sources: the scene's staged (path, level) + trigger type in
+     the decompiled source (IF_FOLLOWING_LEVEL_REACHED = reaching lvl+1),
+     and each path's unlockPath/unlockPoint for start scenes:
+       ComingThrough staged primary-9 -> Primary 10, unlocks the Skater.
+       AngelVsBunny: Home0 unlocks at Winter-9.
+       PlanetStolen: U unlocks at Primary-40 (unlockPoint 40).
+       BoatRide: Home3 unlocks at Home1 completion (single level).
+       SelfAssembly: NewlyFormed unlocks at Dark-15. */
+  var MID_CUTS = global.STORY_MID_CUTS || [
+    { tun: 0, lvl: 9, cut: "ComingThrough", skater: true },
+    { tun: 12, lvl: 8, cut: "AngelVsBunny", unlock: 1 },
+    { tun: 0, lvl: 39, cut: "PlanetStolen", unlock: 28 },
+    { tun: 2, lvl: 0, cut: "BoatRide", unlock: 4 },
+    { tun: 13, lvl: 14, cut: "SelfAssembly", unlock: 24 },
+  ];
+  global.STORY_MID_CUTS = MID_CUTS;
+
+  /* Replay stage per cutscene (tunnel + level for the S_CUT backdrop).
+     end:true resolves to the tunnel's last level at replay time. */
+  var STAGE = global.STORY_STAGE || {};
+  var i, pc = global.STORY_PATH_CUT || [];
+  for (i = 0; i < pc.length; i++) {
+    if (pc[i] && pc[i].end && !STAGE[pc[i].end]) STAGE[pc[i].end] = { tun: i, end: true };
+    if (pc[i] && pc[i].start && !STAGE[pc[i].start]) STAGE[pc[i].start] = { tun: i, lvl: 0 };
+  }
+  MID_CUTS.forEach(function (m) { STAGE[m.cut] = { tun: m.tun, lvl: m.lvl }; });
+  var chain = global.STORY_END_CHAIN || {};
+  Object.keys(chain).forEach(function (t) {
+    if (!STAGE[chain[t]]) STAGE[chain[t]] = { tun: +t, end: true };
+  });
+  global.STORY_STAGE = STAGE;
 
   global.STORY_CUT = CUT;
   global.STORY_PATH_CUT = PATH_CUT;

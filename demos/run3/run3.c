@@ -34,6 +34,23 @@ static int32_t g_powercells;
 /* low-power light level 0..1 (theme 5 tunnels: lights fade out and back
    along the run; the host also ducks the music with it) */
 static double g_power = 1.0;
+static double g_powerTarget = 1.0; /* eased toward this at g_powerRate/s */
+static double g_powerRate = 1.5;
+static double g_powerBase = 1.0;   /* level's authored base light */
+static double g_glimpseLeft = 0.0; /* rows left of a glimpse flash */
+/* per-level presentation from levels_baked.h (0 = theme default) */
+static uint32_t g_col0 = 0, g_col1 = 0;
+static int g_mus = 0;
+static double g_rotOff = 0.0;      /* authored camera roll offset (rad) */
+static int g_trigIdx = 0;          /* next power trigger to fire */
+static double g_prevProg = 0.0;    /* last prog seen (glimpse row clock) */
+/* staged scene camera: side -1/0/1 (roll), lift -1/0/1 (height) */
+static int g_stageSide = 0, g_stageLift = 0;
+void run3_stage_cam(int side, int lift) {
+  g_stageSide = side < -1 ? -1 : (side > 1 ? 1 : side);
+  g_stageLift = lift < -1 ? -1 : (lift > 1 ? 1 : lift);
+}
+int run3_stage_lift(void) { return g_stageLift; }
 
 /* ---------------- math ---------------- */
 double ssin(double x) {
@@ -105,15 +122,50 @@ static double holeAt(int lvl) {
   return h > m ? m : h;
 }
 
+/* baked presentation index for (tun, lvl), or -1 for procedural levels */
+static int baked_idx(int tun, int lvl) {
+  if (tun < 0 || tun >= BAKED_TUNNELS || tun >= MAX_TUNNELS) return -1;
+  if (lvl < 0 || lvl >= BAKED_TUN_COUNT[tun]) return -1;
+  return (int)BAKED_TUN_START[tun] + lvl;
+}
+
 static void compute_rows(void) {
   const tunnel_t *t = tun();
   g_rowStart[0] = 0.0;
   for (int j = 0; j < (int)t->levels; j++) {
     const baked_level_t *B = 0;
-    if (baked_at(G.tun, j, &B)) g_levelRows[j] = (double)B->rows;
-    else g_levelRows[j] = (double)((int)(45.0 * rpsAt(j) + 0.5));
-    g_rowStart[j + 1] = g_rowStart[j] + g_levelRows[j];
+    double rows;
+    if (baked_at(G.tun, j, &B)) rows = (double)B->rows;
+    else rows = (double)((int)(45.0 * rpsAt(j) + 0.5));
+    /* authored early level end (result-win trigger): finish at that row */
+    {
+      int bi = baked_idx(G.tun, j);
+      if (bi >= 0 && BAKED_WIN[bi] > 0 && (double)BAKED_WIN[bi] < rows)
+        rows = (double)BAKED_WIN[bi];
+    }
+    g_levelRows[j] = rows;
+    g_rowStart[j + 1] = g_rowStart[j] + rows;
   }
+}
+
+static void apply_level_look(int lvl) {
+  /* per-level tile size / roll / music / light state (authored data) */
+  const tunnel_t *t = tun();
+  int bi = baked_idx(G.tun, lvl);
+  G.tile = t->baseTile;
+  g_col0 = 0; g_col1 = 0; g_mus = 0; g_rotOff = 0.0;
+  g_powerBase = 1.0; g_trigIdx = 0; g_glimpseLeft = 0.0;
+  if (bi >= 0) {
+    if (BAKED_TILEW[bi] > 0) G.tile = (double)BAKED_TILEW[bi] / 100.0;
+    g_col0 = BAKED_COLOR0[bi];
+    g_col1 = BAKED_COLOR1[bi];
+    g_mus = BAKED_MUSIC[bi];
+    g_rotOff = (double)BAKED_ROT[bi] / 10.0 * PI / 180.0;
+    if (BAKED_PBASE[bi] <= 254) g_powerBase = (double)BAKED_PBASE[bi] / 254.0;
+  }
+  g_power = g_powerBase;
+  g_powerTarget = g_powerBase;
+  g_powerRate = 1.5;
 }
 
 /* fill GMAP for the current level window (authored bitmap or procedural) */
@@ -218,7 +270,7 @@ static void open_level(int lvl) {
   G.k = t->k_tiles;
   const baked_level_t *B = 0;
   if (baked_at(G.tun, G.lvl, &B)) { G.shape = B->n; G.k = B->k; }
-  G.tile = t->baseTile;
+  apply_level_look(lvl);
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
   G.holeP = holeAt(lvl);
@@ -254,7 +306,7 @@ static void open_level_continue(int lvl, double over) {
   G.k = t->k_tiles;
   const baked_level_t *B = 0;
   if (baked_at(G.tun, G.lvl, &B)) { G.shape = B->n; G.k = B->k; }
-  G.tile = t->baseTile;
+  apply_level_look(lvl);
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
   G.holeP = holeAt(lvl);
@@ -604,20 +656,60 @@ void run3_step(double dt) {
   if (dt > 0.1) dt = 0.1;
   int n = G.shape, k = G.k;
 
-  /* low-power lights: 150-row cycle along the run — on, smooth fade out,
-     dark stretch, smooth fade back in (mirrors the original triggers) */
-  if (tun()->theme == 5 && G.rowEnd < 900000.0) {
-    double q = G.prog / 150.0;
-    long long qi = (long long)(q < 0.0 ? q - 1.0 : q);
-    double ph = G.prog - 150.0 * (double)qi;
-    double p;
-    if (ph < 100.0) p = 1.0;
-    else if (ph < 112.0) { double t = (ph - 100.0) / 12.0; p = 1.0 - t * t * (3.0 - 2.0 * t); }
-    else if (ph < 138.0) p = 0.0;
-    else { double t = (ph - 138.0) / 12.0; if (t > 1.0) t = 1.0; p = t * t * (3.0 - 2.0 * t); }
-    g_power = p;
-  } else {
-    g_power = 1.0;
+  /* authored light automation: per-level base light plus z-row triggers
+     with per-mode fade rates (glimpse = brief flash, then back to base).
+     Procedural theme-5 tunnels keep a slow fallback cycle. */
+  {
+    double dz = G.prog - g_prevProg;
+    if (dz < 0.0) dz = 0.0;
+    g_prevProg = G.prog;
+    if (G.state == S_RUN && G.rowEnd < 900000.0) {
+      int bi = baked_idx(G.tun, G.lvl);
+      if (bi >= 0 && BAKED_TRIG_COUNT[bi] > 0) {
+        double z = G.prog - G.rowStart;
+        int nc = BAKED_TRIG_COUNT[bi];
+        while (g_trigIdx < nc) {
+          uint32_t tr = BAKED_TRIGS[BAKED_TRIG_START[bi] + g_trigIdx];
+          if (z < (double)(int)(tr >> 16)) break;
+          double pv = (double)((tr >> 8) & 0xff) / 254.0;
+          int mode = (int)(tr & 0xff);
+          g_powerTarget = pv;
+          if (mode == 0) { g_power = pv; g_powerRate = 1e9; }
+          else if (mode == 2) { g_powerRate = 4.0; }
+          else if (mode == 3) { g_powerRate = 0.5; }
+          else if (mode == 4) { g_powerRate = 0.35; }
+          else if (mode == 5) { g_power = pv; g_powerRate = 2.0; g_glimpseLeft = 25.0; }
+          else { g_powerRate = 1.5; }
+          g_trigIdx++;
+        }
+      } else if (bi < 0 && tun()->theme == 5) {
+        double q = G.prog / 150.0;
+        long long qi = (long long)(q < 0.0 ? q - 1.0 : q);
+        double ph = G.prog - 150.0 * (double)qi;
+        double p;
+        if (ph < 100.0) p = 1.0;
+        else if (ph < 112.0) { double t = (ph - 100.0) / 12.0; p = 1.0 - t * t * (3.0 - 2.0 * t); }
+        else if (ph < 138.0) p = 0.0;
+        else { double t = (ph - 138.0) / 12.0; if (t > 1.0) t = 1.0; p = t * t * (3.0 - 2.0 * t); }
+        g_powerTarget = p;
+        g_powerRate = 3.0;
+      }
+    }
+    if (g_glimpseLeft > 0.0) {
+      g_glimpseLeft -= dz;
+      if (g_glimpseLeft <= 0.0) {
+        g_glimpseLeft = 0.0;
+        g_powerTarget = g_powerBase;
+        g_powerRate = 2.0;
+      }
+    }
+    if (g_power != g_powerTarget) {
+      double d = g_powerTarget - g_power;
+      double mx = g_powerRate * dt;
+      if (d > mx) d = mx;
+      else if (d < -mx) d = -mx;
+      g_power += d;
+    }
   }
 
   if (G.state == S_RUN) {
@@ -704,8 +796,9 @@ void run3_step(double dt) {
      wall (not the live ring: mid-air drift must not swing gravity).
      Without the wrap, the wrap-around corner (side n-1 -> 0) eases almost a
      full turn instead of one step like every other corner. */
-  int gs = G.gravSide < n ? G.gravSide : 0;
-  double target2 = -(TAU * (double)gs) / (double)n;
+   int gs = G.gravSide < n ? G.gravSide : 0;
+    double target2 = -(TAU * (double)gs) / (double)n + g_rotOff;
+    if (G.state == S_CUT) target2 += -(double)g_stageSide * 0.28;
   double d = target2 - G.rot;
   while (d > PI) d -= TAU;
   while (d <= -PI) d += TAU;
@@ -784,12 +877,22 @@ int32_t run3_inf_rows(void) { return g_infRows; }
 /* low-power light level for the renderer and the host (music ducking) */
 double run3_power(void) { return g_power; }
 
+/* per-level presentation for the renderer/host (0 = theme default) */
+uint32_t run3_level_color0(void) { return g_col0; }
+uint32_t run3_level_color1(void) { return g_col1; }
+int32_t run3_level_music(void) { return g_mus; }
+
 /* cutscene staging: hold a tunnel frame behind the dialogue overlay.
    hold() freezes the just-finished tunnel (end cutscenes); backdrop()
    seeks to a tunnel/level first (start cutscenes). Neither runs the sim. */
 void run3_cutscene_hold(void) {
   if (G.rowEnd > 900000.0) return; /* never stage infinite mode */
   G.state = S_CUT;
+  g_stageSide = 0; g_stageLift = 0;
+}
+/* resume the sim exactly where hold() froze it (mid-tunnel cutscenes) */
+void run3_cutscene_resume(void) {
+  if (G.state == S_CUT) G.state = S_RUN;
 }
 void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl) {
   if (tunIdx < 0 || tunIdx >= (int)NTUNNELS) return;
@@ -803,6 +906,7 @@ void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl) {
   g_power = 1.0; /* staged scenes play with the lights on */
   open_level(lvl);
   G.state = S_CUT;
+  g_stageSide = 0; g_stageLift = 0;
 }
 
 /* ==================== MAP MODE ==================== */

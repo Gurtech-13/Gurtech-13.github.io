@@ -22,23 +22,26 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   for (let i = 0; i < 600; i++) { e.run3_step(1 / 60); if (e.run3_power() !== 1) throw new Error("primary should stay lit"); }
   console.log("primary power pinned at 1 OK");
 
-  e.run3_seek(13, 0);
+  // authored lights: base values + z-row triggers from the level data
+  e.run3_seek(13, 0); // id-191: base full, first trigger at z=14
   e.run3_set_input(0);
   e.run3_step(1 / 60);
-  const pOn = e.run3_power();
-  // Dark level starts sit at all phases of the 150-row cycle (death rewinds
-  // prog, so probe starts directly): lvl 4 begins deep in the dark stretch,
-  // lvl 15 inside the fade back in.
-  e.run3_seek(13, 4);
+  if (e.run3_power() !== 1) throw new Error("dark should start lit");
+  e.run3_seek(13, 5); // id-199: base 0.08, no triggers
   e.run3_step(1 / 60);
-  const pOff = e.run3_power();
-  e.run3_seek(13, 15);
-  e.run3_step(1 / 60);
-  const pMid = e.run3_power();
-  console.log(`dark power on=${pOn} off=${pOff} fade=${pMid}`);
-  if (pOn !== 1) throw new Error("dark should start lit");
-  if (pOff !== 0) throw new Error("dark stretch should hit 0");
-  if (!(pMid > 0 && pMid < 1)) throw new Error("fade should be smooth, got " + pMid);
+  const pBase = e.run3_power();
+  if (!(pBase > 0.05 && pBase < 0.12)) throw new Error("dark base wrong: " + pBase);
+  e.run3_seek(13, 4); // id-198: trigger at z=0 fades lights to 0 (slow)
+  e.run3_set_input(0);
+  let pMin = 1;
+  for (let i = 0; i < 600; i++) { e.run3_step(1 / 60); pMin = Math.min(pMin, e.run3_power()); }
+  if (!(pMin < 0.5)) throw new Error("dark fade trigger never fired: " + pMin);
+  e.run3_seek(13, 23); // id-201: glimpse flash to full at z=6, then back
+  e.run3_set_input(0);
+  let pMax = 0;
+  for (let i = 0; i < 400; i++) { e.run3_step(1 / 60); pMax = Math.max(pMax, e.run3_power()); }
+  if (pMax !== 1) throw new Error("glimpse flash never fired");
+  console.log(`dark lights OK (base=${pBase.toFixed(3)} fade-min=${pMin.toFixed(3)} glimpse-max=${pMax})`);
   // theme check: Dark must be the low-power palette id
   e.run3_seek(13, 0);
   if (e.run3_theme() !== 5) throw new Error("dark theme should be 5, got " + e.run3_theme());
@@ -85,6 +88,8 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     vm.runInContext(fs.readFileSync(path.join(dir, f), "utf8"), sandbox, { filename: f });
   }
   const C = sandbox.STORY.C, CUT = sandbox.STORY_CUT, CAST = sandbox.STORY_CAST;
+  const MID = sandbox.STORY_MID_CUTS, STAGE = sandbox.STORY_STAGE;
+  const T = sandbox.STORY.T;
   let scenes = 0;
   for (const name of Object.keys(CUT)) {
     if (!CUT[name] || CUT[name].length === 0) continue;
@@ -100,5 +105,33 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     }
   }
   console.log(`cast coverage OK (${scenes} voiced scenes)`);
+  // mid-tunnel triggers: valid tunnel/level, voiced scene, cast, stage
+  if (!MID.length) throw new Error("no mid-tunnel triggers");
+  for (const m of MID) {
+    if (!T[m.tun]) throw new Error("bad mid tun " + m.tun);
+    e.run3_init(9);
+    if (m.lvl < 0 || m.lvl >= e.run3_levels_in(m.tun)) throw new Error(`bad mid lvl ${m.lvl} for tun ${m.tun}`);
+    if (!CUT[m.cut] || !CUT[m.cut].length) throw new Error("mid scene missing: " + m.cut);
+    if (!CAST[m.cut] || !CAST[m.cut].length) throw new Error("mid cast missing: " + m.cut);
+    if (!STAGE[m.cut]) throw new Error("mid stage missing: " + m.cut);
+    if (m.unlock != null && !T[m.unlock]) throw new Error("bad mid unlock " + m.unlock);
+  }
+  console.log(`mid triggers OK (${MID.map((m) => `${m.cut}@${m.tun}:${m.lvl}`).join(" ")})`);
+  // ComingThrough: the Primary-10 skater scene
+  const ct = CUT.ComingThrough;
+  if (!ct || ct.length !== 25) throw new Error("ComingThrough bake wrong");
+  if (ct[ct.length - 1].m !== "Choose your character!") throw new Error("ComingThrough tail wrong");
+  // stage framing: baked scenes carry per-line frames; custom scenes opt out
+  const CAMSHOT = sandbox.STORY_CAMSHOT || {};
+  for (const name of Object.keys(CUT)) {
+    if (!CAMSHOT[name]) continue;
+    for (const L of CUT[name]) {
+      if (typeof L.f !== "number") throw new Error("unframed line in " + name);
+    }
+  }
+  if (!CAMSHOT.ComingThrough) throw new Error("ComingThrough has no stage framing");
+  const c0 = CAMSHOT.ComingThrough[0];
+  if (c0[1] !== 0 || c0[2] !== 1) throw new Error("ComingThrough framing wrong: " + JSON.stringify(c0));
+  console.log(`stage framing OK (${Object.keys(CAMSHOT).length} scenes with shot changes)`);
   console.log("ALL STAGE CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", (err && err.message) || err); process.exit(1); });
