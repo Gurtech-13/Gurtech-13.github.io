@@ -795,6 +795,7 @@
       inGame=false;lastState=-1;try{exps.run3_enter_menu();}catch(x){}stopMusic();document.getElementById("backbtn").style.display="none";document.getElementById("musicToggle").style.display="none";
     }
     else if(c==="KeyM")toggleMusic();
+    else if(c==="KeyH"){ if(exps){ try{exps.run3_hint_toggle();}catch(x){} } }
     else if(c==="AltLeft"){e.preventDefault();cheatUnlockAll();}
   });
   window.addEventListener("keyup",function(e){

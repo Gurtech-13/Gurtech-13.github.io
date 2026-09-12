@@ -17,15 +17,18 @@ game_t G;
 uint8_t GMAP[MAXN][MAPW];
 int GMAP_BASE = 0;
 /* crumbling tiles: authored crumble lanes (GCR0, rebuilt per level window)
-   plus fallen lanes (GCRUMB, dynamic). A stepped-on crumble tile shakes
-   briefly (g_shake pool) then falls and counts as a hole. */
+   plus fallen lanes (GCRUMB, dynamic). The tile the runner steps on drops
+   at once; the rest of its CONNECTED group follows as a wave, one tile
+   every CRUMB_WAVE_CS, so the runner can try to outrun it. */
 static uint8_t GCR0[MAXN][MAPW];
 static uint8_t GCRUMB[MAXN][MAPW];
-#define MAXSHAKE 64
-#define CRUMB_TIME 0.5f
-typedef struct { int row; int8_t side; int8_t lane; float t; } shake_t;
-static shake_t g_shake[MAXSHAKE];
+#define CRUMB_WAVE_CS 10                 /* wave step, centiseconds */
+static uint16_t g_crumble[MAXN][MAXK][MAPW]; /* wave timer, centiseconds */
+static int g_armedN = 0;
+static double g_crumbAcc = 0.0;  /* fractional centiseconds carried between steps */
 static int32_t g_dislodged = 0;
+/* hint route (H): on/needs a rebuild/waypoint count */
+static int g_hintOn = 0, g_hintDirty = 0, g_hintN = 0;
 
 static double g_levelRows[MAX_LEVELS];
 static double g_rowStart[MAX_LEVELS + 1];
@@ -182,29 +185,71 @@ int run3_tile_tex(int side, int rowAbs, int lane) {
   if ((GCR0[side][i] & bit) && !(GCRUMB[side][i] & bit)) return TEX_CRUMBLING;
   return 0;
 }
-/* seconds of shake left on a tile (0 = steady), for the renderer */
+/* seconds left before this tile drops (0 = steady), for the renderer */
 double run3_shake(int side, int rowAbs, int lane) {
-  for (int i = 0; i < MAXSHAKE; i++)
-    if (g_shake[i].t > 0.0f && g_shake[i].row == rowAbs &&
-        g_shake[i].side == side && g_shake[i].lane == lane)
-      return (double)g_shake[i].t;
-  return 0.0;
+  int i = rowAbs - GMAP_BASE;
+  if (i < 0 || i >= MAPW || side < 0 || side >= MAXN ||
+      lane < 0 || lane >= MAXK) return 0.0;
+  return (double)g_crumble[side][lane][i] / 100.0;
 }
-static int shake_active(int row, int side, int lane) {
-  return run3_shake(side, row, lane) > 0.0;
-}
-static void shake_add(int row, int side, int lane) {
-  for (int i = 0; i < MAXSHAKE; i++)
-    if (g_shake[i].t <= 0.0f) {
-      g_shake[i].row = row;
-      g_shake[i].side = (int8_t)side;
-      g_shake[i].lane = (int8_t)lane;
-      g_shake[i].t = CRUMB_TIME;
-      return;
-    }
+/* One touch: the stepped-on tile goes at once, then the connected group
+   (4-neighbour on the unwrapped tube surface, col = side*k + lane) follows
+   as a wave, one tile per CRUMB_WAVE_CS of BFS distance. */
+#define CRUMB_STACK 4096
+static void crumb_arm(int row, int side, int lane) {
+  int k = G.k, n = G.shape;
+  if (k <= 0 || k > MAXK || n <= 0) return;
+  int N = n * k;
+  int c0 = side * k + lane;
+  int i0 = row - GMAP_BASE;
+  if (c0 < 0 || c0 >= N || i0 < 0 || i0 >= MAPW) return;
+  uint8_t bit0 = (uint8_t)(1u << lane);
+  if (!(GCR0[side][i0] & bit0)) return;   /* not a crumbling tile */
+  if (GCRUMB[side][i0] & bit0) return;    /* already fell */
+  if (g_crumble[side][lane][i0]) return;  /* wave already running */
+
+  /* the tile under the runner goes immediately */
+  GCRUMB[side][i0] |= bit0;
+  g_dislodged++;
+
+  static int16_t st[CRUMB_STACK][3];      /* col, row, wave distance */
+  int top = 0;
+  /* seed from the touched tile's neighbours (it is already gone) */
+  {
+    int cm = c0 - 1; if (cm < 0) cm += N;
+    int cp = c0 + 1; if (cp >= N) cp -= N;
+    st[top][0] = (int16_t)cm; st[top][1] = (int16_t)i0; st[top][2] = 1; top++;
+    st[top][0] = (int16_t)cp; st[top][1] = (int16_t)i0; st[top][2] = 1; top++;
+    if (i0 > 0)        { st[top][0] = (int16_t)c0; st[top][1] = (int16_t)(i0 - 1); st[top][2] = 1; top++; }
+    if (i0 + 1 < MAPW) { st[top][0] = (int16_t)c0; st[top][1] = (int16_t)(i0 + 1); st[top][2] = 1; top++; }
+  }
+  while (top > 0) {
+    top--;
+    int col = st[top][0], i = st[top][1], dist = st[top][2];
+    if (col < 0 || col >= N || i < 0 || i >= MAPW) continue;
+    int s = col / k, l = col - s * k;
+    uint8_t bit = (uint8_t)(1u << l);
+    if (!(GCR0[s][i] & bit)) continue;  /* not a crumbling tile */
+    if (GCRUMB[s][i] & bit) continue;   /* already fell */
+    if (GMAP[s][i] & bit) continue;     /* a hole is not a tile */
+    if (g_crumble[s][l][i]) continue;   /* wave already running here */
+    g_crumble[s][l][i] = (uint16_t)(dist * CRUMB_WAVE_CS + 1);
+    g_armedN++;
+    if (top + 4 > CRUMB_STACK) continue;
+    int cm = col - 1; if (cm < 0) cm += N;
+    int cp = col + 1; if (cp >= N) cp -= N;
+    st[top][0] = (int16_t)cm; st[top][1] = (int16_t)i; st[top][2] = (int16_t)(dist + 1); top++;
+    st[top][0] = (int16_t)cp; st[top][1] = (int16_t)i; st[top][2] = (int16_t)(dist + 1); top++;
+    if (i > 0)        { st[top][0] = (int16_t)col; st[top][1] = (int16_t)(i - 1); st[top][2] = (int16_t)(dist + 1); top++; }
+    if (i + 1 < MAPW) { st[top][0] = (int16_t)col; st[top][1] = (int16_t)(i + 1); st[top][2] = (int16_t)(dist + 1); top++; }
+  }
 }
 static void crumb_reset(void) {
-  for (int i = 0; i < MAXSHAKE; i++) g_shake[i].t = 0.0f;
+  for (int s = 0; s < MAXN; s++)
+    for (int l = 0; l < MAXK; l++)
+      for (int i = 0; i < MAPW; i++) g_crumble[s][l][i] = 0;
+  g_armedN = 0;
+  g_crumbAcc = 0.0;
 }
 
 /* ---------------- tunnel / level setup ---------------- */
@@ -315,22 +360,25 @@ static void build_window(void) {
       } else if (voidSide >= 0) {
         m = (s2 == voidSide) ? (uint8_t)all : 0;
       } else if (!buffered) {
-        uint8_t prev = (i - 1 >= 0) ? GMAP[s2][i - 1] : 0;
-        if (prev == 0) {
-          uint32_t h = h32(g_seedT ^ (uint32_t)(s2 * 1013u) ^ (uint32_t)(R * 7919u));
-          if ((double)((h >> 8) & 0xffff) / 65536.0 < G.holeP) {
-            uint32_t x = h32(h ^ 0x9e3779b9u);
-            uint8_t mask = 0;
-            int want = 1 + (int)((x & 0xffff) * (double)k / 65536.0);
-            if (want > k) want = k;
-            while (want > 0) {
-              x = h32(x + 0x85ebca6bu);
-              int lane = (int)((x & 0xffff) * (double)k / 65536.0) % k;
-              if (!(mask & (1u << lane))) { mask |= (uint8_t)(1u << lane); want--; }
-            }
-            m = mask;
-          }
+        /* Procedural hazard with an explicit void target, so these levels
+           read like the baked originals (a sparse floor, not a slab). The
+           per-tunnel holeP shifts the target from 30% up to 45%. */
+        double vt = 0.32 + G.holeP * 0.6;
+        if (vt > 0.45) vt = 0.45;
+        uint32_t h = h32(g_seedT ^ (uint32_t)(s2 * 1013u) ^ (uint32_t)(R * 7919u));
+        double wantD = vt * (double)k;
+        int want = (int)wantD;
+        double frac = wantD - (double)want;
+        if (frac > 0.0 && (double)((h >> 8) & 0xffff) / 65536.0 < frac) want++;
+        if (want > k) want = k;
+        uint32_t x = h32(h ^ 0x9e3779b9u);
+        uint8_t mask = 0;
+        while (want > 0) {
+          x = h32(x + 0x85ebca6bu);
+          int lane = (int)((x & 0xffff) * (double)k / 65536.0) % k;
+          if (!(mask & (1u << lane))) { mask |= (uint8_t)(1u << lane); want--; }
         }
+        m = mask;
       }
       GMAP[s2][i] = m;
       GCR0[s2][i] = (uint8_t)(mc & ~m); /* crumble only where solid */
@@ -385,6 +433,7 @@ static void open_level(int lvl) {
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
   crumb_reset();
+  g_hintDirty = 1;
   G.state = S_RUN; /* instant start: the runner never waits */
   G.prog = G.rowStart;
   G.ring = (double)G.k * 0.5;
@@ -422,6 +471,7 @@ static void open_level_continue(int lvl, double over) {
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
   crumb_reset();
+  g_hintDirty = 1;
   G.state = S_RUN;
   G.prog = G.rowStart + over;
   if (G.prog >= G.rowEnd) G.prog = G.rowEnd - 0.001;
@@ -550,14 +600,6 @@ static const double CHAR_EASE[NCHAR] = {
 };
 static int char_idx(void) { return G.charm < NCHAR ? G.charm : 0; }
 
-static int lane_ok_at(int rowAbs) {
-  int i = rowAbs - GMAP_BASE;
-  if (i < 0 || i >= MAPW) return 1;
-  int s = side_under();
-  if (s >= G.shape) return 0;
-  return (missmask(s, i) & (1u << lane_under())) ? 0 : 1;
-}
-
 /* tile under an arbitrary ring position (1 = solid) */
 static int tile_at(int rowAbs, double ring) {
   int i = rowAbs - GMAP_BASE;
@@ -568,74 +610,148 @@ static int tile_at(int rowAbs, double ring) {
   return (missmask(s, i) & (1u << l)) ? 0 : 1;
 }
 
-/* proactive landing assist: while falling, predict the touchdown row and
- * gently push the ring toward the nearest solid lane center there, so the
- * runner drifts onto the tile it is aiming at instead of clipping its edge.
- * The ring is continuous around the tube, so this automatically catches the
- * neighboring wall when landing on the edge of turning gravity. Capped to
- * +/-2 lanes: jumps aimed into wide gaps are still falls. */
-static void landing_assist(double dt) {
-  if (!(G.jump > 0.0 || G.jv > 0.0)) return;
-  if (G.jv >= 0.0) return; /* still rising: nothing to aim at yet */
-  int cm = char_idx();
-  double g = GRAV * CHAR_GRAV[cm];
-  if (g <= 0.0) return;
-  double disc = G.jv * G.jv + 2.0 * g * G.jump;
-  if (disc <= 0.0) return;
-  double t = (G.jv + ssqrt(disc)) / g; /* fall time left */
-  if (t <= 0.0 || t > 3.0) return;
-  double spd = G.rowsPer * SPEED_MUL * CHAR_FWD[cm];
-  int rowL = (int)(G.prog + spd * t);
+/* Tile hit boxes are 20% wider than the visual tile (10% past each edge):
+   the runner stays supported while a solid tile lies within a tenth of a
+   tile to either side. There is no automatic lane change any more, so this
+   edge slack is what keeps a near-miss landing out of the void. */
+#define HIT_PAD 0.1
+static int tile_hit(int rowAbs, double ring) {
+  if (tile_at(rowAbs, ring)) return 1;
   double tot = (double)G.shape * (double)G.k;
-  if (tot <= 0.0) return;
-  double base = G.ring;
-  while (base < 0.0) base += tot;
-  while (base >= tot) base -= tot;
-  long long li = (long long)(base < 0.0 ? base - 1.0 : base);
-  double best = 0.0;
-  int have = 0;
-  for (int dl = -2; dl <= 2; dl++) {
-    double rc = (double)li + 0.5 + (double)dl; /* nearby lane center */
-    double w = rc;
-    while (w < 0.0) w += tot;
-    while (w >= tot) w -= tot;
-    if (!tile_at(rowL, w)) continue;
-    double d = w - base;
-    while (d > tot * 0.5) d -= tot; /* shortest way around the tube */
-    while (d < -tot * 0.5) d += tot;
-    double ad = d < 0.0 ? -d : d;
-    double ab = best < 0.0 ? -best : best;
-    if (!have || ad < ab) { best = d; have = 1; }
+  double a = ring + HIT_PAD, b = ring - HIT_PAD;
+  if (tot > 0.0) {
+    while (a < 0.0) a += tot;
+    while (a >= tot) a -= tot;
+    while (b < 0.0) b += tot;
+    while (b >= tot) b -= tot;
   }
-  if (!have) return;
-  double k = dt * 6.0; /* converge over ~0.3s of falling */
-  if (k > 1.0) k = 1.0;
-  G.ring = base + best * k;
-  while (G.ring < 0.0) G.ring += tot;
-  while (G.ring >= tot) G.ring -= tot;
+  return tile_at(rowAbs, a) || tile_at(rowAbs, b);
 }
 
-/* touchdown backstop: the exact lane first, then a small sideways grab
- * (+/-0.55 tiles) onto the neighboring tile in the SAME row. Rarely fires
- * now that the airborne push does the main work; kept to forgive edge
- * clips the push could not fully correct. */
-static int landing_grab(void) {
-  static const double offs[3] = { 0.0, 0.55, -0.55 };
-  int r = (int)G.prog;
-  for (int o = 0; o < 3; o++) {
-    double ring = G.ring + offs[o];
-    double tot = (double)G.shape * (double)G.k;
-    if (tot > 0.0) {
-      while (ring < 0.0) ring += tot;
-      while (ring >= tot) ring -= tot;
-    }
-    if (tile_at(r, ring)) {
-      G.ring = ring;
-      return 1;
+/* the runner is on solid ground when a hit box supports them (auto-jump) */
+static int lane_ok_at(int rowAbs) { return tile_hit(rowAbs, G.ring); }
+/* test seam: the 20%-bigger tile hit box (1 = supported at this ring) */
+int run3_tile_hit(int rowAbs, double ring) { return tile_hit(rowAbs, ring); }
+
+/* ---------------- hint: a route to the end of the level ---------------- */
+/* Pressing H overlays a route to the level end as tiny grey billboards. The
+   tube surface is an (n*k)-by-rows grid (col = side*k + lane, wrapping), so
+   the route is a forward walk: run one row at a time with a little lateral
+   drift, or leap over a gap of up to HINT_LEAP rows. Crumbling tiles are
+   avoided while an alternative exists, and fallen ones are never used. */
+#define HINT_MAX 600
+#define HINT_COLS (MAXN * MAXK)
+#define HINT_MAXDC 2     /* lanes of drift over one row of running */
+#define HINT_LEAP 8      /* rows a jump can clear */
+#define HINT_LEAPDC 6    /* lanes of drift available inside a jump */
+
+static int g_hintRow[HINT_MAX];
+static float g_hintRing[HINT_MAX];
+static int32_t h_prev[MAPW][HINT_COLS];
+static int16_t h_cost[MAPW][HINT_COLS];
+static int h_tmpRow[HINT_MAX];
+static float h_tmpRing[HINT_MAX];
+
+static int hint_solid(int col, int rowAbs, int n, int k, int avoidCrumb) {
+  int N = n * k;
+  col %= N; if (col < 0) col += N;
+  int i = rowAbs - GMAP_BASE;
+  if (i < 0 || i >= MAPW) return 1;      /* outside the window: safe */
+  int s = col / k, l = col % k;
+  uint8_t bit = (uint8_t)(1u << l);
+  if (missmask(s, i) & bit) return 0;
+  if (avoidCrumb && (GCR0[s][i] & bit) && !(GCRUMB[s][i] & bit)) return 0;
+  return 1;
+}
+
+/* One forward pass; returns the furthest reachable row offset. Running a row
+   costs 1, a leap costs its length plus HINT_JUMPPEN, so the route only jumps
+   where a gap leaves no choice. */
+#define HINT_INF 25000
+#define HINT_JUMPPEN 4
+static int hint_pass(int r0, int R, int n, int k, int c0, int avoidCrumb) {
+  int N = n * k;
+  for (int ro = 0; ro < R; ro++)
+    for (int c = 0; c < N; c++) { h_prev[ro][c] = 0; h_cost[ro][c] = (int16_t)HINT_INF; }
+  h_cost[0][c0] = 0;
+  h_prev[0][c0] = -1;
+  int best = 0;
+  for (int ro = 0; ro < R; ro++) {
+    int rowAbs = r0 + ro;
+    for (int c = 0; c < N; c++) {
+      int base = h_cost[ro][c];
+      if (base >= HINT_INF) continue;
+      if (ro > best) best = ro;
+      if (ro + 1 < R) {
+        for (int dc = -HINT_MAXDC; dc <= HINT_MAXDC; dc++) {
+          int nc = c + dc; while (nc < 0) nc += N; while (nc >= N) nc -= N;
+          int ncost = base + 1;
+          if (ncost >= h_cost[ro + 1][nc]) continue;
+          if (!hint_solid(nc, rowAbs + 1, n, k, avoidCrumb)) continue;
+          h_cost[ro + 1][nc] = (int16_t)ncost;
+          h_prev[ro + 1][nc] = (int32_t)(ro * HINT_COLS + c + 1);
+        }
+      }
+      for (int d = 2; d <= HINT_LEAP && ro + d < R; d++) {
+        for (int dc = -HINT_LEAPDC; dc <= HINT_LEAPDC; dc++) {
+          int nc = c + dc; while (nc < 0) nc += N; while (nc >= N) nc -= N;
+          int ncost = base + d + HINT_JUMPPEN;
+          if (ncost >= h_cost[ro + d][nc]) continue;
+          if (!hint_solid(nc, rowAbs + d, n, k, avoidCrumb)) continue;
+          h_cost[ro + d][nc] = (int16_t)ncost;
+          h_prev[ro + d][nc] = (int32_t)(ro * HINT_COLS + c + 1);
+        }
+      }
     }
   }
-  return 0;
+  return best;
 }
+
+static void hint_build(void) {
+  g_hintDirty = 0;
+  g_hintN = 0;
+  int n = G.shape, k = G.k;
+  if (n <= 0 || n > MAXN || k <= 0 || k > MAXK) return;
+  int N = n * k;
+  int r0 = (int)G.prog;
+  int rEnd = (int)G.rowEnd;
+  if (rEnd <= r0) return;
+  int R = rEnd - r0 + 2;
+  if (R > MAPW) R = MAPW;
+  int c0 = wrap_side(G.ring, k, n) * k + wrap_lane(G.ring, k);
+  if (c0 < 0 || c0 >= N) c0 = 0;
+  int best = hint_pass(r0, R, n, k, c0, 1);
+  if (r0 + best < rEnd) best = hint_pass(r0, R, n, k, c0, 0);
+  if (best <= 0) return;
+  int ro = best, cg = -1;
+  for (int c = 0; c < N; c++) if (h_cost[ro][c] < HINT_INF) { cg = c; break; }
+  if (cg < 0) return;
+  int cnt = 0;
+  while (ro >= 0 && cnt < HINT_MAX) {
+    h_tmpRow[cnt] = r0 + ro;
+    h_tmpRing[cnt] = (float)(cg + 0.5);
+    cnt++;
+    int32_t p = h_prev[ro][cg];
+    if (p < 0) break;
+    int32_t q = p - 1;
+    ro = (int)(q / HINT_COLS);
+    cg = (int)(q % HINT_COLS);
+  }
+  g_hintN = cnt;
+  for (int i = 0; i < cnt; i++) {
+    g_hintRow[i] = h_tmpRow[cnt - 1 - i];
+    g_hintRing[i] = h_tmpRing[cnt - 1 - i];
+  }
+}
+
+void run3_hint_toggle(void) { g_hintOn = !g_hintOn; g_hintDirty = 1; }
+int run3_hint_on(void) { return g_hintOn; }
+int run3_hint_count(void) {
+  if (g_hintOn && g_hintDirty) hint_build();
+  return g_hintN;
+}
+int run3_hint_row(int i) { return (i >= 0 && i < g_hintN) ? g_hintRow[i] : 0; }
+double run3_hint_ring(int i) { return (i >= 0 && i < g_hintN) ? (double)g_hintRing[i] : 0.0; }
 
 /* ---------------- API ---------------- */
 void run3_init(uint32_t seed) {
@@ -817,31 +933,36 @@ void run3_step(double dt) {
     }
   }
 
+  /* crumbling wave: each armed tile drops when its delay runs out. Runs in
+     every state, so a wave set off just before a fall keeps going. */
+  if (g_armedN > 0) {
+    g_crumbAcc += dt * 100.0;
+    int dec = (int)g_crumbAcc;
+    g_crumbAcc -= (double)dec;
+    if (dec < 1) dec = 1;
+    for (int s = 0; s < G.shape && s < MAXN; s++)
+      for (int l = 0; l < G.k && l < MAXK; l++) {
+        uint16_t *ct = g_crumble[s][l];
+        for (int i = 0; i < MAPW; i++) {
+          if (!ct[i]) continue;
+          if (ct[i] > dec) { ct[i] = (uint16_t)(ct[i] - dec); continue; }
+          ct[i] = 0;
+          g_armedN--;
+          uint8_t bit = (uint8_t)(1u << l);
+          if ((GCR0[s][i] & bit) && !(GCRUMB[s][i] & bit)) {
+            GCRUMB[s][i] |= bit;
+            g_dislodged++;
+          }
+        }
+      }
+  }
+
   if (G.state == S_RUN) {
     G.prog += G.rowsPer * SPEED_MUL * CHAR_FWD[char_idx()] * dt;
     G.animT += dt; /* run-cycle clock (time-based, not distance-based) */
     if (G.landT > 0.0) {
       G.landT -= dt;
       if (G.landT < 0.0) G.landT = 0.0;
-    }
-
-    /* crumbling shake timers: armed tiles fall, even mid-gate */
-    for (int qi = 0; qi < MAXSHAKE; qi++) {
-      if (g_shake[qi].t > 0.0f) {
-        g_shake[qi].t -= (float)dt;
-        if (g_shake[qi].t <= 0.0f) {
-          g_shake[qi].t = 0.0f;
-          int wi = g_shake[qi].row - GMAP_BASE;
-          int ss = g_shake[qi].side, ll = g_shake[qi].lane;
-          if (wi >= 0 && wi < MAPW && ss >= 0 && ss < MAXN && ll >= 0 && ll < 8) {
-            uint8_t bit = (uint8_t)(1u << ll);
-            if ((GCR0[ss][wi] & bit) && !(GCRUMB[ss][wi] & bit)) {
-              GCRUMB[ss][wi] |= bit;
-              g_dislodged++;
-            }
-          }
-        }
-      }
     }
 
     /* infinite mode: rebuild window as we advance */
@@ -891,9 +1012,10 @@ void run3_step(double dt) {
       if (G.jump > 0.0 || G.jv > 0.0) {
         G.jump += G.jv * dt;
         G.jv -= GRAV * CHAR_GRAV[char_idx()] * dt;
-        if (G.jump > 0.0) landing_assist(dt); /* mid-air push to the aim tile */
         if (G.jump <= 0.0) {
-          if (landing_grab()) {
+          /* no automatic lane change: you land on the tile you are over
+             (plus the 20% hit-box slack) or you fall */
+          if (tile_hit((int)G.prog, G.ring)) {
             G.jump = 0.0;
             G.jv = 0.0;
             G.landT = 0.25; /* touchdown -> landing pose */
@@ -913,22 +1035,15 @@ void run3_step(double dt) {
          touchdown) adopts the wall below; mid-air ring drift does NOT */
       if (G.state == S_RUN && !(G.jump > 0.0 || G.jv > 0.0)) {
         G.gravSide = (uint8_t)side_under();
-        /* the stepped-on crumbling tile starts shaking */
-        {
-          int r = (int)G.prog, wi = r - GMAP_BASE;
-          int s = side_under(), l = lane_under();
-          uint8_t bit = (uint8_t)(1u << l);
-          if (wi >= 0 && wi < MAPW && s < G.shape && l < G.k &&
-              !(GMAP[s][wi] & bit) && (GCR0[s][wi] & bit) &&
-              !(GCRUMB[s][wi] & bit) && !shake_active(r, s, l))
-            shake_add(r, s, l);
-        }
+        /* the stepped-on crumbling tile takes its whole cluster down */
+        crumb_arm((int)G.prog, side_under(), lane_under());
       }
     }
   } else if (G.state == S_DEAD) {
+    /* outside the tunnel: you only die after VOID_TIME of falling */
     G.fallT += dt;
     G.animT += dt; /* keep the fall cycle playing while falling */
-    if (G.fallT >= 0.8) {
+    if (G.fallT >= VOID_TIME) {
       /* instant respawn at the checkpoint start (the one allowed teleport) */
       open_level(G.lvl);
       /* open_level auto-starts (S_RUN) */

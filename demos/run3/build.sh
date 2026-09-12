@@ -22,7 +22,7 @@ fi
   -Wl,--export=run3_sides -Wl,--export=run3_lanes -Wl,--export=run3_theme \
   -Wl,--export=run3_side -Wl,--export=run3_lane -Wl,--export=run3_ring \
   -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows \
-  -Wl,--export=run3_tile -Wl,--export=run3_solid -Wl,--export=run3_tile_tex \
+  -Wl,--export=run3_tile -Wl,--export=run3_solid -Wl,--export=run3_tile_tex -Wl,--export=run3_tile_hit \
   -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height \
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
@@ -31,6 +31,7 @@ fi
   -Wl,--export=run3_stage_liftf -Wl,--export=run3_stage_sidef \
   -Wl,--export=run3_stage_actor -Wl,--export=run3_stage_prop \
   -Wl,--export=run3_mid_arm -Wl,--export=run3_mid_clear -Wl,--export=run3_gate_resume \
+  -Wl,--export=run3_hint_toggle -Wl,--export=run3_hint_on -Wl,--export=run3_hint_count -Wl,--export=run3_hint_row -Wl,--export=run3_hint_ring \
   -Wl,--export=run3_enter_map -Wl,--export=run3_map_click -Wl,--export=run3_map_hover \
   -Wl,--export=run3_map_scroll -Wl,--export=run3_map_scroll_y -Wl,--export=run3_map_scroll_x -Wl,--export=run3_map_scroll_delta -Wl,--export=run3_map_selected \
   -Wl,--export=run3_map_hovered -Wl,--export=run3_map_set_hover \

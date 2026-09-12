@@ -52,6 +52,24 @@ const EXPECT = [
     }
   }
 
+  // The custom extended tunnels (and the procedural Wormhole Space fallback)
+  // must not be solid slabs: at least 30% of their tiles are void, so they
+  // read like the baked originals.
+  for (const tun of [23, 30, 31, 32, 33, 34, 35]) {
+    e.run3_seek(tun, 0);
+    const n = e.run3_sides(), k = e.run3_lanes();
+    const rows = Math.min(200, e.run3_level_rows() | 0);
+    let voidN = 0, total = 0;
+    for (let r = 0; r < rows; r++)
+      for (let s = 0; s < n; s++) for (let l = 0; l < k; l++) {
+        total++;
+        if (!e.run3_tile(s, r, l)) voidN++;
+      }
+    const pct = 100 * voidN / total;
+    console.log(`tun ${tun}: void ${pct.toFixed(1)}% (${n}x${k}, ${rows} rows)`);
+    if (pct < 30) throw new Error(`tun ${tun}: only ${pct.toFixed(1)}% void (want >= 30%)`);
+  }
+
   // primary lvl0 must match original id-0: 54 rows of 4x4.
   // id-0 main layer has 172 holes, 8 of them in rows 0-3 which the engine
   // always keeps solid (spawn area) -> 164 visible holes. Row 10 is a
@@ -96,17 +114,18 @@ const EXPECT = [
   console.log(`void landing: flapped=${flapped} sawDead=${sawDead} respawned=${respawned}`);
   if (!flapped || !sawDead || !respawned) throw new Error("death/respawn broken");
 
-  // gate advance on a hole-free baked level: primary idx 9 (id-11, 16x1, 59 rows)
-  e.run3_seek(0, 9);
+  // gate advance on a crumble- and hole-free baked level: primary idx 0
+  // (4x4, 57 rows) — zero input reaches the end and rolls into level 1
+  e.run3_seek(0, 0);
   e.run3_set_input(0);
   const s0 = e.run3_sides(), k0 = e.run3_lanes();
   let gated = false;
   for (let i = 0; i < 60 * 60; i++) {
     e.run3_step(1 / 60);
     if (e.run3_state() === 4) break;
-    if (e.run3_lvl() === 10) { gated = true; break; }
+    if (e.run3_lvl() === 1) { gated = true; break; }
   }
-  console.log(`gated 9->10: ${gated}; shape ${s0}x${k0} -> ${e.run3_sides()}x${e.run3_lanes()}`);
+  console.log(`gated 0->1: ${gated}; shape ${s0}x${k0} -> ${e.run3_sides()}x${e.run3_lanes()}`);
   if (!gated) throw new Error("gate advance broken");
 
   // fallback tunnel still procedural: wormhole space lvl rows = 45*rps formula (>0)

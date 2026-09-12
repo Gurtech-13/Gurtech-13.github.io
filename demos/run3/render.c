@@ -258,8 +258,9 @@ static void draw_runner(double R) {
   double lift = 0.02 + G.jump;
   double shrink = 1.0;
   if (dead) {
-    double dd = G.fallT; if (dd > 0.8) dd = 0.8;
-    lift = 0.02 - dd*1.6; shrink = 1.0 - dd*0.7; if (shrink < 0.5) shrink = 0.5;
+    /* falling out of the tunnel: drift away and shrink over VOID_TIME */
+    double dd = G.fallT; if (dd > VOID_TIME) dd = VOID_TIME;
+    lift = 0.02 - dd*1.1; shrink = 1.0 - dd*0.16; if (shrink < 0.25) shrink = 0.25;
   }
   double gx,gy,px,py;
   proj(mx,my,0.0,&gx,&gy,NULL);
@@ -443,6 +444,31 @@ static void draw_stage(double R) {
     if (g_sprops[i].vis) draw_stage_prop(R, g_sprops[i].kind, g_sprops[i].ring, g_sprops[i].zrow, g_sprops[i].size);
 }
 
+/* ==================== HINT ROUTE (press H) ==================== */
+/* The engine hands over a route to the end of the level as (row, ring)
+   waypoints; each is pinned to the tunnel wall and drawn as a tiny grey
+   billboard, so the line of dots reads as a path through the level. */
+static void fill_circle(int cx, int cy, int r, uint32_t c);
+static void draw_hint(double R) {
+  int hn = run3_hint_count();
+  if (hn <= 0) return;
+  uint32_t c = rgb(150, 150, 150);
+  for (int i = 0; i < hn; i++) {
+    double z = ((double)run3_hint_row(i) - G.prog) * G.tile;
+    if (z < -2.0 || z > VIEW) continue;
+    double mx, my, px, py, dd;
+    ring_point(run3_hint_ring(i), R, &mx, &my);
+    proj(mx, my, z, &px, &py, &dd);
+    if (dd < 0.4) continue;
+    double sc = DCAM / dd;
+    if (sc > 1.6) sc = 1.6;
+    if (sc < 0.10) continue;
+    int r = (int)(2.0 * (H / 360.0) * sc + 0.5);
+    if (r < 1) r = 1;
+    fill_circle((int)px, (int)py, r, c);
+  }
+}
+
 /* ==================== MAIN FRAME ==================== */
 
 /* Draw a tile's texture along the tile's OWN quad: subdivide the tile in
@@ -584,7 +610,9 @@ void render_frame(void) {
             double jx = 0.0, jy = 0.0;
             double sh = run3_shake(side, ri, l);
             if (sh > 0.0) {
-              double amp = sh * 5.0;
+              /* shake while the wave reaches this tile; the wait can be long,
+                 so cap the wobble */
+              double amp = sh < 0.5 ? sh * 5.0 : 2.5;
               uint32_t hh = h32((uint32_t)(side * 73856093u ^ ri * 19349663u ^ l * 83492791u ^ (frameNo >> 2) * 2654435761u));
               jx = ((double)(hh & 7u) - 3.5) * 0.5 * amp;
               jy = ((double)((hh >> 3) & 7u) - 3.5) * 0.5 * amp;
@@ -619,8 +647,12 @@ void render_frame(void) {
 
   /* cutscene staging: the tunnel is the backdrop (held frame at S_CUT /
      S_GATE) and the host-placed cast plays on it — no runner sprite */
-  if (G.state == S_CUT || G.state == S_GATE) draw_stage(R);
-  else draw_runner(R);
+  if (G.state == S_CUT || G.state == S_GATE) {
+    draw_stage(R);
+  } else {
+    if (G.state == S_RUN && run3_hint_on()) draw_hint(R);
+    draw_runner(R);
+  }
 }
 
 /* ==================== TEXT HELPERS (forward decl for map) ==================== */
@@ -629,7 +661,6 @@ static void draw_glyph(int x, int y, char ch, uint32_t col, double scale);
 static int draw_text(int x, int y, const char *s, uint32_t col, double scale);
 static int text_width(const char *s, double scale);
 static void draw_text_centered(int y, const char *s, uint32_t col, double scale);
-static void fill_rect_i(int x, int y, int w, int h, uint32_t c);
 static void stroke_rect(int x, int y, int w, int h, uint32_t c);
 
 /* ==================== MAP RENDERING ==================== */
@@ -932,10 +963,6 @@ static int text_width(const char *s, double scale) {
 static void draw_text_centered(int y, const char *s, uint32_t col, double scale) {
   int sw = text_width(s, scale);
   draw_text((W - sw) / 2, y, s, col, scale);
-}
-
-static void fill_rect_i(int x, int y, int w, int h, uint32_t c) {
-  fill_rect(x, y, w, h, c);
 }
 
 static void stroke_rect(int x, int y, int w, int h, uint32_t c) {

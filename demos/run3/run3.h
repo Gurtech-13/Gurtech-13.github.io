@@ -31,6 +31,7 @@
 #define STEER_EASE 9.5    /* keep snappy */
 #define FLIGHT 0.84
 #define SPEED_MUL 2.25    /* forward walk speed bumped a bit (was 2.0) */
+#define VOID_TIME 5.0     /* seconds spent outside the tunnel before you die */
 
 #define MAX_TUNNELS 40 /* 30 original Run 3 paths + custom extended tunnels */
 #define MAX_LEVELS 200
@@ -122,6 +123,13 @@ uint32_t h32(uint32_t x);
 /* renderer (render.c) */
 void render_init_stars(uint32_t seed);
 void render_frame(void);
+
+/* hint route (engine -> renderer): a way to the level end, toggled with H */
+void run3_hint_toggle(void);
+int  run3_hint_on(void);
+int  run3_hint_count(void);
+int  run3_hint_row(int i);
+double run3_hint_ring(int i);
 
 /* small pure helpers shared by both units */
 static inline int wrap_side(double ring, int k, int n) {
