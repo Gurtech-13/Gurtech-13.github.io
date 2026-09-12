@@ -11,6 +11,7 @@
  */
 #include <stdint.h>
 #include "run3.h"
+#include "levels/levels_baked.h"
 
 game_t G;
 uint8_t GMAP[MAXN][MAPW];
@@ -63,6 +64,27 @@ uint32_t h32(uint32_t x) {
   return x;
 }
 
+/* ---- authored level bitmaps (levels_baked.h, baked from the original game).
+ * Most original levels are mostly empty space: sparse holes in an otherwise
+ * solid tunnel. Tunnels without baked data (Wormhole Space) fall back to
+ * procedural holes. ---- */
+static int baked_at(int tun, int lvl, const baked_level_t **out) {
+  if (tun < 0 || tun >= BAKED_TUNNELS || tun >= MAX_TUNNELS) return 0;
+  if (lvl < 0 || lvl >= BAKED_TUN_COUNT[tun]) return 0;
+  const baked_level_t *L = &BAKED_LEVELS[BAKED_TUN_START[tun] + lvl];
+  if (L->rows == 0) return 0;
+  if (out) *out = L;
+  return 1;
+}
+/* 1 = solid. Lanes outside the baked area read solid (safe lookahead). */
+static int baked_tile(const baked_level_t *L, int row, int side, int lane) {
+  if (!L || row < 0 || side < 0 || side >= L->n || lane < 0 || lane >= L->k) return 1;
+  if (row >= L->rows) return 1;
+  uint32_t idx = L->bit + (uint32_t)row * (uint32_t)L->n * (uint32_t)L->k +
+                 (uint32_t)side * (uint32_t)L->k + (uint32_t)lane;
+  return (BAKED_BITS[idx >> 3] >> (idx & 7)) & 1;
+}
+
 /* ---------------- tunnel / level setup ---------------- */
 static const tunnel_t *tun(void) { return &TUNNELS[G.tun]; }
 
@@ -83,15 +105,19 @@ static void compute_rows(void) {
   const tunnel_t *t = tun();
   g_rowStart[0] = 0.0;
   for (int j = 0; j < (int)t->levels; j++) {
-    g_levelRows[j] = (double)((int)(45.0 * rpsAt(j) + 0.5));
+    const baked_level_t *B = 0;
+    if (baked_at(G.tun, j, &B)) g_levelRows[j] = (double)B->rows;
+    else g_levelRows[j] = (double)((int)(45.0 * rpsAt(j) + 0.5));
     g_rowStart[j + 1] = g_rowStart[j] + g_levelRows[j];
   }
 }
 
-/* fill GMAP for the current level window */
+/* fill GMAP for the current level window (authored bitmap or procedural) */
 static void build_window(void) {
   const tunnel_t *t = tun();
-  int n = t->n_sides, k = t->k_tiles;
+  const baked_level_t *B = 0;
+  baked_at(G.tun, G.lvl, &B);
+  int n = B ? B->n : t->n_sides, k = B ? B->k : t->k_tiles;
   int all = (1 << k) - 1;
   int r0 = (int)g_rowStart[G.lvl];
   int rEnd = (int)g_rowStart[G.lvl + 1] + PADW;
@@ -118,7 +144,15 @@ static void build_window(void) {
     }
     for (int s2 = 0; s2 < n; s2++) {
       uint8_t m = 0;
-      if (voidSide >= 0) {
+      if (B) {
+        int lr = R - r0;
+        if (lr >= 0 && lr < B->rows) {
+          uint8_t mm = 0;
+          for (int ln = 0; ln < k; ln++)
+            if (!baked_tile(B, lr, s2, ln)) mm |= (uint8_t)(1u << ln);
+          m = mm;
+        } /* past the baked rows (far lookahead): solid */
+      } else if (voidSide >= 0) {
         m = (s2 == voidSide) ? (uint8_t)all : 0;
       } else if (!buffered) {
         uint8_t prev = (i - 1 >= 0) ? GMAP[s2][i - 1] : 0;
@@ -146,7 +180,6 @@ static void build_window(void) {
 /* build GMAP for infinite mode at current position */
 static void build_inf_window(int baseRow) {
   int n = G.shape, k = G.k;
-  int all = (1 << k) - 1;
   int r0 = baseRow;
   int rEnd = r0 + MAPW;
   GMAP_BASE = r0;
@@ -179,17 +212,21 @@ static void open_level(int lvl) {
   compute_rows();
   G.shape = t->n_sides;
   G.k = t->k_tiles;
+  const baked_level_t *B = 0;
+  if (baked_at(G.tun, G.lvl, &B)) { G.shape = B->n; G.k = B->k; }
   G.tile = t->baseTile;
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
   G.holeP = holeAt(lvl);
   G.blockEvery = (lvl >= t->blockStart) ? t->blockEvery : 0;
+  if (B) G.blockEvery = 0; /* authored levels have no wall-void blocks */
   G.rowStart = g_rowStart[lvl];
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
   G.state = S_RUN; /* instant start: the runner never waits */
   G.prog = G.rowStart;
   G.ring = (double)G.k * 0.5;
+  if (B && B->spawn < (uint16_t)(G.shape * G.k)) G.ring = (double)B->spawn + 0.5;
   G.gravSide = (uint8_t)wrap_side(G.ring, G.k, G.shape);
   G.vRing = 0.0;
   G.jump = 0.0;
@@ -211,28 +248,144 @@ static void open_level_continue(int lvl, double over) {
   compute_rows();
   G.shape = t->n_sides;
   G.k = t->k_tiles;
+  const baked_level_t *B = 0;
+  if (baked_at(G.tun, G.lvl, &B)) { G.shape = B->n; G.k = B->k; }
   G.tile = t->baseTile;
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
   G.holeP = holeAt(lvl);
   G.blockEvery = (lvl >= t->blockStart) ? t->blockEvery : 0;
+  if (B) G.blockEvery = 0;
   G.rowStart = g_rowStart[lvl];
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
   G.state = S_RUN;
   G.prog = G.rowStart + over;
   if (G.prog >= G.rowEnd) G.prog = G.rowEnd - 0.001;
-  /* ring, vRing, rot, rotT, jump, jv, input, animT, landT preserved */
+  /* ring, vRing, rot, rotT, jump, jv, input, animT, landT preserved; only
+     rewrap the ring if the next level has a different cross-section */
+  {
+    double tot = (double)G.shape * (double)G.k;
+    if (tot > 0.0) {
+      while (G.ring < 0.0) G.ring += tot;
+      while (G.ring >= tot) G.ring -= tot;
+    }
+  }
 }
 
 /* ---------------- helpers ---------------- */
 static int side_under(void) { return wrap_side(G.ring, G.k, G.shape); }
 static int lane_under(void) { return wrap_lane(G.ring, G.k); }
 
-/* character stats: lat speed, jump velocity, gravity multipliers */
-static const double CHAR_LAT[6]  = { 1.00, 1.25, 0.85, 1.00, 0.90, 0.95 };
-static const double CHAR_JUMP[6] = { 1.00, 0.85, 1.10, 1.00, 0.95, 1.05 };
-static const double CHAR_GRAV[6] = { 1.00, 1.00, 0.70, 0.60, 0.65, 0.90 };
+/* character stats, baked from the original game's character classes.
+ * Order: runner, skater, child, angel, ghost(=child), lizard, ninja,
+ * student, gentleman, pastafarian, bunny, climber, duplicator,
+ * pirate(=pastafarian), skier, iceskater, jackolantern.
+ * Base values from the base character class: jump 900, speed 270,
+ * run 300, fall 300, ease 0.9; per-character multipliers/overrides from
+ * each character's constructor (Runner extends base 1.17x/1.21x/...,
+ * Skater maxspeed 600, Angel gravity 0.4, Ghost/Pirate reuse the Child /
+ * Pastafarian factories, ...). Normalized to Runner = 1.0.
+ * JUMP = jump velocity, FWD = forward speed, LAT = strafe speed,
+ * GRAV = fall gravity (Angel uses its 0.4 glide factor), EASE = steering
+ * response. Special abilities (bridges, glides, duplicates, wall-sticks)
+ * have no equivalent in this engine and are not ported. */
+static const double CHAR_JUMP[NCHAR] = {
+  1.0000, /* runner 1089 */
+  0.8017, /* skater 873 */
+  0.3306, /* child 360 */
+  0.8264, /* angel (base 900) */
+  0.3306, /* ghost = child */
+  0.8264, /* lizard (base) */
+  0.8264, /* ninja (base) */
+  0.6612, /* student 720 */
+  0.5372, /* gentleman 585 */
+  0.5785, /* pastafarian 630 */
+  1.2397, /* bunny 1350 */
+  0.6612, /* climber 720 */
+  0.8264, /* duplicator (base) */
+  0.5785, /* pirate = pastafarian */
+  0.8264, /* skier (base 900) */
+  0.6814, /* iceskater 742 */
+  0.7438, /* jackolantern 810 */
+};
+static const double CHAR_FWD[NCHAR] = {
+  1.0000, /* runner 300 */
+  1.3767, /* skater 413 */
+  0.8000, /* child 240 */
+  1.0000, /* angel (base) */
+  0.8000, /* ghost = child */
+  1.0000, /* lizard (base) */
+  1.0000, /* ninja (base) */
+  1.0000, /* student (base) */
+  0.6000, /* gentleman 180 */
+  0.8000, /* pastafarian 240 */
+  1.0000, /* bunny (base) */
+  1.0000, /* climber (base) */
+  1.0000, /* duplicator (base) */
+  0.8000, /* pirate = pastafarian */
+  1.7000, /* skier 510 */
+  1.3767, /* iceskater (skater) */
+  1.0000, /* jackolantern (base) */
+};
+static const double CHAR_LAT[NCHAR] = {
+  1.0000, /* runner 316 */
+  0.9231, /* skater 292 */
+  0.5128, /* child 162 */
+  0.8547, /* angel (base 270) */
+  0.5128, /* ghost = child */
+  0.8547, /* lizard (base) */
+  0.8547, /* ninja (base) */
+  0.7265, /* student 230 */
+  0.8547, /* gentleman (base) */
+  0.8547, /* pastafarian (base) */
+  1.0256, /* bunny 324 */
+  0.6838, /* climber 216 */
+  0.8547, /* duplicator (base) */
+  0.8547, /* pirate = pastafarian */
+  0.8547, /* skier (base) */
+  0.9231, /* iceskater (skater) */
+  0.8547, /* jackolantern (base) */
+};
+static const double CHAR_GRAV[NCHAR] = {
+  1.0000, /* runner */
+  1.7544, /* skater 600 */
+  0.8333, /* child 285 */
+  0.3636, /* angel glide 0.4 */
+  0.8333, /* ghost = child */
+  0.8772, /* lizard (base 300) */
+  0.8772, /* ninja (base) */
+  0.7895, /* student 270 */
+  0.8333, /* gentleman 285 */
+  0.7895, /* pastafarian 270 */
+  0.8772, /* bunny (base) */
+  0.7895, /* climber 270 */
+  0.8772, /* duplicator (base) */
+  0.7895, /* pirate = pastafarian */
+  0.3070, /* skier 105 */
+  1.7544, /* iceskater (skater) */
+  0.8333, /* jackolantern 285 */
+};
+static const double CHAR_EASE[NCHAR] = {
+  1.1111, /* runner (grippy) */
+  1.0000, /* skater */
+  1.0000, /* child */
+  1.0000, /* angel */
+  1.0000, /* ghost */
+  1.0000, /* lizard */
+  1.0000, /* ninja */
+  1.0000, /* student */
+  1.0000, /* gentleman */
+  1.0000, /* pastafarian */
+  1.0000, /* bunny */
+  1.0000, /* climber */
+  1.0000, /* duplicator */
+  1.0000, /* pirate */
+  1.0000, /* skier */
+  0.9000, /* iceskater (slick) */
+  1.0000, /* jackolantern */
+};
+static int char_idx(void) { return G.charm < NCHAR ? G.charm : 0; }
 
 static int lane_ok_at(int rowAbs) {
   int i = rowAbs - GMAP_BASE;
@@ -240,6 +393,85 @@ static int lane_ok_at(int rowAbs) {
   int s = side_under();
   if (s >= G.shape) return 0;
   return (GMAP[s][i] & (1u << lane_under())) ? 0 : 1;
+}
+
+/* tile under an arbitrary ring position (1 = solid) */
+static int tile_at(int rowAbs, double ring) {
+  int i = rowAbs - GMAP_BASE;
+  if (i < 0 || i >= MAPW) return 1;
+  int s = wrap_side(ring, G.k, G.shape);
+  int l = wrap_lane(ring, G.k);
+  if (s >= G.shape || l >= G.k) return 0;
+  return (GMAP[s][i] & (1u << l)) ? 0 : 1;
+}
+
+/* proactive landing assist: while falling, predict the touchdown row and
+ * gently push the ring toward the nearest solid lane center there, so the
+ * runner drifts onto the tile it is aiming at instead of clipping its edge.
+ * The ring is continuous around the tube, so this automatically catches the
+ * neighboring wall when landing on the edge of turning gravity. Capped to
+ * +/-2 lanes: jumps aimed into wide gaps are still falls. */
+static void landing_assist(double dt) {
+  if (!(G.jump > 0.0 || G.jv > 0.0)) return;
+  if (G.jv >= 0.0) return; /* still rising: nothing to aim at yet */
+  int cm = char_idx();
+  double g = GRAV * CHAR_GRAV[cm];
+  if (g <= 0.0) return;
+  double disc = G.jv * G.jv + 2.0 * g * G.jump;
+  if (disc <= 0.0) return;
+  double t = (G.jv + ssqrt(disc)) / g; /* fall time left */
+  if (t <= 0.0 || t > 3.0) return;
+  double spd = G.rowsPer * SPEED_MUL * CHAR_FWD[cm];
+  int rowL = (int)(G.prog + spd * t);
+  double tot = (double)G.shape * (double)G.k;
+  if (tot <= 0.0) return;
+  double base = G.ring;
+  while (base < 0.0) base += tot;
+  while (base >= tot) base -= tot;
+  long long li = (long long)(base < 0.0 ? base - 1.0 : base);
+  double best = 0.0;
+  int have = 0;
+  for (int dl = -2; dl <= 2; dl++) {
+    double rc = (double)li + 0.5 + (double)dl; /* nearby lane center */
+    double w = rc;
+    while (w < 0.0) w += tot;
+    while (w >= tot) w -= tot;
+    if (!tile_at(rowL, w)) continue;
+    double d = w - base;
+    while (d > tot * 0.5) d -= tot; /* shortest way around the tube */
+    while (d < -tot * 0.5) d += tot;
+    double ad = d < 0.0 ? -d : d;
+    double ab = best < 0.0 ? -best : best;
+    if (!have || ad < ab) { best = d; have = 1; }
+  }
+  if (!have) return;
+  double k = dt * 6.0; /* converge over ~0.3s of falling */
+  if (k > 1.0) k = 1.0;
+  G.ring = base + best * k;
+  while (G.ring < 0.0) G.ring += tot;
+  while (G.ring >= tot) G.ring -= tot;
+}
+
+/* touchdown backstop: the exact lane first, then a small sideways grab
+ * (+/-0.55 tiles) onto the neighboring tile in the SAME row. Rarely fires
+ * now that the airborne push does the main work; kept to forgive edge
+ * clips the push could not fully correct. */
+static int landing_grab(void) {
+  static const double offs[3] = { 0.0, 0.55, -0.55 };
+  int r = (int)G.prog;
+  for (int o = 0; o < 3; o++) {
+    double ring = G.ring + offs[o];
+    double tot = (double)G.shape * (double)G.k;
+    if (tot > 0.0) {
+      while (ring < 0.0) ring += tot;
+      while (ring >= tot) ring -= tot;
+    }
+    if (tile_at(r, ring)) {
+      G.ring = ring;
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /* ---------------- API ---------------- */
@@ -312,9 +544,8 @@ void run3_flap(void) {
     G.state = S_RUN;
   } else if (G.state == S_RUN) {
     if (G.jump <= 0.001 && G.jv <= 0.0) {
-      int cm = G.charm < 6 ? G.charm : 0;
       G.jump = 0.001;
-      G.jv = JUMPV * CHAR_JUMP[cm];
+      G.jv = JUMPV * CHAR_JUMP[char_idx()];
       G.landT = 0.0; /* leaving ground cancels the landing pose */
     }
   } else if (G.state == S_DEAD) {
@@ -369,7 +600,7 @@ void run3_step(double dt) {
   int n = G.shape, k = G.k;
 
   if (G.state == S_RUN) {
-    G.prog += G.rowsPer * SPEED_MUL * dt;
+    G.prog += G.rowsPer * SPEED_MUL * CHAR_FWD[char_idx()] * dt;
     G.animT += dt; /* run-cycle clock (time-based, not distance-based) */
     if (G.landT > 0.0) {
       G.landT -= dt;
@@ -397,11 +628,11 @@ void run3_step(double dt) {
         G.state = S_DONE;
       }
     } else {
-      /* eased lateral steering */
-      int cm = G.charm < 6 ? G.charm : 0;
+      /* eased lateral steering (per-character speed and response) */
+      int cm = char_idx();
       double maxV = LATSPD * CHAR_LAT[cm];
       double target = G.input * maxV;
-      double ease = dt * STEER_EASE;
+      double ease = dt * STEER_EASE * CHAR_EASE[cm];
       if (ease > 1.0) ease = 1.0;
       G.vRing += (target - G.vRing) * ease;
       if (G.vRing > maxV) G.vRing = maxV;
@@ -412,11 +643,11 @@ void run3_step(double dt) {
       if (G.ring >= tot) G.ring -= tot;
 
       if (G.jump > 0.0 || G.jv > 0.0) {
-        int cm2 = G.charm < 6 ? G.charm : 0;
         G.jump += G.jv * dt;
-        G.jv -= GRAV * CHAR_GRAV[cm2] * dt;
+        G.jv -= GRAV * CHAR_GRAV[char_idx()] * dt;
+        if (G.jump > 0.0) landing_assist(dt); /* mid-air push to the aim tile */
         if (G.jump <= 0.0) {
-          if (lane_ok_at((int)G.prog)) {
+          if (landing_grab()) {
             G.jump = 0.0;
             G.jv = 0.0;
             G.landT = 0.25; /* touchdown -> landing pose */
@@ -426,8 +657,11 @@ void run3_step(double dt) {
           }
         }
       } else if (!lane_ok_at((int)G.prog)) {
-        G.state = S_DEAD;
-        G.fallT = 0.0;
+        /* ran off an edge: automatic last-moment jump. Normal landing rules
+           apply from here — if it comes down in the void, the runner dies. */
+        G.jump = 0.001;
+        G.jv = JUMPV * CHAR_JUMP[char_idx()];
+        G.landT = 0.0;
       }
       /* gravity latches to the touched wall: grounded running (or a fresh
          touchdown) adopts the wall below; mid-air ring drift does NOT */
@@ -514,7 +748,7 @@ void run3_set_input(double lr) {
   G.input = lr;
 }
 void run3_set_char(int32_t c) {
-  G.charm = (uint8_t)(c < 0 ? 0 : (c > 5 ? 5 : c));
+  G.charm = (uint8_t)(c < 0 ? 0 : (c > NCHAR - 1 ? NCHAR - 1 : c));
 }
 int32_t run3_width(void) { return W; }
 int32_t run3_height(void) { return H; }

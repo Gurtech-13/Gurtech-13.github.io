@@ -27,13 +27,14 @@
 /* movement — doubled player speed, gravity slowed a bit (not full fix) */
 #define GRAV 10.0
 #define JUMPV 5.6
-#define LATSPD 8.4        /* doubled from 4.2 */
+#define LATSPD 6.0         /* nerfed strafing (was 8.4) */
 #define STEER_EASE 9.5    /* keep snappy */
 #define FLIGHT 0.84
-#define SPEED_MUL 2.0     /* forward speed multiplier */
+#define SPEED_MUL 2.25    /* forward walk speed bumped a bit (was 2.0) */
 
 #define MAX_TUNNELS 30 /* original Run 3 map paths only, no invented tunnels */
 #define MAX_LEVELS 200
+#define NCHAR 17 /* playable characters (must match CHAR_COUNT in assets_data.h) */
 #define MAX_RPS 7.0
 #define MAX_HOLE 0.26
 #define INF_MODE_SCORE_MAX 999999
@@ -85,7 +86,7 @@ typedef struct {
   uint8_t state;
   uint16_t tun;              /* current tunnel index */
   uint16_t lvl;              /* current level within the tunnel */
-  uint8_t charm;             /* character 0..2 */
+  uint8_t charm;             /* character 0..16 */
   uint8_t theme;
   uint8_t shape;             /* n sides */
   uint8_t k;                 /* tiles per side */

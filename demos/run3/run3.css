@@ -265,6 +265,62 @@ html, body {
   box-shadow: 0 6px 20px rgba(56,189,248,.4);
 }
 
+/* ==================== CUTSCENE VIEWER ==================== */
+#cutview { cursor: pointer; }
+.cutstage {
+  position: relative;
+  width: min(920px, 94vw);
+  aspect-ratio: 4/3;
+  max-height: 88vh;
+  background: radial-gradient(ellipse at 50% 120%, #16213c 0%, #070b16 65%);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(0,0,0,.7);
+  overflow: hidden;
+}
+.cuttitle {
+  position: absolute; top: 10px; left: 14px;
+  font-family: 'Run3Title', 'Permanent Marker', cursive;
+  font-size: .95rem; letter-spacing: .02em;
+  color: rgba(255,255,255,.75); text-shadow: 0 2px 8px rgba(0,0,0,.8);
+  pointer-events: none;
+}
+.cutbubble {
+  position: absolute;
+  transform: translate(-50%,-50%);
+  max-width: 44%;
+  padding: 10px 14px;
+  box-sizing: border-box;
+  background: rgba(8,12,24,.9);
+  border: 1px solid rgba(125,211,252,.25);
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.5);
+}
+.cutbubble p {
+  margin: 0; color: #fff;
+  font-size: .92rem; line-height: 1.5;
+}
+.cutbubble.small p {
+  font-size: .78rem; font-style: italic;
+  color: rgba(255,255,255,.75);
+}
+.cutbar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; box-sizing: border-box;
+  background: linear-gradient(180deg, transparent, rgba(2,6,23,.8));
+}
+.cutbar span {
+  color: rgba(255,255,255,.5); font-size: .75rem;
+}
+.cutbar button {
+  font: inherit; cursor: pointer;
+  background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+  color: #04131d; font-weight: 700;
+  border: none; border-radius: 999px;
+  padding: 8px 22px;
+}
+
 /* ==================== STATUS / FOOTER — overlay on fullscreen canvas ==================== */
 .statusline {
   position: absolute;

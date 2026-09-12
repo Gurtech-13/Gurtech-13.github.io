@@ -6,6 +6,8 @@
   var STORY = window.STORY;
   var T = STORY.T, EDGES = STORY.EDGES, CHARS = STORY.C, RENAME = STORY.RENAME;
   var MUSIC_MAP = STORY.MUSIC || {};
+  var CUT = window.STORY_CUT || {};
+  var PATH_CUT = window.STORY_PATH_CUT || [];
 
   var cv, ctx, imageData, view, words, exps;
   var W = 1280, H = 720; // will be updated from WASM after load (1280x720 fullscreen)
@@ -18,8 +20,8 @@
   var LS_KEY = "run3tribute-v3";
   var save;
   function loadSave() {
-    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0 }; } } catch(e) {}
-    return { cleared:[], best:{}, renames:{}, char:0, musicVol:0.5, powercells:0 };
+    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, cuts: o.cuts||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0 }; } } catch(e) {}
+    return { cleared:[], best:{}, renames:{}, cuts:{}, char:0, musicVol:0.5, powercells:0 };
   }
   function persist() { try { localStorage.setItem(LS_KEY, JSON.stringify(save)); } catch(e) {} }
   save = loadSave();
@@ -84,6 +86,63 @@
     document.getElementById("card").classList.add("on");
     document.getElementById("cardbtn").onclick=function(){document.getElementById("card").classList.remove("on");if(cb)cb();};
   }
+
+  /* ===== CUTSCENES (original dialogue, baked by bake_cutscenes.py) ===== */
+  function cutTitle(name) {
+    return String(name||"").replace(/([a-z])([A-Z])/g, "$1 $2");
+  }
+  function cutLines(name) {
+    if (name === "ThanksForPlaytesting")
+      return [{ m: "New hints unlocked! Replay the Coordination Challenges to view them.", small: false, x: 0, y: 120 }];
+    return CUT[name] || null;
+  }
+  /* Positioned-bubble cutscene viewer. The original dialog calls carry each
+     bubble's on-screen position (dialog units, /2.5 = px on the 800x600
+     stage, center origin) — positions only, no speaker tracking. */
+  function showCutscene(name, cb) {
+    var lines = cutLines(name);
+    if (!lines || !lines.length) { if (cb) cb(); return; }
+    var view = document.getElementById("cutview"),
+        stage = document.getElementById("cutstage"),
+        bub = document.getElementById("cutbubble"),
+        txt = document.getElementById("cuttext"),
+        prog = document.getElementById("cutprog");
+    document.getElementById("cuttitle").textContent = cutTitle(name);
+    var i = 0, done = false;
+    view.classList.add("on");
+    function place(L) {
+      var w = stage.clientWidth || 800, h = stage.clientHeight || 600;
+      var s = Math.min(w / 800, h / 600);
+      var x = (typeof L.x === "number") ? L.x : 0;
+      var y = (typeof L.y === "number") ? L.y : 120;
+      var left = 50 + (x / 2.5) * s / w * 100;
+      var top = 50 + (y / 2.5) * s / h * 100;
+      left = Math.max(24, Math.min(76, left));
+      top = Math.max(18, Math.min(78, top));
+      bub.style.left = left + "%";
+      bub.style.top = top + "%";
+    }
+    function next() {
+      if (done) return;
+      if (i >= lines.length) {
+        done = true;
+        view.classList.remove("on");
+        view.onclick = null;
+        if (cb) cb();
+        return;
+      }
+      var L = lines[i++];
+      txt.textContent = L.m;
+      bub.className = "cutbubble" + (L.small ? " small" : "");
+      prog.textContent = (i < lines.length) ? (i + "/" + lines.length) : cutTitle(name);
+      place(L);
+    }
+    document.getElementById("cutbtn").onclick = function (ev) { if (ev) ev.stopPropagation(); next(); };
+    view.onclick = function () { next(); };
+    next();
+  }
+  function cutSeen(key) { return !!(save.cuts && save.cuts[key]); }
+  function markCutSeen(key) { save.cuts = save.cuts || {}; save.cuts[key] = 1; persist(); }
 
   /* ===== CHEAT ===== */
   function cheatUnlockAll() {
@@ -169,18 +228,34 @@
       if(save.cleared.indexOf(t)<0)save.cleared.push(t);
       persist();
       syncAllToWasm();
-      if(RENAME[t]&&!save.renames[t]){
-        var r=RENAME[t]; save.renames[t]=r.to; persist();
-        showCard(r.title+" \u2014 now \u201c"+r.to+"\u201d",r.text,"Tunnel renamed","Back",function(){
-          lastState=-1; exps.run3_enter_menu();
-        },r.img||null);
-      } else {
-        showCard("Mapped: "+T[t].name,T[t].lore,"The Runner's map","Back",function(){
-          lastState=-1; exps.run3_enter_menu();
-        },null);
-      }
+      var showEnd=function(){
+        if(RENAME[t]&&!save.renames[t]){
+          var r=RENAME[t]; save.renames[t]=r.to; persist();
+          showCard(r.title+" \u2014 now \u201c"+r.to+"\u201d",r.text,"Tunnel renamed","Back",function(){
+            lastState=-1; exps.run3_enter_menu();
+          },r.img||null);
+        } else {
+          showCard("Mapped: "+T[t].name,T[t].lore,"The Runner's map","Back",function(){
+            lastState=-1; exps.run3_enter_menu();
+          },null);
+        }
+      };
+      var pc1=PATH_CUT[t], ekey="e"+t;
+      if(pc1&&pc1.end&&!cutSeen(ekey)){
+        markCutSeen(ekey);
+        showCutscene(pc1.end,showEnd);
+      } else showEnd();
       document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped";
     }
+  }
+
+  function beginPlay(sel, lvl) {
+    curTun=sel; lastState=-1;
+    exps.run3_seek(sel,lvl);
+      exps.run3_set_char(Math.min(save.char,16));
+    inGame=true;
+    var mt=MUSIC_MAP[sel]||"leavethesolarsystem";
+    playMusic(mt);
   }
 
   /* ===== CANVAS EVENTS ===== */
@@ -283,12 +358,14 @@
           showCard(T[sel].kind==="letter"?T[sel].name+"-Tunnel":T[sel].name,T[sel].lore,"The Runner's map","Close",function(){lastState=-1;});
           return;
         }
-        curTun=sel; lastState=-1;
-        exps.run3_seek(sel,sellvl>=0?sellvl:(save.best[sel]||0));
-        exps.run3_set_char(Math.min(save.char,2));
-        inGame=true;
-        var mt=MUSIC_MAP[sel]||"leavethesolarsystem";
-        playMusic(mt);
+        var startLvl=sellvl>=0?sellvl:(save.best[sel]||0);
+        var pc0=PATH_CUT[sel], skey="s"+sel;
+        if(pc0&&pc0.start&&startLvl===0&&!cutSeen(skey)){
+          markCutSeen(skey);
+          showCutscene(pc0.start,function(){beginPlay(sel,startLvl);});
+        } else {
+          beginPlay(sel,startLvl);
+        }
       }
     } else if(st===0||st===2||st===3) {
       /* game: tap to start/restart/continue */
