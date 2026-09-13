@@ -116,20 +116,89 @@ def extract_staging(z, cname):
             "unresolved": sorted(unresolved)}
 
 
+# Textured panel props: the decompiled scenes build a small §8f§ quad and
+# park it on a character.  Offsets are the scene's own translate() values,
+# scaled to stage tiles like the map panel (see MAP_FALL below).
+PANEL_PROPS = {
+    # Candy.as: a 25x25 "Candy.png" panel copied onto §52§ (ch1, the Child)
+    # with translate(4,0,4), then translate(-3,-13,8) one frame later and
+    # §9!?§() (dropped) at frame2.
+    "Candy": {"kind": "candy", "ch": 1, "at": 0, "gone": 2,
+              "dr": 0.8, "dz": 0.6, "size": 1.5, "inset": 0.15},
+}
+# ComingThrough.as frame1 builds the map beside the Skater — a flat 40x25
+# panel (a 1x1 BitmapData of 0xBCAB7C through the colour shader §<!9§.§7!P§,
+# never a texture read) — and tweens it: a 0.6s fling to (x-70, y-40,
+# z+150), then steps of dy = -80/(1+k*0.25) with a lateral bounce of
+# +/-(50-2k) every 0.6s until y passes the floor (-182; frame11 re-snaps it
+# there and it rocks in place).  frame20 nudges it (+10,+15,-20) as it is
+# handed back; frame21 sets visible=false.  The port keeps that shape: off
+# the Skater, down through the tube's interior (inset) to the floor at the
+# runner's wall (ring offset -> 0), parked, then hidden.
+# (dialogue frame -> (ring offset, row offset, inset))
+MAP_FALL = {
+    0: None,
+    1: (1.8, 2.0, 0.95),
+    2: (2.2, 4.0, 0.85),
+    3: (2.4, 6.5, 0.60),
+    4: (2.2, 8.0, 0.30),
+    6: (1.2, 9.0, 0.05),
+    8: (0.0, 9.6, 0.0),
+    20: (0.0, 9.0, 0.0),
+    21: None,
+    22: None,
+}
+
+
+def panel_prop(pp, sf, actors):
+    """The scene's panel for dialogue frame sf: it rides its character, or
+    reports kind "none" once the scene has dropped it.  A slot that always
+    exists keeps the host's carry-forward from resurrecting a dropped prop."""
+    if pp["at"] <= sf < pp["gone"]:
+        for a in actors:
+            if a["ch"] == pp["ch"]:
+                return {"kind": pp["kind"],
+                        "ring": round(a["ring"] + pp["dr"], 2),
+                        "z": round(a["z"] + pp["dz"], 2),
+                        "size": pp["size"], "inset": pp["inset"]}
+    return {"kind": "none", "ring": 4.0, "z": 6.0,
+            "size": pp["size"], "inset": 0.0}
+
+
+def map_prop(sf, base):
+    """The ComingThrough map at dialogue frame sf; the last keyframe holds,
+    so it sits where it landed until it is handed back and hidden.  base is
+    the spot it falls to — captured once, because the map is parked on the
+    floor while the runner keeps moving and must not follow her."""
+    key = None
+    for f in sorted(MAP_FALL):
+        if f <= sf:
+            key = MAP_FALL[f]
+    if key is None or base is None:
+        return {"kind": "none", "ring": 4.0, "z": 6.0,
+                "size": 2.4, "inset": 0.0}
+    return {"kind": "map", "ring": round(base[0] + key[0], 2),
+            "z": round(base[1] + key[1], 2), "size": 2.4, "inset": key[2]}
+
+
 def build_timeline(cut, shots, z):
     """STORY_TIMELINE: per scene, dialogue segments with cam/actors/props.
     Segments = distinct dialogue frames, ascending. Actor table carries
     forward across frames (init = frame -1 base); only vars resolved to a
     character (constructors + OBF_CHAR) become actors. Rows map to stage
     depth z = 6 + (row - sceneMin) so every scene plays just ahead of the
-    camera. Props: map hovers past its runner (ComingThrough), candy arcs
-    from its tran keys (Candy), boat/hover ride under their party
-    (cluster mean z)."""
-    # (scene, var) props that are vehicles, not actors
-    vehicles = {}
+    camera. Props: PANEL_PROPS panels ride their character and drop when
+    the scene drops them (candy, Candy.as); the ComingThrough map runs its
+    decoded fall (MAP_FALL); boat/hover ride under their party (cluster
+    mean z)."""
+    # Visible scene prop, keyed by scene.  The obfuscated transform the riders
+    # are parented to (§7!!§, see `vehicles` note in DEOBFUSCATION.md) is NOT
+    # a prop: it has no model in either scene, so it draws nothing.  The only
+    # visible thing BoatRide builds is the TrainRide balloon panel
+    # (`new §8f§("cutscene/TrainRide/Balloon.png", 18.27, 36.54, false)`);
+    # StopSolvingProblems builds none at all.
+    VEHICLE_PROP = {"BoatRide": "balloon"}
     ob = chr(0xA7)
-    vehicles[("BoatRide", ob + "7!!" + ob)] = "boat"
-    vehicles[("StopSolvingProblems", ob + "7!!" + ob)] = "hover"
     # placement-shaped non-actors to stay quiet about
     quiet = {"tunnel", "map", ob + "7!!" + ob, ob + "?I" + ob,
              ob + "4!R" + ob, ob + "<!T" + ob}
@@ -149,17 +218,8 @@ def build_timeline(cut, shots, z):
         segframes = sorted(set(L["f"] for L in lines if isinstance(L.get("f"), int)))
         if not segframes:
             continue
-        # candy prop keys: tran(x, y, size*4) per frame
-        candykeys = {}
-        if c == "Candy":
-            dd = z.read([n for n in z.namelist() if n.endswith("/Candy.as")][0]).decode("utf-8", errors="replace")
-            fheads = [(m.group(1), m.start()) for m in re.finditer(r"function (frame\d+|init)", dd)]
-            for m in re.finditer(r"transform\.tran\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)", dd):
-                fr = -1
-                for fname, fstart in fheads:
-                    if fstart <= m.start():
-                        fr = -1 if fname == "init" else int(fname[5:])
-                candykeys[fr] = [float(m.group(1)), float(m.group(2)), float(m.group(3)) / 4.0]
+        # the scene's own panel prop (see PANEL_PROPS)
+        pp = PANEL_PROPS.get(c)
         # row spread for depth mapping (resolved actors + candy). The 5th
         # percentile anchors the cluster so single far exits/entries
         # (which cull naturally off-camera) don't shove the scene away.
@@ -168,21 +228,16 @@ def build_timeline(cut, shots, z):
             for var, pos in per.items():
                 if var in st["vars"]:
                     allrows.append(pos[1])
-        for pos in candykeys.values():
-            allrows.append(pos[1])
         allrows.sort()
         minr = allrows[max(0, int(len(allrows) * 0.05))] if allrows else 0.0
         live = {}
-        candy = None
+        mapbase = None
         segs = []
         for sf in segframes:
             for fnum in sorted(f for f in st["frames"] if f <= sf):
                 for var, pos in st["frames"][fnum].items():
                     if var in st["vars"]:
                         live[var] = pos
-            if any(f <= sf for f in candykeys):
-                kf = max(f for f in candykeys if f <= sf)
-                candy = candykeys[kf]
             actors = []
             for var in sorted(live):
                 cid = st["vars"].get(var)
@@ -191,28 +246,22 @@ def build_timeline(cut, shots, z):
                 actors.append({"ch": cid, "ring": live[var][0],
                                "z": round(6.0 + (live[var][1] - minr), 2)})
             props = []
-            if candy is not None:
-                props.append({"kind": "candy", "ring": candy[0],
-                              "z": round(6.0 + (candy[1] - minr), 2), "size": candy[2]})
+            if pp is not None:
+                props.append(panel_prop(pp, sf, actors))
             if c == "ComingThrough":
-                # map hovers just past its runner (first ch-0 actor staged)
-                run = None
-                for var in sorted(live):
-                    if st["vars"].get(var) == 0:
-                        run = live[var]
-                        break
-                if run is None and actors:
-                    run = [actors[0]["ring"], minr]
-                if run is not None:
-                    props.append({"kind": "map", "ring": round(run[0] + 0.5, 2),
-                                  "z": round(6.0 + (run[1] - minr) + 1.5, 2), "size": 2.4})
-            for (vc, vv), kind in vehicles.items():
+                if mapbase is None:
+                    for a in actors:
+                        if a["ch"] == 0:
+                            mapbase = (a["ring"], a["z"])
+                            break
+                props.append(map_prop(sf, mapbase))
+            for vc, kind in VEHICLE_PROP.items():
                 if vc == c and actors:
                     near = [a["z"] for a in actors if 2.0 <= a["z"] <= 30.0] or \
                         [a["z"] for a in actors]
                     mz = sum(near) / len(near)
                     props.append({"kind": kind, "ring": 2.0, "z": round(mz, 2),
-                                  "size": 3.4 if kind == "boat" else 2.6})
+                                  "size": 2.4})
             # cam run covering this dialogue frame
             cam = [0, 0]
             for r in shots.get(c, []):

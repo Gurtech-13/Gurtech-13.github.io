@@ -133,6 +133,7 @@ function makeEl() {
     listeners[t].push(fn);
   };
   function fireWin(t, ev) { (listeners[t] || []).forEach((fn) => fn(ev)); }
+  sandbox.window.__AUTO = true; /* the autopilot patch below is test-only */
   vm.createContext(sandbox);
   const files = ["story.js", "cutscenes.js", "custom_cutscenes.js", "achievements.js", "app.js"];
   for (const f of files) {
@@ -145,6 +146,21 @@ function makeEl() {
         "MID_CUTS.push({tun:30,lvl:3,cut:\"OfCourse\"});global.STORY_MID_CUTS = MID_CUTS;"
       );
       if (src.indexOf("tun:30") < 0) throw new Error("test trigger patch failed");
+    }
+    if (f === "app.js" && sandbox.window.__AUTO) {
+      /* TEST-ONLY autopilot: with no keyboard input every extended level
+         kills the runner before its level-end gate, so the smoke test follows
+         the same H route the engine exposes (exactly what verify_hint drives).
+         The real input path is still exercised by the arrow-key phases. */
+      src = src.replace(
+        "    while(acc>=STEP){exps.run3_set_input(steer);exps.run3_step(STEP);acc-=STEP;}",
+        "    if(exps.run3_hint_count&&exps.run3_hint_count()>0){var A_N=exps.run3_sides()*exps.run3_lanes();" +
+        "var A_D=exps.run3_hint_ring(exps.run3_hint_count()>1?1:0)-exps.run3_ring();" +
+        "while(A_D>A_N/2)A_D-=A_N;while(A_D<-A_N/2)A_D+=A_N;" +
+        "steer=Math.max(-1,Math.min(1,A_D*2));}\n" +
+        "    while(acc>=STEP){exps.run3_set_input(steer);exps.run3_step(STEP);acc-=STEP;}"
+      );
+      if (src.indexOf("A_D") < 0) throw new Error("autopilot patch failed");
     }
     vm.runInContext(src, sandbox, { filename: f });
   }
@@ -225,6 +241,9 @@ function makeEl() {
   await frames(1);
   if (el("sceneMenu").classList.contains("on")) throw new Error("gallery did not close");
 
+  // turn on the H route so the test-only autopilot has something to follow
+  // (the run has to survive F 0..3 before the injected gate can fire)
+  if (!wasmExports.run3_hint_on()) wasmExports.run3_hint_toggle();
   // play F to the injected gate 3->4: the engine PAUSES on the completed
   // level (S_GATE), the scene stages the cast there, then the gate releases
   let opened = false, sawGate = 0;
@@ -263,7 +282,11 @@ function makeEl() {
   if (!save().cuts.m30_3) throw new Error("m30_3 not marked seen");
   console.log("mid-gate pause/resume OK");
 
-  // on to the tunnel end: Shortcut, then the mapped card
+  // on to the tunnel end: Shortcut, then the mapped card. The extended F
+  // run is authored (its middle levels need real input, not a bot), so jump
+  // the engine to the final checkpoint — which is blind-playable — and let
+  // the natural run finish the tunnel and fire the end scene + card.
+  wasmExports.run3_seek(30, wasmExports.run3_levels_in(30) - 1);
   let ended = false;
   for (let i = 0; i < 1500 && !ended; i++) {
     await frames(10);

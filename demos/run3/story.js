@@ -9,7 +9,7 @@
 (function (global) {
   /* Bump on every release AND mirror it into index.html script ?v= so browsers
      never run stale cached JS/WASM against a fresh page. Shown top-right. */
-  global.GAME_VERSION = "0.8.5";
+  global.GAME_VERSION = "0.8.6";
   /* Characters — all unlock through gameplay (clearing tunnels) */
   var C = [
     { id: 0, name: "The Runner", col: "#9fdcff", img: "character_runner.png",
@@ -192,12 +192,36 @@
     { id: 33, kind: "letter", name: "Wormhole X", col: "#c084fc", x: 2400, y: 300,
       music: "WormholeToSomewhere",
       lore: "A small, freshly-formed wormhole at the very end of the Primary tunnel." },
-    { id: 34, kind: "name", name: "Far Shore", col: "#67e8f9", x: 2620, y: 220,
-      music: "WormholeToSomewhere",
-      lore: "The far side of Wormhole X. Strange light, unfamiliar angles." },
-    { id: 35, kind: "name", name: "Far Drift", col: "#f0abfc", x: 3000, y: 300,
+    { id: 34, kind: "name", name: "Far Shore", col: "#67e8f9", x: 4520, y: 270,
+      /* MapOfTheStars.mp3: the original only ever mapped this track onto
+         levels that did not ship (and Music.as silently substituted
+         TravelTheGalaxy for them). The file is present now, so the deep
+         exploration run plays it for real. */
+      music: "MapOfTheStars",
+      lore: "The far side of Wormhole X. Two hundred checkpoints of strange light and unfamiliar angles." },
+    { id: 35, kind: "name", name: "Far Drift", col: "#f0abfc", x: 6180, y: 490,
       music: "TheVoid",
       lore: "Deep drift beyond the Far Shore. The way back is a long one." },
+
+    /* ===== BRANCHES OF THE EXTENDED WORLD ===== */
+    { id: 36, kind: "letter", name: "X-Rift", col: "#c084fc", x: 3400, y: 120,
+      music: "WormholeToSomewhere",
+      lore: "A narrow rift peeled off Wormhole X. The walls here hum in a lower key." },
+    { id: 37, kind: "letter", name: "X-Echo", col: "#c084fc", x: 2850, y: 170,
+      music: "WormholeToSomewhere",
+      lore: "A branch of Wormhole X that repeats everything you say, four seconds late." },
+    { id: 38, kind: "letter", name: "Shoal", col: "#67e8f9", x: 5240, y: 490,
+      music: "TheVoid",
+      lore: "A shallow run off the Far Shore. The floor gives way under a running step." },
+    { id: 39, kind: "letter", name: "Reef", col: "#67e8f9", x: 5960, y: 540,
+      music: "WormholeToSomewhere",
+      lore: "A wide shelf off the Far Shore, riddled with gaps and old growth." },
+    { id: 40, kind: "letter", name: "Wake", col: "#f0abfc", x: 6840, y: 660,
+      music: "TheVoid",
+      lore: "Far Drift's wake, still settling after something passed through ahead of you." },
+    { id: 41, kind: "letter", name: "Ember", col: "#f0abfc", x: 6620, y: 620,
+      music: "CrumblingWalls",
+      lore: "A warm branch off Far Drift. Something burned here a long time ago." },
   ];
 
   /* Branching edges � unlock topology from the original game's
@@ -218,8 +242,9 @@
     [22, [19]],           /* WormholeN -> I */
     [25, [26]],           /* Runway0 -> Runway1 */
     [28, [7]],            /* U -> D */
-    [33, [34]],           /* Wormhole X -> Far Shore (through the small wormhole) */
-    [34, [35]],           /* Far Shore -> Far Drift */
+    [33, [34, 36, 37]],   /* Wormhole X -> Far Shore + X-Rift / X-Echo */
+    [34, [35, 38, 39]],   /* Far Shore -> Far Drift + Shoal / Reef */
+    [35, [40, 41]],       /* Far Drift -> Wake / Ember */
   ];
 
   /* NOTE: tunnels 0-29 are the original game's 30 map paths; 30-35 are

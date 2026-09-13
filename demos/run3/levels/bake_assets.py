@@ -101,8 +101,12 @@ TILE_TEXTURES = [
     ("tex_balloon",     "images/singledpi_texture_balloon.png"),
     ("tex_plus",        "images/singledpi_texture_plus.png"),
     ("tex_arrow",       "images/singledpi_texture_arrow.png"),
-    ("tex_battery",     "images/singledpi_texture_battery.png"),
-    ("tex_accel",       "images/singledpi_texture_acceleration.png"),
+    ("tex_battery",     "images/singledpi_texture_battery.png"),    ("tex_accel",      "images/singledpi_texture_acceleration.png"),
+    # cutscene prop panels (Candy.as builds its candy from "Candy.png")
+    ("tex_candy",      "images/singledpi_texture_candy.png"),
+    # the only visible prop the staged BoatRide scene builds: the translucent
+    # "cutscene/TrainRide/Balloon.png" panel that rushes past the riders
+    ("tex_balloon_train", "cutscenes/trainride_balloon.png"),
     ("tex_locked",      "images/menu_characterselection_lockedcharacteroverlay.png"),
 ]
 

@@ -18,10 +18,13 @@ const HINT_MAXDC = 2, HINT_LEAPDC = 6;
     if (typeof e[n] !== "function") throw new Error("missing export " + n);
 
   const cases = [[0, 0], [0, 3], [0, 7], [0, 9], [2, 2], [5, 4], [8, 3], [13, 5],
-                 [23, 0], [28, 0], [30, 0], [31, 0], [32, 0], [33, 0], [34, 0], [35, 0],
-                 /* Wormhole X runs long now: every added checkpoint must still
-                    have a way through, wall voids and all */
-                 [33, 5], [33, 12], [33, 16], [33, 19]];
+                 [23, 0], [28, 0], [30, 0], [31, 0], [32, 0],
+                 /* the extended 200-checkpoint runs and their branches: every
+                    stretch must have a way through, wall voids and all */
+                 [33, 0], [33, 40], [33, 90], [33, 139],
+                 [34, 0], [34, 60], [34, 139],
+                 [35, 0], [35, 60], [35, 139],
+                 [36, 10], [37, 10], [38, 10], [39, 10], [40, 10], [41, 10]];
   for (const c of cases) {
     const tun = c[0], lvl = c[1];
     e.run3_init(1234);

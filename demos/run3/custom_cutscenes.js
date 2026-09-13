@@ -100,6 +100,122 @@
     L("To be continued...", 0, 40, true),
   ];
 
+  /* ---- the extended-path story: Wormhole X -> Far Shore -> Far Drift,
+     told in beats down the 200-checkpoint runs. Each one fires as its
+     checkpoint is cleared and stages on that stretch of tunnel. ---- */
+  CUT.DeeperIn = [
+    L("How long has this funnel been going?", 220, -120),
+    L("Long enough that I stopped counting the tiles.", -230, 60),
+    L("The map ends behind us. Everything ahead is blank.", 0, -250),
+    L("Then we are drawing it as we go.", -120, 190),
+    L("Somebody should write this down.", 240, 120),
+    L("I AM writing it down!", 0, 300),
+  ];
+  CUT.TheLongFunnel = [
+    L("We should have hit the end by now.", 230, -100),
+    L("We did. Three times. It keeps opening back up.", -220, 80),
+    L("That is not how tunnels work.", 0, -260),
+    L("Nothing here is how tunnels work.", 240, -20),
+    L("Keep the lights on and keep moving.", -100, 220),
+  ];
+  CUT.SomethingMoving = [
+    L("Did you see that? Left wall, two rows back.", 220, -140),
+    L("See what? There is nothing there.", -230, 40),
+    L("Something moved. Same speed as us.", 0, -270),
+    L("Then it is pacing us. Do not slow down.", -240, 200),
+    L("Was not planning to.", 250, 140),
+  ];
+  CUT.FarSide = [
+    L("The funnel is widening. Look at the walls.", 230, -120),
+    L("We are almost through. I can see light.", -220, 80),
+    L("That is not light. That is the other side.", 0, -250),
+    L("Same thing, out here.", 240, 60),
+    L("Everybody ready?", -60, 240),
+    L("Ready.", 180, 300),
+  ];
+  CUT.ShoreParty = [
+    L("So this is the Shore.", 0, -200),
+    L("It is... calm. I do not trust calm.", -230, 80),
+    L("The Student is already taking measurements.", 240, -30),
+    L("Let her. It is useful for once.", -60, 230),
+    L("I heard that.", 180, -300),
+  ];
+  CUT.HalfwayToNowhere = [
+    L("Halfway. Assuming there is such a thing out here.", 220, -130),
+    L("The signal is louder than it was. Steady now.", -230, 60),
+    L("Steady is worse than loud.", 240, -40),
+    L("Then we do not look at whatever is making it.", -80, 210),
+    L("We absolutely look at it.", 200, 270),
+  ];
+  CUT.TheRidgeLine = [
+    L("The ridge line. Past that is the Drift.", 230, -110),
+    L("And past the Drift?", -230, 70),
+    L("Home, if you believe the footprints.", 0, -260),
+    L("I do not believe footprints.", 240, -30),
+    L("Then believe the signal. It is still counting.", -80, 220),
+  ];
+  CUT.Driftwood = [
+    L("The Drift is nothing but loose tiles.", 220, -140),
+    L("Then we run light. No stopping.", -230, 60),
+    L("Stopping is not on the menu.", 240, -20),
+    L("The menu is: forward.", 0, -270),
+    L("I have never liked that menu.", -100, 220),
+  ];
+  CUT.CountingDown = [
+    L("Eighty and counting. That is where we started.", 230, -120),
+    L("And still nothing at the end of it.", -230, 80),
+    L("There is no end. That is the point of the Drift.", 0, -260),
+    L("Then we make one.", 240, 120),
+  ];
+  CUT.Footprints = [
+    L("There. On the floor. Those are prints.", 220, -140),
+    L("Big ones. Bigger than any of us.", -230, 60),
+    L("Which means the way back is real.", 0, -260),
+    L("The way back is real.", -60, 230),
+    L("Then we finish this. All the way to the tail.", 200, 140),
+  ];
+  /* branch beats */
+  CUT.StaticInTheWalls = [
+    L("The rift just... stops.", 220, -130),
+    L("Same as the funnel. It opens back into the main one.", -230, 60),
+    L("Then we are not lost. Good.", 240, -30),
+    L("We were never lost. I knew where we were the whole time.", 0, -260),
+    L("You did not.", -80, 220),
+  ];
+  CUT.SayThatAgain = [
+    L("...and that is why the walls repeat.", 230, -120),
+    L("Why did you say it twice?", -230, 70),
+    L("I did not.", 240, -40),
+    L("Then the tunnel did. It is still learning.", 0, -250),
+    L("Let us leave before it finishes.", -80, 220),
+  ];
+  CUT.GiveWay = [
+    L("The Shoal is behind us. Every tile of it, gone.", 230, -130),
+    L("You stepped on one and the whole floor left.", -230, 70),
+    L("In my defence, it was a very good step.", 240, -40),
+    L("Never do that again.", -80, 220),
+  ];
+  CUT.OldGrowth = [
+    L("That shelf was older than the map.", 220, -120),
+    L("Older than the tunnel, probably.", -230, 60),
+    L("And we ran straight over it.", 240, -30),
+    L("It will grow back. Probably.", 0, -260),
+    L("Probably.", -100, 220),
+  ];
+  CUT.Settling = [
+    L("The wake is settling. Whatever made it is ahead.", -230, 60),
+    L("How far ahead?", 220, -130),
+    L("Close enough that it is still moving.", 0, -260),
+    L("Then we are going the right way.", 240, -20),
+  ];
+  CUT.WarmWalls = [
+    L("The walls are warm here. Something burned.", 230, -130),
+    L("How long ago?", -230, 70),
+    L("Long enough that only the stone remembers.", 0, -260),
+    L("Then somebody else got this far.", 240, -30),
+    L("Somebody else got this far and did not come back.", -80, 220),
+  ];
+
   /* Start/end cutscene per custom tunnel (index 30-35). */
   var CUSTOM_PATH_CUT = [
     { start: null, end: "Shortcut" },            /* 30 F */
@@ -165,6 +281,22 @@
     Landfall: [0, 7],
     BeyondTheWormhole: [7, 0],
     TheLongWayBack: [0, 2],
+    DeeperIn: [0, 7],
+    TheLongFunnel: [0, 2],
+    SomethingMoving: [7, 0],
+    FarSide: [0, 1],
+    ShoreParty: [7, 0],
+    HalfwayToNowhere: [0, 7],
+    TheRidgeLine: [0, 2],
+    Driftwood: [2, 0],
+    CountingDown: [0, 7],
+    Footprints: [0, 2],
+    StaticInTheWalls: [1, 0],
+    SayThatAgain: [0, 7],
+    GiveWay: [2, 0],
+    OldGrowth: [7, 0],
+    Settling: [0, 2],
+    WarmWalls: [0, 7],
     ComingThrough: [0, 1],   /* Runner + Skater: the map, the jumps */
   };
   var k;
@@ -186,6 +318,25 @@
     { tun: 12, lvl: 8, cut: "AngelVsBunny", unlock: 1 },
     { tun: 2, lvl: 0, cut: "BoatRide", unlock: 4 },
     { tun: 13, lvl: 14, cut: "SelfAssembly", unlock: 24 },
+    /* the extended path, beat by beat down its long runs and out along the
+       branches. Milestones sit roughly a quarter of a run apart so the story
+       keeps pace with 200 checkpoints. */
+    { tun: 33, lvl: 24, cut: "DeeperIn" },
+    { tun: 33, lvl: 55, cut: "TheLongFunnel" },
+    { tun: 33, lvl: 90, cut: "SomethingMoving" },
+    { tun: 33, lvl: 120, cut: "FarSide" },
+    { tun: 34, lvl: 30, cut: "ShoreParty" },
+    { tun: 34, lvl: 70, cut: "HalfwayToNowhere" },
+    { tun: 34, lvl: 110, cut: "TheRidgeLine" },
+    { tun: 35, lvl: 40, cut: "Driftwood" },
+    { tun: 35, lvl: 80, cut: "CountingDown" },
+    { tun: 35, lvl: 120, cut: "Footprints" },
+    { tun: 36, lvl: 29, cut: "StaticInTheWalls" },
+    { tun: 37, lvl: 29, cut: "SayThatAgain" },
+    { tun: 38, lvl: 29, cut: "GiveWay" },
+    { tun: 39, lvl: 29, cut: "OldGrowth" },
+    { tun: 40, lvl: 29, cut: "Settling" },
+    { tun: 41, lvl: 29, cut: "WarmWalls" },
   ];
   global.STORY_MID_CUTS = MID_CUTS;
   /* PlanetStolen is NOT here: the original unlocks it via achievements

@@ -194,18 +194,36 @@ with open(OUT, "w") as f:
         (31, 1, 650, 520,     191,219,254),   # S (Winter snow spur)
         (32, 1, 1500, 80,     167,139,250),   # V (Boxes halls)
         (33, 1, 2400, 300,    192,132,252),   # Wormhole X (Primary's end)
-        (34, 0, 2620, 220,    103,232,249),   # Far Shore (past Wormhole X)
-        (35, 0, 3000, 300,    240,171,252),   # Far Drift (beyond the Shore)
+        (34, 0, 4520, 270,    103,232,249),   # Far Shore (past Wormhole X)
+        (35, 0, 6180, 490,    240,171,252),   # Far Drift (beyond the Shore)
+        (36, 1, 3400, 120,    192,132,252),   # X-Rift (Wormhole X branch)
+        (37, 1, 2850, 170,    192,132,252),   # X-Echo (Wormhole X branch)
+        (38, 1, 5240, 490,    103,232,249),   # Shoal (Far Shore branch)
+        (39, 1, 5960, 540,    103,232,249),   # Reef (Far Shore branch)
+        (40, 1, 6840, 660,    240,171,252),   # Wake (Far Drift branch)
+        (41, 1, 6620, 620,    240,171,252),   # Ember (Far Drift branch)
     ]
 
     # Custom waypoint polylines (original map coords) for ids 30+.
+    # The extended world is laid out in three tiers sweeping right: Wormhole X
+    # carries its 140 checkpoints along the top, Far Shore the middle, Far
+    # Drift the bottom, with each sub-branch folding off its main run.
     CUSTOM_WP = {
         30: [(1650, 140), (1500, 60), (1380, -20)],
         31: [(650, 520), (500, 560), (380, 620)],
         32: [(1500, 80), (1620, 140), (1740, 180)],
-        33: [(2400, 300), (2520, 260), (2620, 220)],
-        34: [(2620, 220), (2800, 260), (3000, 300)],
-        35: [(3000, 300), (3220, 340), (3440, 380)],
+        33: [(2400, 300), (2620, 230), (2850, 170), (3100, 130), (3400, 120),
+             (3700, 130), (4000, 160), (4280, 210), (4520, 270)],
+        34: [(4520, 270), (4760, 340), (5000, 420), (5240, 490), (5480, 540),
+             (5720, 560), (5960, 540), (6180, 490)],
+        35: [(6180, 490), (6400, 560), (6620, 620), (6840, 660), (7060, 670),
+             (7280, 650), (7480, 600)],
+        36: [(3400, 120), (3500, 40), (3620, -10), (3750, -30)],
+        37: [(2850, 170), (2800, 80), (2700, 10), (2560, -20)],
+        38: [(5240, 490), (5320, 570), (5380, 650), (5420, 730)],
+        39: [(5960, 540), (6020, 460), (6080, 390), (6120, 300)],
+        40: [(6840, 660), (6980, 700), (7120, 720)],
+        41: [(6620, 620), (6620, 520), (6600, 430), (6570, 340)],
     }
 
     import json as _json
@@ -219,8 +237,9 @@ with open(OUT, "w") as f:
 
     f.write("/* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b.\n")
     f.write(" * Node coords = original first waypoints (uniform map transform).\n")
-    f.write(" * Ids 30+ are custom extended tunnels (hand-placed, node = path start). */\n")
-    f.write("#define MAP_TUNNEL_COUNT 36\n\n")
+    f.write(" * Ids 30+ are custom extended tunnels (hand-placed, node = path start);\n")
+    f.write(" * 33/34/35 are the 140-checkpoint main runs, 36-41 their branches. */\n")
+    f.write("#define MAP_TUNNEL_COUNT 42\n\n")
 
     f.write("typedef struct {\n")
     f.write("  int16_t x, y;\n")
@@ -266,8 +285,9 @@ with open(OUT, "w") as f:
         "Newly", "Runway0", "Runway1", "Coord",
         "U", "W",
         "F", "S", "V", "WH X", "Shore", "Drift",
+        "X-Rift", "X-Echo", "Shoal", "Reef", "Wake", "Ember",
     ]
-    assert len(NAMES) == len(TUNNELS_DATA) == 36
+    assert len(NAMES) == len(TUNNELS_DATA) == 42
 
     f.write("/* Tunnel name strings */\n")
     f.write("static const char *map_tunnel_names[MAP_TUNNEL_COUNT] = {\n")

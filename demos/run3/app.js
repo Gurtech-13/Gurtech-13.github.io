@@ -27,7 +27,14 @@
      toward the current keyframe and pushes the float staged camera each
      frame. */
   var NACT = 8, NPROP = 4;
-  var KIND_ID = { map: 1, boat: 4, candy: 5, hover: 6, spoon: 1 };
+  /* kind 0 = the slot draws nothing: a scene can switch a prop off (the map
+     in ComingThrough is parked away once it is handed back) instead of the
+     host carrying its last position forward forever */
+  /* kind 0 draws nothing; 1 map (flat 0xBCAB7C panel), 5 candy panel,
+     7 TrainRide balloon. There is no boat/hover/spoon prop — the ride
+     scenes parent their cast to an invisible frame, and ChangeTheSubject's
+     wooden spoon is a dialogue line, not an object. */
+  var KIND_ID = { none: 0, map: 1, candy: 5, balloon: 7 };
   var stage = null;
   /* synthesised timelines for scenes with no baked one (the custom extended
      tunnels): one keyframe per dialogue line, each cast member posted on its
@@ -119,7 +126,7 @@
     if (!act.length && prev.length && !snap)
       act = prev.map(function (c) { return { ch: c.ch, ring: c.ring, z: c.z }; });
     if (!pr.length && prevP.length && !snap)
-      pr = prevP.map(function (p) { return { kind: p.kind, ring: p.ring, z: p.z, size: p.size }; });
+      pr = prevP.map(function (p) { return { kind: p.kind, ring: p.ring, z: p.z, size: p.size, inset: p.inset || 0 }; });
     stage.tgt = act;
     stage.tgtP = pr;
     stage.cur = [];
@@ -131,8 +138,8 @@
     stage.curP = [];
     for (var m = 0; m < pr.length; m++) {
       var q = prevP[m];
-      stage.curP.push(q ? { kind: pr[m].kind, ring: q.ring, z: q.z, size: q.size || 2 }
-                        : { kind: pr[m].kind, ring: pr[m].ring, z: pr[m].z, size: pr[m].size || 2 });
+      stage.curP.push(q ? { kind: pr[m].kind, ring: q.ring, z: q.z, size: q.size || 2, inset: q.inset || 0 }
+                        : { kind: pr[m].kind, ring: pr[m].ring, z: pr[m].z, size: pr[m].size || 2, inset: pr[m].inset || 0 });
     }
     if (s.cam) { stage.tside = s.cam[0] || 0; stage.tlift = s.cam[1] || 0; }
   }
@@ -149,8 +156,9 @@
       for (var p = 0; p < NPROP; p++) {
         var q = stage.curP[p];
         try {
-          if (q) exps.run3_stage_prop(p, KIND_ID[q.kind] || 1, q.ring, q.z, q.size || 2, 1);
-          else exps.run3_stage_prop(p, 1, 4, 6, 2, 0);
+          var kd = q ? (q.kind in KIND_ID ? KIND_ID[q.kind] : 1) : 0;
+          if (q) exps.run3_stage_prop(p, kd, q.ring, q.z, q.size || 2, q.inset || 0, 1);
+          else exps.run3_stage_prop(p, 0, 4, 6, 2, 0, 0);
         } catch (e2) {}
       }
     }
@@ -172,6 +180,7 @@
       q.ring += (w.ring - q.ring) * f;
       q.z += (w.z - q.z) * f;
       q.size += ((w.size || 2) - q.size) * f;
+      q.inset += ((w.inset || 0) - (q.inset || 0)) * f;
     }
     stage.side += (stage.tside - stage.side) * f;
     stage.lift += (stage.tlift - stage.lift) * f;
@@ -180,7 +189,7 @@
   function stageClose() {
     stage = null;
     for (var i = 0; i < NACT; i++) { try { exps.run3_stage_actor(i, 0, 4, 6, 0); } catch (e) {} }
-    for (var p = 0; p < NPROP; p++) { try { exps.run3_stage_prop(p, 1, 4, 6, 2, 0); } catch (e2) {} }
+    for (var p = 0; p < NPROP; p++) { try { exps.run3_stage_prop(p, 0, 4, 6, 2, 0, 0); } catch (e2) {} }
     try { if (exps.run3_stage_cam) exps.run3_stage_cam(0, 0); } catch (e3) {}
   }
   var prevLvl = -1, lastMusLvl = -1;
@@ -377,11 +386,18 @@
   function cheatUnlockAll() {
     save.powercells=100000;
     for(var i=0;i<T.length;i++){if(save.cleared.indexOf(i)<0)save.cleared.push(i);save.best[i]=999;}
+    /* every cutscene seen: sceneSeen() looks at a mid-cut key, a path
+       start/end key, an end-chain key or a stage key, so mark all of them */
+    if(!save.cuts) save.cuts={};
+    for(var mi=0;mi<MID_CUTS.length;mi++) save.cuts[midKey(MID_CUTS[mi].tun,MID_CUTS[mi].lvl)]=1;
+    for(var pi=0;pi<PATH_CUT.length;pi++){ if(PATH_CUT[pi]){ save.cuts["s"+pi]=1; save.cuts["e"+pi]=1; } }
+    for(var ek in END_CHAIN) save.cuts["x"+ek]=1;
+    for(var sk in STAGE){ var sst=STAGE[sk]; if(sst && !sst.end) save.cuts[midKey(sst.tun,sst.lvl)]=1; }
     persist();
     syncAllToWasm();
     document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped";
     var n=document.createElement("div");
-    n.textContent="\u2728 100,000 power cells \u2014 all tunnels unlocked";
+    n.textContent="\u2728 100,000 power cells \u2014 all tunnels + all cutscenes unlocked";
     n.style.cssText="position:fixed;top:20px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.95);color:#fbbf24;padding:12px 24px;border-radius:999px;font-weight:700;font-size:.9rem;z-index:999;box-shadow:0 4px 20px rgba(0,0,0,.5)";
     document.body.appendChild(n);
     setTimeout(function(){n.style.opacity="0";},2000);
@@ -534,14 +550,16 @@
     }
     return out;
   }
-  /* per-level music (authored overrides; 8 = silence) */
+  /* per-level music (authored overrides; 8 = silence). The ids are the
+     levelData music enum baked by bake_levels.py; every one of them now has
+     an mp3 (MapOfTheStars included — the file used to be missing). */
   var LEVEL_TRACKS = ["leavethesolarsystem", "thevoid", "wormholetosomewhere",
-    "crumblingwalls", "travelthegalaxy", "unsafespeeds"];
+    "crumblingwalls", "travelthegalaxy", "unsafespeeds", "mapofthestars"];
   function levelTrack(tun) {
     var id = 0;
     try { if (exps.run3_level_music) id = exps.run3_level_music() | 0; } catch (e) {}
     if (id === 8) return null;
-    if (id >= 1 && id <= 6) return LEVEL_TRACKS[id - 1];
+    if (id >= 1 && id <= LEVEL_TRACKS.length) return LEVEL_TRACKS[id - 1];
     return MUSIC_MAP[tun] || "leavethesolarsystem";
   }
   function observe() {

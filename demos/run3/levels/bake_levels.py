@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Bake original Run 3 explore-mode levels into levels_baked.h.
+"""Bake Run 3 level bitmaps into levels_baked.h.
 
-Reads orig_levels.bin (decompiled SWF text), decodes the terrain-pos
-bitmaps (see Oreoid3/Run3LevelViewer Run3_leveleditor.html for the format):
+Two sources, one flat table:
+  * orig_levels.bin  - the decompiled original game's explore-mode levels
+    (see the format note below).
+  * ext_levels.txt   - the authored flat bitmaps for the extended tunnels
+    (Wormhole X and beyond) and the infinite-mode segments. That file is the
+    hand-editable source: nothing here generates level geometry, it only
+    packs the bitmaps.
+
+orig_levels.bin format:
   - chars '0'..'o' = 6 bits each (charCode-48), '1' = solid tile
   - "<tiles><*s><count>" RLE: N stars after N tiles repeats those N tiles
     (countChar-48) times, e.g. "0*8" -> eight "0"s.
   - trailing zeros after the last '1' are padding and are stripped.
 
 Solidity = OR of all terrain layers except battery items, WarningStripes
-decorations and cutscene-only layers. Special tiles (crumbling, ice,
-ramps, boxes, ...) all count as solid: most levels are allowed to be
-mostly empty space, so hazards stay sparse exactly like the original.
+decorations and cutscene-only layers. Special tiles (crumbling, ice, ramps,
+boxes, ...) all count as solid.
 
-Maps the 30 demo tunnels to original paths in file order (1 level per
-checkpoint). wormholeSpace has no valid levels -> count 0 -> the engine
-falls back to procedural generation for it.
-
-Output: levels_baked.h (bit array LSB-first + level index + tunnel table).
+Output: levels_baked.h - bit array LSB-first + level index + tunnel table,
+plus the infinite-mode segment table.
 """
 import os
 import re
@@ -25,40 +28,32 @@ from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "orig_levels.bin")
+EXT = os.path.join(HERE, "ext_levels.txt")
 OUT = os.path.join(HERE, "levels_baked.h")
 
-# demo tunnel id -> original path name
-TUN_PATH = [
-    "primary",      # 0
-    "home0",        # 1
-    "home1",        # 2
-    "home2",        # 3
-    "home3",        # 4
-    "sidePathA",    # 5
-    "sidePathB",    # 6
-    "sidePathD",    # 7
-    "sidePathG",    # 8
-    "sidePathL",    # 9
-    "sidePathM",    # 10
-    "sidePathT",    # 11
-    "winter",       # 12
-    "dark",         # 13
-    "boxes",        # 14
-    "memory",       # 15
-    "river",        # 16
-    "wormholeC",    # 17
-    "wormholeH",    # 18
-    "wormholeI",    # 19
-    "wormholeJ",    # 20
-    "wormholeK",    # 21
-    "wormholeN",    # 22
-    "wormholeSpace",  # 23 (broken in the original -> procedural fallback)
-    "newlyFormed",  # 24
-    "runway0",      # 25
-    "runway1",      # 26
-    "coordination",  # 27
-    "sidePathU",    # 28
-    "sidePathW",    # 29
+# Tunnel id -> (source, key). 'orig' keys index orig_levels.bin paths,
+# 'ext' keys index ext_levels.txt paths. Order is tunnel id order, so the
+# baked tables line up with TUNNELS[] in levels.c.
+TUNNELS = [
+    (0, "orig", "primary"), (1, "orig", "home0"), (2, "orig", "home1"),
+    (3, "orig", "home2"), (4, "orig", "home3"), (5, "orig", "sidePathA"),
+    (6, "orig", "sidePathB"), (7, "orig", "sidePathD"), (8, "orig", "sidePathG"),
+    (9, "orig", "sidePathL"), (10, "orig", "sidePathM"), (11, "orig", "sidePathT"),
+    (12, "orig", "winter"), (13, "orig", "dark"), (14, "orig", "boxes"),
+    (15, "orig", "memory"), (16, "orig", "river"), (17, "orig", "wormholeC"),
+    (18, "orig", "wormholeH"), (19, "orig", "wormholeI"), (20, "orig", "wormholeJ"),
+    (21, "orig", "wormholeK"), (22, "orig", "wormholeN"),
+    (23, "ext", "wormholeSpace"),  # no valid data in the original
+    (24, "orig", "newlyFormed"), (25, "orig", "runway0"), (26, "orig", "runway1"),
+    (27, "orig", "coordination"), (28, "orig", "sidePathU"), (29, "orig", "sidePathW"),
+    # custom extended tunnels (authored flat bitmaps)
+    (30, "ext", "sidePathF"), (31, "ext", "sidePathS"), (32, "ext", "sidePathV"),
+    # Wormhole X: 200 levels split across a main run and two sub-branches
+    (33, "ext", "whx"), (36, "ext", "xrift"), (37, "ext", "xecho"),
+    # Far Shore
+    (34, "ext", "shore"), (38, "ext", "shoal"), (39, "ext", "reef"),
+    # Far Drift
+    (35, "ext", "drift"), (40, "ext", "wake"), (41, "ext", "ember"),
 ]
 
 
@@ -103,8 +98,8 @@ def crumble_layer(suffix):
     return "~crumbling" in suffix.lower()
 
 
-# levelData music -> small enum (0 = tunnel default). The host maps these
-# to asset files; MapOfTheStars has no mp3 and falls back to default.
+# levelData music -> small enum (0 = tunnel default). The host maps these to
+# asset files (app.js LEVEL_TRACKS); MapOfTheStars.mp3 is in assets/music.
 MUSIC_IDS = {
     "LeaveTheSolarSystem": 1, "TheVoid": 2, "WormholeToSomewhere": 3,
     "CrumblingWalls": 4, "TravelTheGalaxy": 5, "UnsafeSpeeds": 6,
@@ -115,11 +110,14 @@ MUSIC_IDS = {
 TRIG_MODES = {"instant": 0, "smooth": 1, "fast": 2, "slow": 3,
               "slowSmooth": 4, "glimpse": 5}
 
+BASE_EX = {"color0": 0, "color1": 0, "tilew": 0, "music": 0,
+           "pbase": 255, "rot": 0, "win": 0, "trigs": []}
+
 
 def parse_level_extra(parts):
     """color/music/power/rotation/tileWidth/triggers/winRow per level."""
-    ex = {"color0": 0, "color1": 0, "tilew": 0, "music": 0,
-          "pbase": 255, "rot": 0, "win": 0, "trigs": []}
+    ex = dict(BASE_EX)
+    ex["trigs"] = []
     for p in parts:
         if p.startswith("color0-0x") or p.startswith("color-0x"):
             try:
@@ -170,21 +168,19 @@ def parse_level_extra(parts):
     return ex
 
 
-def main():
+def parse_orig():
+    """orig_levels.bin -> {path: [level entry, ...]} in file order."""
     data = open(SRC, "rb").read().decode("latin-1")
     lines = data.split("\r\n")
 
-    levels = {}  # id -> dict
-    groups = {}  # path -> [ids in file order]
-    order = []
+    levels = {}   # id -> dict
+    groups = {}   # path -> [ids in file order]
     cur = None
     for ln in lines:
         s = ln.strip()
         if s.startswith("[path="):
-            m = re.match(r"\[path=([^\]]+)\]", s)
-            cur = m.group(1)
+            cur = re.match(r"\[path=([^\]]+)\]", s).group(1)
             groups.setdefault(cur, [])
-            order.append(cur)
         elif s.startswith("id-") and cur is not None:
             parts = s.split("|")
             lid = int(parts[0].replace("id-", ""))
@@ -209,21 +205,16 @@ def main():
                            "ex": parse_level_extra(parts)}
             groups[cur].append(lid)
 
-    bitstream = []  # list of 0/1, 1 = solid
-    crumblist = []  # parallel list, 1 = crumbles when stepped on
-    baked = []  # (tun, lid, n, k, rows, spawn, bitoff, ex)
-    print("tunnel counts/layouts for levels.c sync:")
-    for tun, pname in enumerate(TUN_PATH):
-        ids = [i for i in groups.get(pname, []) if i in levels]
-        if pname == "wormholeSpace":
-            ids = []  # broken levels (id -346); procedural fallback
-        start = len(baked)
+    out = {}
+    for pname, ids in groups.items():
+        entries = []
         for lid in ids:
+            if lid not in levels:
+                continue
             L = levels[lid]
             n, k = L["n"], L["k"]
             chunk = n * k
-            solids = []
-            crumbs = []
+            solids, crumbs = [], []
             for pos, suf in L["terr"]:
                 if not solid_layer(suf):
                     continue
@@ -247,45 +238,144 @@ def main():
             while len(solids) % chunk:
                 solids.append(0)
             rows = len(solids) // chunk
-            assert rows <= 400, (tun, lid, rows)
-            # crumble mask shares the solid bit layout (padded to match)
+            assert rows <= 400, (pname, lid, rows)
             while len(crumbs) < len(solids):
                 crumbs.append(0)
             crumbs = crumbs[: len(solids)]
-            bitoff = len(bitstream)
-            bitstream += solids
-            baked.append((tun, lid, n, k, rows, L["spawn"] % chunk, bitoff,
-                          L["ex"]))
-            crumblist += crumbs
-        count = len(baked) - start
-        lay = Counter(levels[i]["n"] * 100 + levels[i]["k"] for i in ids)
-        if ids:
-            (nk, _), = lay.most_common(1)
-            print("  tun %2d %-12s count=%2d n=%d k=%d" % (tun, pname, count, nk // 100, nk % 100))
-        else:
-            print("  tun %2d %-12s count= 0 (procedural fallback)" % (tun, pname))
+            entries.append((n, k, rows, L["spawn"] % chunk, solids, crumbs, L["ex"]))
+        out[pname] = entries
+    return out
 
-    nbytes = (len(bitstream) + 7) // 8
-    packed = bytearray(nbytes)
-    for i, v in enumerate(bitstream):
-        if v:
-            packed[i >> 3] |= 1 << (i & 7)
-    assert len(crumblist) == len(bitstream), "crumb/solid layout drift"
-    cpacked = bytearray(nbytes)
-    for i, v in enumerate(crumblist):
-        if v:
-            cpacked[i >> 3] |= 1 << (i & 7)
-    print("crumbling tiles: %d bits set" % sum(crumblist))
+
+def parse_ext():
+    """ext_levels.txt -> {path: [level entry, ...]}, plus the infinite segs.
+
+    Level entry = (n, k, rows, spawn, solids, crumbs, ex) with solids/crumbs
+    flat row-major bit lists, exactly like the orig path decodes."""
+    paths = {}
+    inf = []
+    cur = None
+    cur_name = None
+    cur_rows = []
+    cur_spawn = 0
+    cur_nk = None
+
+    def flush():
+        if cur_name is None or not cur_rows:
+            return
+        n, k = cur_nk
+        solids, crumbs = [], []
+        for line in cur_rows:
+            assert len(line) == n * k, (cur_name, len(line), n * k)
+            for ch in line:
+                if ch == "#":
+                    solids.append(0)
+                    crumbs.append(0)
+                elif ch == "c":
+                    solids.append(1)
+                    crumbs.append(1)
+                elif ch == ".":
+                    solids.append(1)
+                    crumbs.append(0)
+                else:
+                    raise ValueError("bad tile char %r in %s" % (ch, cur_name))
+        entry = (n, k, len(cur_rows), cur_spawn % (n * k), solids, crumbs, dict(BASE_EX))
+        if cur_name == "infinite":
+            inf.append(entry)
+        else:
+            paths.setdefault(cur_name, []).append(entry)
+
+    for raw in open(EXT, "r", encoding="utf-8"):
+        s = raw.strip()
+        if not s:
+            continue
+        # a bitmap row is made only of tile chars - test that before the
+        # comment marker, since a void-only row legitimately starts with '#'
+        if set(s) <= set(".#c"):
+            cur_rows.append(s)
+            continue
+        if s.startswith("#"):
+            continue
+        if s.startswith("[path="):
+            flush()
+            m = re.match(r"\[path=([A-Za-z0-9_]+) n=(\d+) k=(\d+)(?: levels=(\d+))?\]", s)
+            assert m, s
+            cur_name = m.group(1)
+            cur_nk = (int(m.group(2)), int(m.group(3)))
+            cur_rows = []
+            cur_spawn = 0
+        elif s.startswith("[level"):
+            flush()
+            cur_rows = []
+            m = re.search(r"spawn=(\d+)", s)
+            cur_spawn = int(m.group(1)) if m else 0
+        else:
+            raise ValueError("unparsed line in ext_levels.txt: %r" % s[:60])
+    flush()
+    return paths, inf
+
+
+def main():
+    orig = parse_orig()
+    ext, inf = parse_ext()
+
+    bitstream = []   # 1 = solid, row-major per level
+    crumblist = []   # parallel, 1 = crumbles when stepped on
+    baked = []       # (tun, n, k, rows, spawn, bitoff, ex)
+    print("tunnel counts/layouts for levels.c sync:")
+    for tun, src, key in TUNNELS:
+        entries = orig.get(key, []) if src == "orig" else ext.get(key, [])
+        for (n, k, rows, spawn, solids, crumbs, ex) in entries:
+            bitoff = len(bitstream)
+            assert len(solids) == rows * n * k, (tun, key, rows, n, k, len(solids))
+            bitstream += solids
+            crumblist += crumbs
+            baked.append((tun, n, k, rows, spawn, bitoff, ex))
+        if entries:
+            lay = Counter(e[0] * 100 + e[1] for e in entries)
+            (nk, _), = lay.most_common(1)
+            print("  tun %2d %-14s count=%3d n=%d k=%d" % (tun, key, len(entries), nk // 100, nk % 100))
+        else:
+            print("  tun %2d %-14s count=  0  (!! no data)" % (tun, key))
+    assert len(bitstream) == len(crumblist), "crumb/solid layout drift"
+
+    def pack(bits):
+        out = bytearray((len(bits) + 7) // 8)
+        for i, v in enumerate(bits):
+            if v:
+                out[i >> 3] |= 1 << (i & 7)
+        return out
+
+    packed = pack(bitstream)
+    nbytes = len(packed)
+    cpacked = pack(crumblist)
+    print("levels: %d, tiles: %d, crumbling tiles: %d"
+          % (len(baked), len(bitstream), sum(crumblist)))
+
+    # ---- infinite-mode segments (flat bitmaps, played in authored order) ----
+    inf_bits, inf_crumbs, inf_rows, inf_bit = [], [], [], []
+    for (n, k, rows, spawn, solids, crumbs, ex) in inf:
+        inf_bit.append(len(inf_bits))
+        inf_rows.append(rows)
+        inf_bits += solids
+        inf_crumbs += crumbs
+    inf_packed = pack(inf_bits)
+    inf_cpacked = pack(inf_crumbs)
+    inf_nbytes = len(inf_packed)
+    assert len(inf_bits) == len(inf_crumbs)
+    print("infinite segments: %d, rows: %d" % (len(inf), sum(inf_rows)))
 
     with open(OUT, "w") as f:
-        f.write("/* levels_baked.h - original Run 3 explore-mode level bitmaps.\n")
-        f.write(" * Generated by bake_levels.py from orig_levels.bin. Do not edit.\n")
-        f.write(" * 1 bit per tile (1 = solid), row-major, LSB-first.\n")
-        f.write(" * bit = row*n*k + side*k + lane. Out-of-range rows read as solid.\n")
-        f.write(" * %d levels, %d bits (%d bytes). */\n" % (len(baked), len(bitstream), nbytes))
+        f.write("/* levels_baked.h - Run 3 level bitmaps.\n")
+        f.write(" * Generated by bake_levels.py from orig_levels.bin (the decompiled\n")
+        f.write(" * original game) and ext_levels.txt (the authored extended-tunnel\n")
+        f.write(" * bitmaps). Do not edit. 1 bit per tile (1 = solid), row-major,\n")
+        f.write(" * LSB-first. bit = row*n*k + side*k + lane; rows past the end read\n")
+        f.write(" * solid. %d levels, %d bits (%d bytes). */\n"
+                % (len(baked), len(bitstream), nbytes))
         f.write("#ifndef LEVELS_BAKED_H\n#define LEVELS_BAKED_H\n\n")
         f.write("#include <stdint.h>\n\n")
-        f.write("#define BAKED_TUNNELS %d\n" % len(TUN_PATH))
+        f.write("#define BAKED_TUNNELS %d\n" % len(TUNNELS))
         f.write("#define BAKED_NLEVELS %d\n\n" % len(baked))
         f.write("typedef struct {\n")
         f.write("  uint8_t n, k;      /* cross-section for this level */\n")
@@ -304,36 +394,31 @@ def main():
             f.write("  " + ", ".join("0x%02X" % b for b in cpacked[i:i + 16]) + ",\n")
         f.write("};\n\n")
         f.write("static const baked_level_t BAKED_LEVELS[BAKED_NLEVELS] = {\n")
-        for (tun, lid, n, k, rows, spawn, bitoff, _ex) in baked:
-            f.write("  { %2d, %d, %3d, %3d, 0x%X }, /* t%d id-%d */\n" % (n, k, rows, spawn, bitoff, tun, lid))
+        for (tun, n, k, rows, spawn, bitoff, _ex) in baked:
+            f.write("  { %2d, %d, %3d, %3d, 0x%X }, /* t%d */\n" % (n, k, rows, spawn, bitoff, tun))
         f.write("};\n\n")
         # per-level presentation/automation, parallel to BAKED_LEVELS.
-        # color0/1: 0xRRGGBB tile tint (0 = theme default). tilew: tileWidth
-        # in hundredths of a tile (0 = tunnel default). music: MUSIC_IDS
-        # (0 = tunnel default). pbase: starting light 0..254 (255 = full).
-        # rot: initial camera roll, deci-degrees. win: early level-end row
-        # (0 = run to the baked end).
         f.write("/* Per-level look/automation (index = BAKED_LEVELS order). */\n")
-        f.write("static const uint32_t BAKED_COLOR0[BAKED_NLEVELS] = {\n  " +
-                ", ".join("0x%06X" % b[7]["color0"] for b in baked) + ",\n};\n")
-        f.write("static const uint32_t BAKED_COLOR1[BAKED_NLEVELS] = {\n  " +
-                ", ".join("0x%06X" % b[7]["color1"] for b in baked) + ",\n};\n")
+        for name, idx, fmt in (("BAKED_COLOR0", "color0", "0x%06X"),
+                               ("BAKED_COLOR1", "color1", "0x%06X")):
+            f.write("static const uint32_t %s[BAKED_NLEVELS] = {\n  " % name +
+                    ", ".join(fmt % b[6][idx] for b in baked) + ",\n};\n")
         f.write("static const uint16_t BAKED_TILEW[BAKED_NLEVELS] = {\n  " +
-                ", ".join(str(b[7]["tilew"]) for b in baked) + ",\n};\n")
+                ", ".join(str(b[6]["tilew"]) for b in baked) + ",\n};\n")
         f.write("static const uint8_t BAKED_MUSIC[BAKED_NLEVELS] = {\n  " +
-                ", ".join(str(b[7]["music"]) for b in baked) + ",\n};\n")
+                ", ".join(str(b[6]["music"]) for b in baked) + ",\n};\n")
         f.write("static const uint8_t BAKED_PBASE[BAKED_NLEVELS] = {\n  " +
-                ", ".join(str(b[7]["pbase"]) for b in baked) + ",\n};\n")
+                ", ".join(str(b[6]["pbase"]) for b in baked) + ",\n};\n")
         f.write("static const int16_t BAKED_ROT[BAKED_NLEVELS] = {\n  " +
-                ", ".join(str(b[7]["rot"]) for b in baked) + ",\n};\n")
+                ", ".join(str(b[6]["rot"]) for b in baked) + ",\n};\n")
         f.write("static const uint16_t BAKED_WIN[BAKED_NLEVELS] = {\n  " +
-                ", ".join(str(b[7]["win"]) for b in baked) + ",\n};\n\n")
+                ", ".join(str(b[6]["win"]) for b in baked) + ",\n};\n\n")
         # power triggers, packed (z row << 16) | (power << 8) | mode.
         trig_flat, trig_start, trig_count = [], [], []
         for b in baked:
             trig_start.append(len(trig_flat))
-            trig_count.append(len(b[7]["trigs"]))
-            for (z, pv, mode) in b[7]["trigs"]:
+            trig_count.append(len(b[6]["trigs"]))
+            for (z, pv, mode) in b[6]["trigs"]:
                 trig_flat.append((z << 16) | (pv << 8) | mode)
         f.write("static const uint32_t BAKED_TRIGS[%d] = {\n  " % max(1, len(trig_flat)) +
                 (", ".join("0x%08X" % t for t in trig_flat) if trig_flat else "0") + ",\n};\n")
@@ -342,12 +427,11 @@ def main():
         f.write("static const uint8_t BAKED_TRIG_COUNT[BAKED_NLEVELS] = {\n  " +
                 ", ".join(str(c) for c in trig_count) + ",\n};\n\n")
         # tunnel start/count table in demo tunnel order
-        starts, counts = [], []
-        idx = 0
         by_tun = {}
         for bi, b in enumerate(baked):
             by_tun.setdefault(b[0], []).append(bi)
-        for tun in range(len(TUN_PATH)):
+        starts, counts = [], []
+        for tun in range(len(TUNNELS)):
             lst = by_tun.get(tun, [])
             starts.append(lst[0] if lst else 0)
             counts.append(len(lst))
@@ -355,8 +439,32 @@ def main():
                 ", ".join(str(s) for s in starts) + ",\n};\n")
         f.write("static const uint16_t BAKED_TUN_COUNT[BAKED_TUNNELS] = {\n  " +
                 ", ".join(str(c) for c in counts) + ",\n};\n\n")
+
+        # ---- infinite-mode segments ----
+        f.write("/* Infinite-mode segments: flat hand-made bitmaps, played in\n")
+        f.write(" * authored order (see build_inf_window in run3.c). 1 = solid. */\n")
+        f.write("#define INF_SEG_COUNT %d\n" % len(inf))
+        f.write("#define INF_SEG_N 4\n#define INF_SEG_K 4\n\n")
+        f.write("static const uint8_t INF_SEG_BITS[%d] = {\n" % max(1, inf_nbytes))
+        if inf_bits:
+            for i in range(0, inf_nbytes, 16):
+                f.write("  " + ", ".join("0x%02X" % b for b in inf_packed[i:i + 16]) + ",\n")
+        else:
+            f.write("  0,\n")
+        f.write("};\n")
+        f.write("static const uint8_t INF_SEG_CRUMB[%d] = {\n" % max(1, inf_nbytes))
+        if inf_bits:
+            for i in range(0, inf_nbytes, 16):
+                f.write("  " + ", ".join("0x%02X" % b for b in inf_cpacked[i:i + 16]) + ",\n")
+        else:
+            f.write("  0,\n")
+        f.write("};\n")
+        f.write("static const uint16_t INF_SEG_ROWS[INF_SEG_COUNT] = {\n  " +
+                ", ".join(str(r) for r in inf_rows) + ",\n};\n")
+        f.write("static const uint32_t INF_SEG_BIT[INF_SEG_COUNT] = {\n  " +
+                ", ".join(str(b) for b in inf_bit) + ",\n};\n\n")
         f.write("#endif /* LEVELS_BAKED_H */\n")
-    print("wrote %s (%d levels, %d bits)" % (OUT, len(baked), len(bitstream)))
+    print("wrote %s" % OUT)
 
 
 if __name__ == "__main__":

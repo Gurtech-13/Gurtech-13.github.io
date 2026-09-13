@@ -367,7 +367,7 @@ static void stroke_rect(int x, int y, int w, int h, uint32_t c);
    (cutscene-only pose sheets are not extractable); motion comes from the
    authored per-segment positions, linearly interpolated by the host. */
 typedef struct { int ch; double ring, zrow; int vis; } stage_actor_t;
-typedef struct { int kind; double ring, zrow, size; int vis; } stage_prop_t;
+typedef struct { int kind; double ring, zrow, size, inset; int vis; } stage_prop_t;
 static stage_actor_t g_sactors[NSTAGE_ACT];
 static stage_prop_t g_sprops[NSTAGE_PROP];
 void run3_stage_actor(int i, int ch, double ring, double zrow, int vis) {
@@ -377,12 +377,13 @@ void run3_stage_actor(int i, int ch, double ring, double zrow, int vis) {
   g_sactors[i].zrow = zrow < 0.5 ? 0.5 : zrow;
   g_sactors[i].vis = vis ? 1 : 0;
 }
-void run3_stage_prop(int i, int kind, double ring, double zrow, double size, int vis) {
+void run3_stage_prop(int i, int kind, double ring, double zrow, double size, double inset, int vis) {
   if (i < 0 || i >= NSTAGE_PROP) return;
   g_sprops[i].kind = kind;
   g_sprops[i].ring = ring;
   g_sprops[i].zrow = zrow < 0.5 ? 0.5 : zrow;
   g_sprops[i].size = size <= 0.0 ? 1.0 : size;
+  g_sprops[i].inset = inset < 0.0 ? 0.0 : (inset > 1.0 ? 1.0 : inset);
   g_sprops[i].vis = vis ? 1 : 0;
 }
 /* wall point for a ring position (shared by runner + staged cast) */
@@ -421,40 +422,49 @@ static void draw_stage_actor(double R, int ch, double ring, double zrow) {
   if (ar.mirror) blit_sprite_mirrored(drawX, drawY, spriteW, spriteH, pix, fw, fh, 1.0);
   else blit_sprite(drawX, drawY, spriteW, spriteH, pix, fw, fh, 1.0);
 }
-/* prop kinds: 1 map, 4 boat, 5 candy, 6 hover platform */
-static void draw_stage_prop(double R, int kind, double ring, double zrow, double size) {
+/* prop kinds: 0 hidden, 1 map, 5 candy, 7 TrainRide balloon.
+   The map is not a decorated sheet: ComingThrough.as builds it with
+   `new BitmapData(1,1,false,12364668)` (+ the vertex-colour shader
+   §<!9§.§7!P§, i.e. colour only, never a texture read), so it is a flat
+   panel of 0xBCAB7C and nothing else.  There is no boat or hover model to
+   draw: those scenes parent their cast to an invisible transform frame. */
+static void draw_stage_prop(double R, int kind, double ring, double zrow, double size, double inset) {
+  if (kind == 0) return;
   double mx, my, px, py, dd;
   ring_point(ring, R, &mx, &my);
+  /* inset: float off the wall toward the tube axis (the map falls through
+     the tube's interior and lands on the floor) */
+  double k2 = 1.0 - inset;
+  mx *= k2; my *= k2;
   proj(mx, my, zrow * G.tile, &px, &py, &dd);
   if (dd < VIEWPLANE_EPS) return;
   double wpp = size * G.tile * FOCAL / dd;
   if (wpp < 2.0) wpp = 2.0;
   if (wpp > W / 2) wpp = W / 2;
   int cx = (int)px, cy = (int)py;
-  if (kind == 1) { /* map: parchment sheet + border + fold */
-    int w = (int)wpp, h = (int)(wpp * 0.7);
-    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(216, 200, 144));
-    stroke_rect(cx - w / 2, cy - h / 2, w, h, rgb(90, 70, 40));
-    fill_rect(cx - w / 2 + 2, cy - 1, w - 4, 2, rgb(150, 128, 84));
-  } else if (kind == 5) { /* candy: magenta drop */
-    int w = (int)(wpp * 0.5), h = (int)(wpp * 0.7);
-    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(255, 150, 200));
-    fill_rect(cx - w / 2, cy - h / 2, w, 2, rgb(255, 210, 230));
-  } else if (kind == 4) { /* boat: brown hull + rim */
-    int w = (int)(wpp * 2.2), h = (int)(wpp * 0.8);
-    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(120, 84, 50));
-    fill_rect(cx - w / 2, cy - h / 2, w, 3, rgb(70, 48, 28));
-  } else { /* hover platform: slate + cyan glow */
-    int w = (int)(wpp * 2.0), h = (int)(wpp * 0.5);
-    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(90, 100, 130));
-    fill_rect(cx - w / 2, cy + h / 2, w, 2, rgb(120, 220, 255));
+  if (kind == 1) { /* map: flat 0xBCAB7C panel (40 x 25 in the original) */
+    int w = (int)wpp, h = (int)(wpp * 0.62);
+    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(188, 171, 124));
+  } else if (kind == 5) { /* candy: the Candy.png panel from Candy.as */
+    int w = (int)wpp;
+    int h = (int)(wpp * (double)tex_candy_H / (double)tex_candy_W);
+    if (h < 2) h = 2;
+    blit_sprite(cx - w / 2, cy - h / 2, w, h, tex_candy, tex_candy_W, tex_candy_H, 1.0);
+  } else if (kind == 7) { /* balloon: the TrainRide balloon panel (BoatRide) */
+    int w = (int)wpp;
+    int h = (int)(wpp * (double)tex_balloon_train_H / (double)tex_balloon_train_W);
+    if (h < 2) h = 2;
+    blit_sprite(cx - w / 2, cy - h / 2, w, h, tex_balloon_train,
+                tex_balloon_train_W, tex_balloon_train_H, 1.0);
   }
 }
 static void draw_stage(double R) {
   for (int i = 0; i < NSTAGE_ACT; i++)
     if (g_sactors[i].vis) draw_stage_actor(R, g_sactors[i].ch, g_sactors[i].ring, g_sactors[i].zrow);
   for (int i = 0; i < NSTAGE_PROP; i++)
-    if (g_sprops[i].vis) draw_stage_prop(R, g_sprops[i].kind, g_sprops[i].ring, g_sprops[i].zrow, g_sprops[i].size);
+    if (g_sprops[i].vis)
+      draw_stage_prop(R, g_sprops[i].kind, g_sprops[i].ring, g_sprops[i].zrow,
+                      g_sprops[i].size, g_sprops[i].inset);
 }
 
 /* ==================== HINT ROUTE (press H) ==================== */
@@ -568,7 +578,6 @@ void render_frame(void) {
   if (lvlC0) lvlC0 |= 0xFF000000u;
   double front = G.prog;
   double tile = G.tile;
-  int gateRow = (int)G.rowEnd;
   int rFar = (int)(front + VIEW / tile) + 2;
   int rNear = (int)(front - (DCAM + 2.0*tile) / tile) - 2;
   double hz = 0.5 * tile;
@@ -593,8 +602,6 @@ void render_frame(void) {
          distance fog and the low-power dim vary a tile's colour. */
       uint32_t base = lvlC0 ? lvlC0 : (lpw ? LPAL[1] : PAL[th][1]);
       uint32_t col = mixc(base, sky, fog);
-      int isGate = (ri == gateRow);
-      if (isGate) col = mixc(col, rgb(255,236,170), 0.55);
       if (lpw) {
         /* low-power tunnel: tiles fade with the light level (the host ducks
            the music along). Runner and stars stay lit. */

@@ -1572,8 +1572,9 @@ static const map_deco_t map_decorations[] = {
 
 /* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b.
  * Node coords = original first waypoints (uniform map transform).
- * Ids 30+ are custom extended tunnels (hand-placed, node = path start). */
-#define MAP_TUNNEL_COUNT 36
+ * Ids 30+ are custom extended tunnels (hand-placed, node = path start);
+ * 33/34/35 are the 140-checkpoint main runs, 36-41 their branches. */
+#define MAP_TUNNEL_COUNT 42
 
 typedef struct {
   int16_t x, y;
@@ -1612,12 +1613,18 @@ static const map_node_t map_nodes[MAP_TUNNEL_COUNT] = {
   { 1220, 209, 45, 212, 191, 0 }, /* 27 */
   { 1331, 316, 167, 139, 250, 1 }, /* 28 */
   { 478, 444, 52, 211, 153, 1 }, /* 29 */
-  { 1503, 215, 94, 234, 212, 1 }, /* 30 F */
-  { 683, 526, 191, 219, 254, 1 }, /* 31 S */
-  { 1380, 166, 167, 139, 250, 1 }, /* 32 V */
-  { 2118, 346, 192, 132, 252, 1 }, /* 33 Wormhole X (Primary's end) */
-  { 2298, 280, 103, 232, 249, 0 }, /* 34 Far Shore */
-  { 2610, 346, 240, 171, 252, 0 }, /* 35 Far Drift */
+  { 1503, 215, 94, 234, 212, 1 }, /* 30 */
+  { 683, 526, 191, 219, 254, 1 }, /* 31 */
+  { 1380, 166, 167, 139, 250, 1 }, /* 32 */
+  { 2118, 346, 192, 132, 252, 1 }, /* 33 */
+  { 3856, 321, 103, 232, 249, 0 }, /* 34 */
+  { 5218, 502, 240, 171, 252, 0 }, /* 35 */
+  { 2938, 198, 192, 132, 252, 1 }, /* 36 */
+  { 2487, 239, 192, 132, 252, 1 }, /* 37 */
+  { 4447, 502, 103, 232, 249, 1 }, /* 38 */
+  { 5037, 543, 103, 232, 249, 1 }, /* 39 */
+  { 5759, 641, 240, 171, 252, 1 }, /* 40 */
+  { 5578, 608, 240, 171, 252, 1 }, /* 41 */
 };
 
 /* Path polylines: x0,y0,x1,y1,... per tunnel (screen coords). */
@@ -1654,9 +1661,15 @@ static const int16_t map_wp_29[] = {478,444,483,461,491,477,511,526,517,553,518,
 static const int16_t map_wp_30[] = {1503,215,1380,149,1282,84};
 static const int16_t map_wp_31[] = {683,526,560,559,462,608};
 static const int16_t map_wp_32[] = {1380,166,1478,215,1577,248};
-static const int16_t map_wp_33[] = {2118,346,2216,313,2298,280};
-static const int16_t map_wp_34[] = {2298,280,2446,313,2610,346};
-static const int16_t map_wp_35[] = {2610,346,2790,379,2971,412};
+static const int16_t map_wp_33[] = {2118,346,2298,289,2487,239,2692,207,2938,198,3184,207,3430,231,3660,272,3856,321};
+static const int16_t map_wp_34[] = {3856,321,4053,379,4250,444,4447,502,4644,543,4840,559,5037,543,5218,502};
+static const int16_t map_wp_35[] = {5218,502,5398,559,5578,608,5759,641,5939,649,6120,633,6284,592};
+static const int16_t map_wp_36[] = {2938,198,3020,133,3118,92,3225,75};
+static const int16_t map_wp_37[] = {2487,239,2446,166,2364,108,2249,84};
+static const int16_t map_wp_38[] = {4447,502,4512,567,4562,633,4594,699};
+static const int16_t map_wp_39[] = {5037,543,5086,477,5136,420,5168,346};
+static const int16_t map_wp_40[] = {5759,641,5874,674,5988,690};
+static const int16_t map_wp_41[] = {5578,608,5578,526,5562,453,5537,379};
 static const int16_t *map_wp[MAP_TUNNEL_COUNT] = {
   map_wp_0,
   map_wp_1,
@@ -1694,6 +1707,12 @@ static const int16_t *map_wp[MAP_TUNNEL_COUNT] = {
   map_wp_33,
   map_wp_34,
   map_wp_35,
+  map_wp_36,
+  map_wp_37,
+  map_wp_38,
+  map_wp_39,
+  map_wp_40,
+  map_wp_41,
 };
 static const uint8_t map_wp_n[MAP_TUNNEL_COUNT] = {
   8, /* 0 */
@@ -1729,9 +1748,15 @@ static const uint8_t map_wp_n[MAP_TUNNEL_COUNT] = {
   3, /* 30 */
   3, /* 31 */
   3, /* 32 */
-  3, /* 33 */
-  3, /* 34 */
-  3, /* 35 */
+  9, /* 33 */
+  8, /* 34 */
+  7, /* 35 */
+  4, /* 36 */
+  4, /* 37 */
+  4, /* 38 */
+  4, /* 39 */
+  3, /* 40 */
+  4, /* 41 */
 };
 
 /* Tunnel name strings */
@@ -1772,6 +1797,12 @@ static const char *map_tunnel_names[MAP_TUNNEL_COUNT] = {
   "WH X", /* 33 */
   "Shore", /* 34 */
   "Drift", /* 35 */
+  "X-Rift", /* 36 */
+  "X-Echo", /* 37 */
+  "Shoal", /* 38 */
+  "Reef", /* 39 */
+  "Wake", /* 40 */
+  "Ember", /* 41 */
 };
 
 #endif /* MAP_ASSETS_H */

@@ -8,21 +8,24 @@ const bytes = fs.readFileSync(wasmPath);
 
 const EXPECT = [
   // tun: [count, firstLevel[n,k,rows], lastLevel[n,k,rows]]
-  [0, 65, [4, 4, 54]],
+  [0, 65, null],
   [1, 7, null],
   [2, 1, null],
   [12, 20, null],
   [13, 25, null],
-  [23, 12, null], // procedural fallback (no baked data)
+  [23, 12, null], // authored bitmaps (the original has no data here)
   [29, 3, null],
-  // custom extended tunnels (procedural, no baked data)
+  // custom extended tunnels (authored flat bitmaps, ext_levels.txt)
   [30, 8, null],
   [31, 10, null],
   [32, 7, null],
-  [33, 20, null], /* Wormhole X: extended past a short 6-level hop */
-  [34, 8, null],
-  [35, 10, null],
+  // Wormhole X / Far Shore / Far Drift: 200 levels each, split across a
+  // main run (140) and two branches (30 + 30)
+  [33, 140, null], [36, 30, null], [37, 30, null],
+  [34, 140, null], [38, 30, null], [39, 30, null],
+  [35, 140, null], [40, 30, null], [41, 30, null],
 ];
+const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41];
 
 (async () => {
   const { instance } = await WebAssembly.instantiate(bytes, {});
@@ -30,13 +33,22 @@ const EXPECT = [
   const need = ["run3_init","run3_seek","run3_state","run3_tun","run3_lvl",
     "run3_tunnel_count","run3_tunnel_levels","run3_levels_in","run3_sides",
     "run3_lanes","run3_level_rows","run3_step","run3_set_input","run3_flap",
-    "run3_tile","run3_solid","run3_enter_map","run3_map_checkpoint_count"];
+    "run3_tile","run3_solid","run3_enter_map","run3_map_checkpoint_count",
+    "run3_hint_on","run3_hint_toggle","run3_hint_count","run3_hint_row","run3_hint_ring"];
   for (const n of need) {
     if (typeof e[n] !== "function") throw new Error("missing export " + n);
   }
   e.run3_init(12345);
   console.log("tunnel_count =", e.run3_tunnel_count());
-  if (e.run3_tunnel_count() !== 36) throw new Error("bad tunnel count");
+  if (e.run3_tunnel_count() !== 42) throw new Error("bad tunnel count");
+  let total = 0;
+  for (let t = 0; t < 42; t++) {
+    const c = e.run3_levels_in(t);
+    total += c;
+    if (c <= 0) throw new Error(`tun ${t} has no levels - every tunnel must ship bitmaps`);
+  }
+  console.log(`total levels across all tunnels: ${total}`);
+  if (total !== 956) throw new Error("total level count drifted: " + total);
 
   for (const [tun, count, first] of EXPECT) {
     const got = e.run3_levels_in(tun);
@@ -52,22 +64,31 @@ const EXPECT = [
     }
   }
 
-  // The custom extended tunnels (and the procedural Wormhole Space fallback)
-  // must not be solid slabs: at least 30% of their tiles are void, so they
-  // read like the baked originals.
-  for (const tun of [23, 30, 31, 32, 33, 34, 35]) {
-    e.run3_seek(tun, 0);
+  // The extended tunnels must not be solid slabs: at least 30% of their tiles
+  // are void, so they read like the baked originals. Sample the first, middle
+  // and last level of every extended tunnel (rows are absolute, so offset by
+  // the level's start row).
+  const voidOf = (tun, lvl) => {
+    e.run3_seek(tun, lvl);
     const n = e.run3_sides(), k = e.run3_lanes();
     const rows = Math.min(200, e.run3_level_rows() | 0);
-    let voidN = 0, total = 0;
+    const base = e.run3_row();
+    let voidN = 0, tot = 0;
     for (let r = 0; r < rows; r++)
       for (let s = 0; s < n; s++) for (let l = 0; l < k; l++) {
-        total++;
-        if (!e.run3_tile(s, r, l)) voidN++;
+        tot++;
+        if (!e.run3_tile(s, base + r, l)) voidN++;
       }
-    const pct = 100 * voidN / total;
-    console.log(`tun ${tun}: void ${pct.toFixed(1)}% (${n}x${k}, ${rows} rows)`);
-    if (pct < 30) throw new Error(`tun ${tun}: only ${pct.toFixed(1)}% void (want >= 30%)`);
+    return { pct: 100 * voidN / tot, n, k, rows };
+  };
+  for (const tun of EXTENDED) {
+    const count = e.run3_levels_in(tun);
+    const picks = [0, count >> 1, count - 1];
+    const stats = picks.map((l) => voidOf(tun, l));
+    console.log(`tun ${tun}: void ` + stats.map((s) => s.pct.toFixed(1) + "%").join("/") +
+      ` (${stats[0].n}x${stats[0].k}, ${stats[0].rows} rows)`);
+    for (const s of stats)
+      if (s.pct < 30) throw new Error(`tun ${tun}: only ${s.pct.toFixed(1)}% void (want >= 30%)`);
   }
 
   // primary lvl0 must match original id-0: 54 rows of 4x4.
@@ -128,10 +149,27 @@ const EXPECT = [
   console.log(`gated 0->1: ${gated}; shape ${s0}x${k0} -> ${e.run3_sides()}x${e.run3_lanes()}`);
   if (!gated) throw new Error("gate advance broken");
 
-  // fallback tunnel still procedural: wormhole space lvl rows = 45*rps formula (>0)
-  e.run3_seek(23, 0);
-  console.log(`space lvl0 rows=${e.run3_level_rows()} sides=${e.run3_sides()}`);
-  if (!(e.run3_level_rows() > 0)) throw new Error("space rows");
+  // every extended level must have a way through: the hint planner (the same
+  // route the H overlay draws) must reach the end of a broad sample of levels
+  // across every extended tunnel.
+  let routed = 0;
+  for (const tun of EXTENDED) {
+    const count = e.run3_levels_in(tun);
+    for (let lvl = 0; lvl < count; lvl += Math.max(1, Math.floor(count / 6))) {
+      e.run3_seek(tun, lvl);
+      if (e.run3_hint_on()) e.run3_hint_toggle();
+      e.run3_hint_toggle();
+      const cnt = e.run3_hint_count();
+      const r0 = e.run3_rowf();
+      const rows = e.run3_level_rows() | 0;
+      const last = cnt > 0 ? e.run3_hint_row(cnt - 1) : -1;
+      if (cnt <= 0 || last - r0 < rows - 3)
+        throw new Error(`tun ${tun} lvl ${lvl}: no route through (${cnt} waypoints, ` +
+                        `reaches row ${last - r0} of ${rows})`);
+      routed++;
+    }
+  }
+  console.log(`route exists on ${routed} sampled extended levels`);
 
   console.log("ALL WASM CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", err && err.message || err); process.exit(1); });

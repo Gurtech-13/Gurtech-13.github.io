@@ -36,14 +36,11 @@ static int g_hintRow0 = -1, g_hintCol0 = -1;
 
 static double g_levelRows[MAX_LEVELS];
 static double g_rowStart[MAX_LEVELS + 1];
-static uint32_t g_seedT;
 
 /* infinite mode state */
 static double g_infSpeed;       /* rows/s in infinite mode */
-static double g_infHoleP;       /* hole probability */
 static int    g_infRows;        /* rows cleared */
-static int    g_infScore;       /* score (cells earned) */
-static uint32_t g_infSeed;      /* infinite mode seed */
+static int    g_infScore;       /* score */
 
 /* shop state (exported to host) */
 static int32_t g_powercells;
@@ -72,6 +69,15 @@ void run3_stage_cam(double side, double lift) {
   if (lift > 1.0) lift = 1.0;
   g_stageSide = side;
   g_stageLift = lift;
+  /* fold the authored camera side into the view roll. run3_step does this
+     for gameplay and for S_GATE, but a staged scene (S_CUT) is rendered
+     without stepping the sim, so the side offset used to be dropped and every
+     cutscene kept the tunnel's own roll — the wrong camera angle. In
+     S_GATE run3_step owns the roll; leave it alone there. */
+  if (G.state == S_CUT) {
+    G.rot = cam_rot_target() - g_stageSide * 0.28;
+    G.rotT = G.rot;
+  }
 }
 double run3_stage_liftf(void) { return g_stageLift; }
 double run3_stage_sidef(void) { return g_stageSide; }
@@ -79,7 +85,7 @@ double run3_stage_sidef(void) { return g_stageSide; }
    lives here. Mid-level cutscene gates: an armed (tun, lvl) checkpoint
    PAUSES at S_GATE instead of auto-advancing, so the scene stages on the
    level just completed; a fired arm is consumed (one-shot). */
-#define MAXMID 8
+#define MAXMID 32
 static int8_t g_midTun[MAXMID];
 static int16_t g_midLvl[MAXMID];
 static int g_midN = 0;
@@ -266,14 +272,7 @@ static double rpsAt(int lvl) {
   double r = t->baseRps + t->rpsPer * (double)lvl;
   return r > m ? m : r;
 }
-static double holeAt(int lvl) {
-  const tunnel_t *t = tun();
-  double m = t->maxHole < MAX_HOLE ? t->maxHole : MAX_HOLE;
-  double h = t->holeStart + t->holePer * (double)lvl;
-  return h > m ? m : h;
-}
-
-/* baked presentation index for (tun, lvl), or -1 for procedural levels */
+/* baked presentation index for (tun, lvl), or -1 if the level is missing */
 static int baked_idx(int tun, int lvl) {
   if (tun < 0 || tun >= BAKED_TUNNELS || tun >= MAX_TUNNELS) return -1;
   if (lvl < 0 || lvl >= BAKED_TUN_COUNT[tun]) return -1;
@@ -285,9 +284,8 @@ static void compute_rows(void) {
   g_rowStart[0] = 0.0;
   for (int j = 0; j < (int)t->levels; j++) {
     const baked_level_t *B = 0;
-    double rows;
+    double rows = 45.0;
     if (baked_at(G.tun, j, &B)) rows = (double)B->rows;
-    else rows = (double)((int)(45.0 * rpsAt(j) + 0.5));
     /* authored early level end (result-win trigger): finish at that row */
     {
       int bi = baked_idx(G.tun, j);
@@ -319,103 +317,117 @@ static void apply_level_look(int lvl) {
   g_powerRate = 1.5;
 }
 
-/* fill GMAP for the current level window (authored bitmap or procedural) */
+/* Fill GMAP for the current level window from the level's baked bitmap.
+   Every tunnel ships authored bitmaps (levels_baked.h), so nothing here is
+   generated: the engine only reads the level it was given. */
 static void build_window(void) {
-  const tunnel_t *t = tun();
   const baked_level_t *B = 0;
   baked_at(G.tun, G.lvl, &B);
-  int n = B ? B->n : t->n_sides, k = B ? B->k : t->k_tiles;
-  int all = (1 << k) - 1;
   int r0 = (int)g_rowStart[G.lvl];
-  int rEnd = (int)g_rowStart[G.lvl + 1] + PADW;
-  if (rEnd > r0 + MAPW - 1) rEnd = r0 + MAPW - 1;
   GMAP_BASE = r0;
   for (int i = 0; i < MAPW; i++)
     for (int s = 0; s < MAXN; s++) { GMAP[s][i] = 0; GCR0[s][i] = 0; GCRUMB[s][i] = 0; }
-  int be = (int)G.blockEvery;
+  if (!B) return; /* no data: an unbroken tunnel */
+  int rEnd = (int)g_rowStart[G.lvl + 1] + PADW;
+  if (rEnd > r0 + MAPW - 1) rEnd = r0 + MAPW - 1;
   for (int R = r0; R <= rEnd; R++) {
     int i = R - r0;
     if (i < 4) continue;
-    int voidSide = -1, buffered = 0;
-    if (be > 0) {
-      int w0 = (R - 4) / be; if (w0 < 0) w0 = 0;
-      int w1 = (R + 2) / be; if (w1 < 0) w1 = 0;
-      for (int w = w0; w <= w1; w++) {
-        int br = w * be;
-        if (R >= br - 2 && R <= br + 4) {
-          buffered = 1;
-          if (R >= br && R <= br + 3) voidSide = (int)((w + 2) % n);
-          break;
-        }
-      }
-    }
-    for (int s2 = 0; s2 < n; s2++) {
+    int lr = R - r0;
+    for (int s2 = 0; s2 < B->n; s2++) {
       uint8_t m = 0, mc = 0;
-      if (B) {
-        int lr = R - r0;
-        if (lr >= 0 && lr < B->rows) {
-          uint8_t mm = 0, cm = 0;
-          for (int ln = 0; ln < k; ln++) {
-            if (!baked_tile(B, lr, s2, ln)) mm |= (uint8_t)(1u << ln);
-            else if (baked_crumb(B, lr, s2, ln)) cm |= (uint8_t)(1u << ln);
-          }
-          m = mm;
-          mc = cm;
-        } /* past the baked rows (far lookahead): solid */
-      } else if (voidSide >= 0) {
-        m = (s2 == voidSide) ? (uint8_t)all : 0;
-      } else if (!buffered) {
-        /* Procedural hazard with an explicit void target, so these levels
-           read like the baked originals (a sparse floor, not a slab). The
-           per-tunnel holeP shifts the target from 30% up to 45%. */
-        double vt = 0.32 + G.holeP * 0.6;
-        if (vt > 0.45) vt = 0.45;
-        uint32_t h = h32(g_seedT ^ (uint32_t)(s2 * 1013u) ^ (uint32_t)(R * 7919u));
-        double wantD = vt * (double)k;
-        int want = (int)wantD;
-        double frac = wantD - (double)want;
-        if (frac > 0.0 && (double)((h >> 8) & 0xffff) / 65536.0 < frac) want++;
-        if (want > k) want = k;
-        uint32_t x = h32(h ^ 0x9e3779b9u);
-        uint8_t mask = 0;
-        while (want > 0) {
-          x = h32(x + 0x85ebca6bu);
-          int lane = (int)((x & 0xffff) * (double)k / 65536.0) % k;
-          if (!(mask & (1u << lane))) { mask |= (uint8_t)(1u << lane); want--; }
+      if (lr >= 0 && lr < B->rows) {
+        for (int ln = 0; ln < B->k; ln++) {
+          if (!baked_tile(B, lr, s2, ln)) m |= (uint8_t)(1u << ln);
+          else if (baked_crumb(B, lr, s2, ln)) mc |= (uint8_t)(1u << ln);
         }
-        m = mask;
-      }
+      } /* past the baked rows (far lookahead): solid */
       GMAP[s2][i] = m;
       GCR0[s2][i] = (uint8_t)(mc & ~m); /* crumble only where solid */
     }
   }
 }
 
+/* ---- infinite mode: hand-made segments, played in order, looping.
+   The endless tunnel is literally a chain of the authored bitmaps in
+   INF_SEG_* (baked from ext_levels.txt) - no geometry is generated. The
+   segments are authored easiest-first, so the loop keeps escalating. ---- */
+static int g_infStart[INF_SEG_COUNT + 1];
+static int g_infTotal = 0;
+static void inf_init(void) {
+  if (g_infTotal > 0) return;
+  int acc = 0;
+  for (int i = 0; i < INF_SEG_COUNT; i++) {
+    g_infStart[i] = acc;
+    acc += (int)INF_SEG_ROWS[i];
+  }
+  g_infStart[INF_SEG_COUNT] = acc;
+  g_infTotal = acc > 0 ? acc : 1;
+}
+static int inf_tile(int seg, int row, int side, int lane) {
+  if (seg < 0 || seg >= INF_SEG_COUNT) return 1;
+  if (row < 0 || row >= (int)INF_SEG_ROWS[seg]) return 1;
+  if (side < 0 || side >= INF_SEG_N || lane < 0 || lane >= INF_SEG_K) return 1;
+  uint32_t idx = INF_SEG_BIT[seg] + (uint32_t)row * (INF_SEG_N * INF_SEG_K) +
+                 (uint32_t)side * INF_SEG_K + (uint32_t)lane;
+  return (INF_SEG_BITS[idx >> 3] >> (idx & 7)) & 1;
+}
+static int inf_crumb(int seg, int row, int side, int lane) {
+  if (seg < 0 || seg >= INF_SEG_COUNT) return 0;
+  if (row < 0 || row >= (int)INF_SEG_ROWS[seg]) return 0;
+  if (side < 0 || side >= INF_SEG_N || lane < 0 || lane >= INF_SEG_K) return 0;
+  uint32_t idx = INF_SEG_BIT[seg] + (uint32_t)row * (INF_SEG_N * INF_SEG_K) +
+                 (uint32_t)side * INF_SEG_K + (uint32_t)lane;
+  return (INF_SEG_CRUMB[idx >> 3] >> (idx & 7)) & 1;
+}
+/* slide the dynamic crumble state when the window moves forward, so a wave
+   set off in front of the runner is not resurrected by the rebuild */
+static void shift_window(int delta) {
+  if (delta <= 0 || delta >= MAPW) {
+    for (int s = 0; s < MAXN; s++)
+      for (int i = 0; i < MAPW; i++) GCRUMB[s][i] = 0;
+    for (int s = 0; s < MAXN; s++)
+      for (int l = 0; l < MAXK; l++)
+        for (int i = 0; i < MAPW; i++) g_crumble[s][l][i] = 0;
+    g_armedN = 0;
+    return;
+  }
+  for (int s = 0; s < MAXN; s++) {
+    for (int i = 0; i + delta < MAPW; i++) GCRUMB[s][i] = GCRUMB[s][i + delta];
+    for (int i = MAPW - delta; i < MAPW; i++) GCRUMB[s][i] = 0;
+  }
+  for (int s = 0; s < MAXN; s++)
+    for (int l = 0; l < MAXK; l++) {
+      for (int i = 0; i + delta < MAPW; i++) g_crumble[s][l][i] = g_crumble[s][l][i + delta];
+      for (int i = MAPW - delta; i < MAPW; i++) g_crumble[s][l][i] = 0;
+    }
+}
 /* build GMAP for infinite mode at current position */
 static void build_inf_window(int baseRow) {
-  int n = G.shape, k = G.k;
-  int r0 = baseRow;
-  int rEnd = r0 + MAPW;
-  GMAP_BASE = r0;
+  inf_init();
+  const int n = INF_SEG_N, k = INF_SEG_K;
+  G.shape = (uint8_t)n;
+  G.k = (uint8_t)k;
+  shift_window(baseRow - GMAP_BASE);
+  GMAP_BASE = baseRow;
   for (int i = 0; i < MAPW; i++)
-    for (int s = 0; s < MAXN; s++) GMAP[s][i] = 0;
-  for (int R = r0; R <= rEnd; R++) {
-    int i = R - r0;
+    for (int s = 0; s < MAXN; s++) { GMAP[s][i] = 0; GCR0[s][i] = 0; }
+  for (int i = 0; i < MAPW; i++) {
     if (i < 4) continue;
+    int R = baseRow + i;
+    int m = R % g_infTotal;
+    int seg = 0;
+    while (seg < INF_SEG_COUNT && g_infStart[seg + 1] <= m) seg++;
+    if (seg >= INF_SEG_COUNT) seg = INF_SEG_COUNT - 1;
+    int row = m - g_infStart[seg];
     for (int s2 = 0; s2 < n; s2++) {
-      uint32_t h = h32(g_infSeed ^ (uint32_t)(s2 * 1013u) ^ (uint32_t)(R * 7919u));
-      uint8_t m = 0;
-      if ((double)((h >> 8) & 0xffff) / 65536.0 < g_infHoleP) {
-        uint32_t x = h32(h ^ 0x9e3779b9u);
-        int want = 1 + (int)((x & 0xffff) * (double)k / 65536.0);
-        if (want > k) want = k;
-        while (want > 0) {
-          x = h32(x + 0x85ebca6bu);
-          int lane = (int)((x & 0xffff) * (double)k / 65536.0) % k;
-          if (!(m & (1u << lane))) { m |= (uint8_t)(1u << lane); want--; }
-        }
+      uint8_t mm = 0, cm = 0;
+      for (int ln = 0; ln < k; ln++) {
+        if (!inf_tile(seg, row, s2, ln)) mm |= (uint8_t)(1u << ln);
+        else if (inf_crumb(seg, row, s2, ln)) cm |= (uint8_t)(1u << ln);
       }
-      GMAP[s2][i] = m;
+      GMAP[s2][i] = mm;
+      GCR0[s2][i] = (uint8_t)(cm & ~mm);
     }
   }
 }
@@ -431,9 +443,6 @@ static void open_level(int lvl) {
   apply_level_look(lvl);
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
-  G.holeP = holeAt(lvl);
-  G.blockEvery = (lvl >= t->blockStart) ? t->blockEvery : 0;
-  if (B) G.blockEvery = 0; /* authored levels have no wall-void blocks */
   G.rowStart = g_rowStart[lvl];
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
@@ -448,8 +457,11 @@ static void open_level(int lvl) {
   G.jump = 0.0;
   G.jv = 0.0;
   G.fallT = 0.0;
-  G.rot = 0.0;
-  G.rotT = 0.0;
+  /* load the view roll for this spot instead of starting at 0 and easing the
+     camera round: 78% of levels spawn on a wall that is not "up", so zeroing
+     the roll made every level load visibly spin the tunnel into place (and a
+     staged cutscene that had just loaded a level showed the wrong angle). */
+  G.rot = G.rotT = cam_rot_target();
   G.input = 0.0;
   G.animT = 0.0;
   G.landT = 0.0;
@@ -469,9 +481,6 @@ static void open_level_continue(int lvl, double over) {
   apply_level_look(lvl);
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
-  G.holeP = holeAt(lvl);
-  G.blockEvery = (lvl >= t->blockStart) ? t->blockEvery : 0;
-  if (B) G.blockEvery = 0;
   G.rowStart = g_rowStart[lvl];
   G.rowEnd = g_rowStart[lvl + 1];
   build_window();
@@ -778,15 +787,12 @@ double run3_hint_ring(int i) { return (i >= 0 && i < g_hintN) ? (double)g_hintRi
 /* ---------------- API ---------------- */
 void run3_init(uint32_t seed) {
   seed = seed ? seed : 1u;
-  g_seedT = h32(seed ^ 0x85ebca6bu);
-  g_infSeed = h32(seed ^ 0xdeadbeefu);
   render_init_stars(seed);
   g_powercells = 0;
   g_power = 1.0;
   g_dislodged = 0;
   if (NTUNNELS > 0) {
     G.tun = 0;
-    g_seedT = h32(h32(seed) ^ (uint32_t)(G.tun * 2654435761u) ^ 0x9e3779b9u);
     open_level(0);
   }
 }
@@ -794,16 +800,12 @@ void run3_init(uint32_t seed) {
 void run3_open(int tunIdx) {
   if (tunIdx < 0 || tunIdx >= (int)NTUNNELS) tunIdx = 0;
   G.tun = (uint16_t)tunIdx;
-  uint32_t base = h32(0x5eedu);
-  g_seedT = h32(base ^ (uint32_t)(tunIdx * 2654435761u) ^ 0x9e3779b9u);
   open_level(0);
 }
 
 void run3_seek(int tunIdx, int lvl) {
   if (tunIdx < 0 || tunIdx >= (int)NTUNNELS) tunIdx = 0;
   G.tun = (uint16_t)tunIdx;
-  uint32_t base = h32(0x5eedu);
-  g_seedT = h32(base ^ (uint32_t)(tunIdx * 2654435761u) ^ 0x9e3779b9u);
   const tunnel_t *t = tun();
   if (lvl < 0) lvl = 0;
   if (lvl >= (int)t->levels) lvl = (int)t->levels - 1;
@@ -813,12 +815,11 @@ void run3_seek(int tunIdx, int lvl) {
 /* start infinite mode */
 void run3_start_inf(void) {
   G.tun = 0;
-  G.shape = 4;  /* start with a square tunnel */
-  G.k = 4;
+  G.shape = INF_SEG_N;
+  G.k = INF_SEG_K;
   G.tile = 0.70;
   G.theme = 0;
-  g_infSpeed = 2.5;
-  g_infHoleP = 0.04;
+  g_infSpeed = INF_BASE_SPEED;
   g_infRows = 0;
   g_infScore = 0;
   G.rowStart = 0.0;
@@ -830,14 +831,16 @@ void run3_start_inf(void) {
   G.jump = 0.0;
   G.jv = 0.0;
   G.fallT = 0.0;
-  G.rot = 0.0;
-  G.rotT = 0.0;
+  /* endless mode has no level look to inherit: clear the roll offset and put
+     the camera on the spawn wall straight away (see open_level) */
+  g_rotOff = 0.0;
+  G.rot = G.rotT = cam_rot_target();
   G.input = 0.0;
   G.animT = 0.0;
   G.landT = 0.0;
   G.rowsPer = g_infSpeed;
-  G.holeP = g_infHoleP;
-  G.blockEvery = 0;
+  crumb_reset();
+  GMAP_BASE = 0;
   build_inf_window(0);
   G.state = S_RUN; /* instant start */
 }
@@ -857,6 +860,27 @@ static void gate_release(void) {
 }
 void run3_gate_resume(void) { gate_release(); }
 
+/* restart the endless run at the first authored segment */
+static void inf_restart(void) {
+  G.state = S_RUN;
+  G.prog = 0.0;
+  G.ring = (double)G.k * 0.5;
+  G.gravSide = (uint8_t)wrap_side(G.ring, G.k, G.shape);
+  G.vRing = 0.0;
+  G.jump = 0.0;
+  G.jv = 0.0;
+  G.fallT = 0.0;
+  G.animT = 0.0;
+  G.landT = 0.0;
+  G.input = 0.0;
+  g_infSpeed = INF_BASE_SPEED;
+  g_infRows = 0;
+  g_infScore = 0;
+  crumb_reset();
+  GMAP_BASE = 0;
+  build_inf_window(0);
+}
+
 void run3_flap(void) {
   if (G.state == S_READY) {
     G.state = S_RUN;
@@ -867,26 +891,8 @@ void run3_flap(void) {
       G.landT = 0.0; /* leaving ground cancels the landing pose */
     }
   } else if (G.state == S_DEAD) {
-    if (G.rowEnd > 900000.0) {
-      /* infinite mode: restart */
-      G.state = S_RUN;
-      G.prog = 0.0;
-      G.ring = (double)G.k * 0.5;
-      G.gravSide = (uint8_t)wrap_side(G.ring, G.k, G.shape);
-      G.vRing = 0.0;
-      G.jump = 0.0;
-      G.jv = 0.0;
-      G.fallT = 0.0;
-      G.animT = 0.0;
-      G.landT = 0.0;
-      g_infSpeed = 2.5;
-      g_infHoleP = 0.04;
-      g_infRows = 0;
-      build_inf_window(0);
-    } else {
-      open_level(G.lvl);
-      G.state = S_RUN;
-    }
+    if (G.rowEnd > 900000.0) inf_restart();
+    else open_level(G.lvl); /* open_level auto-starts (S_RUN) */
   } else if (G.state == S_GATE) {
     /* host finished the mid-tunnel scene (or the tap is the fallback):
        leave the pause and roll into the next checkpoint */
@@ -987,13 +993,18 @@ void run3_step(double dt) {
       if (G.landT < 0.0) G.landT = 0.0;
     }
 
-    /* infinite mode: rebuild window as we advance */
+    /* infinite mode: rebuild the window as we advance, and let the endless
+       run ramp up on top of the authored segment order */
     if (G.rowEnd > 900000.0) {
       int curRow = (int)G.prog;
       if (curRow - GMAP_BASE > MAPW / 2) {
         build_inf_window(curRow);
       }
       g_infRows = curRow;
+      g_infScore = curRow / 2;
+      g_infSpeed = INF_BASE_SPEED + (double)curRow * INF_SPEED_PER_ROW;
+      if (g_infSpeed > MAX_RPS) g_infSpeed = MAX_RPS;
+      G.rowsPer = g_infSpeed;
     }
 
     if (G.prog >= G.rowEnd && G.rowEnd < 900000.0) {
@@ -1066,9 +1077,10 @@ void run3_step(double dt) {
     G.fallT += dt;
     G.animT += dt; /* keep the fall cycle playing while falling */
     if (G.fallT >= VOID_TIME) {
-      /* instant respawn at the checkpoint start (the one allowed teleport) */
-      open_level(G.lvl);
-      /* open_level auto-starts (S_RUN) */
+      /* instant respawn at the checkpoint start (the one allowed teleport),
+         or from the top of the authored segment chain in endless mode */
+      if (G.rowEnd > 900000.0) inf_restart();
+      else open_level(G.lvl);
     }
   }
 
@@ -1125,6 +1137,8 @@ int32_t run3_row(void) { return (int32_t)G.prog; }
 double run3_rowf(void) { return G.prog; }
 double run3_level_rows(void) { return G.rowEnd - G.rowStart; }
 double run3_ring(void) { return G.ring; }
+/* the view roll the current frame renders with (test seam) */
+double run3_rot(void) { return G.rot; }
 int32_t run3_tile(int32_t side, int32_t row, int32_t lane) {
   int i = row - GMAP_BASE;
   if (i < 0 || i >= MAPW) return 1;
@@ -1194,8 +1208,6 @@ static void backdrop_at(int32_t tunIdx, int32_t lvl, int atEnd) {
   if (tunIdx < 0 || tunIdx >= (int)NTUNNELS) return;
   if (G.rowEnd > 900000.0) return;
   G.tun = (uint16_t)tunIdx;
-  uint32_t base = h32(0x5eedu);
-  g_seedT = h32(base ^ (uint32_t)(tunIdx * 2654435761u) ^ 0x9e3779b9u);
   const tunnel_t *t = tun();
   if (lvl < 0) lvl = 0;
   if (lvl >= (int)t->levels) lvl = (int)t->levels - 1;
@@ -1255,9 +1267,10 @@ int run3_map_scroll_y(void) { return map_scroll_x; }
 int run3_map_scroll_x(void) { return map_scroll_x; }
 void run3_map_scroll(int dx) {
   map_scroll_x += dx;
-  /* 1D horizontal scroll — original map spans screen x ~55..3400,
-     extended tunnels reach ~2970 (drift end) */
-  if (map_scroll_x < -3200) map_scroll_x = -3200;
+  /* 1D horizontal scroll — the original map spans screen x ~55..3400; the
+     extended world (Wormhole X and its branches) runs out past 6200, with
+     Far Drift's tail the furthest point */
+  if (map_scroll_x < -6400) map_scroll_x = -6400;
   if (map_scroll_x > 200) map_scroll_x = 200;
   map_scroll_y = map_scroll_x; // keep y in sync for legacy
 }

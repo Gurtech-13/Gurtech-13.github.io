@@ -21,7 +21,7 @@ fi
   -Wl,--export=run3_progress -Wl,--export=run3_rows_per \
   -Wl,--export=run3_sides -Wl,--export=run3_lanes -Wl,--export=run3_theme \
   -Wl,--export=run3_side -Wl,--export=run3_lane -Wl,--export=run3_ring \
-  -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows \
+  -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows -Wl,--export=run3_rot \
   -Wl,--export=run3_tile -Wl,--export=run3_solid -Wl,--export=run3_tile_tex -Wl,--export=run3_tile_hit \
   -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_sky \
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \

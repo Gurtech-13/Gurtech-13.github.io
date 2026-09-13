@@ -85,13 +85,13 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   e.run3_cutscene_backdrop(0, 9);
   e.run3_stage_actor(0, 0, 4, 6, 1);
   e.run3_stage_actor(1, 1, 12, 6.6, 1);
-  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 1);
+  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 0, 1);
   e.run3_stage_cam(0, 0);
   e.render_frame();
   const withCast = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
   e.run3_stage_actor(0, 0, 4, 6, 0);
   e.run3_stage_actor(1, 1, 12, 6.6, 0);
-  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 0);
+  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 0, 0);
   e.render_frame();
   const noCast = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
   let castDiff = 0;
@@ -110,10 +110,65 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   e.run3_stage_cam(0, 0);
   console.log(`staged cast OK (cast pixels=${castDiff} camera pixels=${camDiff})`);
 
+  // 2b2. prop slots: kind 0 draws nothing at all (a scene switches a prop
+  //      off — the map is handed back), and the map floats off the wall
+  //      rather than sliding around it. Inset 0 must equal the old blit.
+  e.run3_cutscene_backdrop(0, 9);
+  e.run3_stage_prop(0, 0, 5, 7.5, 2.4, 0, 1);
+  e.render_frame();
+  const zeroA = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  e.run3_stage_prop(0, 0, 5, 7.5, 2.4, 0, 0);
+  e.render_frame();
+  const zeroB = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  let zeroDiff = 0;
+  for (let i = 0; i < W * H; i++) if (zeroA[i] !== zeroB[i]) zeroDiff++;
+  if (zeroDiff !== 0) throw new Error("hidden prop slot (kind 0) drew " + zeroDiff + " px");
+  // the map is a flat 0xBCAB7C panel (ComingThrough.as builds a 1x1
+  // BitmapData of that colour through the colour shader, never a texture):
+  // every non-background pixel of the prop must be that colour
+  e.run3_cutscene_backdrop(0, 9);
+  e.run3_stage_cam(0, 0);
+  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 0.0, 1);
+  e.render_frame();
+  const onWall = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  e.run3_stage_prop(0, 1, 5, 7.5, 2.4, 1, 1);
+  e.render_frame();
+  const floating = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  let insetDiff = 0, mapPx = 0, offColour = 0;
+  for (let i = 0; i < W * H; i++) {
+    if (onWall[i] !== floating[i]) insetDiff++;
+    if (onWall[i] !== zeroB[i]) {
+      mapPx++;
+      if (onWall[i] !== 0xFFBCAB7C) offColour++;
+    }
+  }
+  if (insetDiff < 200) throw new Error("map inset did nothing: " + insetDiff);
+  if (mapPx === 0) throw new Error("map prop drew nothing");
+  if (offColour !== 0)
+    throw new Error(`map is not the flat 0xBCAB7C panel: ${offColour}/${mapPx} px off-colour`);
+  // kind 7 is a real texture (the TrainRide balloon), so it must draw pixels
+  // and must NOT be the flat map panel
+  e.run3_cutscene_backdrop(0, 9);
+  e.run3_stage_cam(0, 0);
+  e.run3_stage_prop(0, 7, 5, 7.5, 2.4, 0.3, 1);
+  e.render_frame();
+  const balloon = new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  let balPx = 0, balFlat = 0;
+  for (let i = 0; i < W * H; i++) {
+    if (balloon[i] !== zeroB[i]) { balPx++; if (balloon[i] === 0xFFBCAB7C) balFlat++; }
+  }
+  if (balPx < 50) throw new Error("balloon prop drew nothing: " + balPx);
+  if (balFlat !== 0) throw new Error("balloon prop is the flat map panel, not the texture");
+  e.run3_stage_prop(0, 0, 5, 7.5, 2.4, 0, 0);
+  console.log(`prop slots OK (kind0 clean, map ${mapPx} px of flat 0xBCAB7C, inset moved ${insetDiff} px, balloon ${balPx} px)`);
+
   // 2c. mid-tunnel gate: an armed checkpoint PAUSES at S_GATE on the level
   //     just completed (scene stages there); resume rolls into the next one
+  // Primary 0 is the level the suite already proves is runnable with no
+  // steering (it auto-jumps the full-ring gap), so the gate can be reached
+  // without the test also having to play the level.
   e.run3_mid_clear();
-  e.run3_seek(30, 3);
+  e.run3_seek(0, 0);
   e.run3_set_input(0);
   let gated = -1;
   for (let i = 0; i < 3000; i++) {
@@ -121,8 +176,8 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     if (e.run3_state() === 3) { gated = i; break; }
   }
   if (gated >= 0) throw new Error("unarmed checkpoint should never pause");
-  e.run3_mid_arm(30, 3);
-  e.run3_seek(30, 3);
+  e.run3_mid_arm(0, 0);
+  e.run3_seek(0, 0);
   e.run3_set_input(0);
   let gated2 = -1;
   for (let i = 0; i < 3000; i++) {
@@ -131,7 +186,7 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   }
   if (gated2 < 0) throw new Error("armed checkpoint never paused (known bug path)");
   if (e.run3_state() !== 3) throw new Error("gate state wrong: " + e.run3_state());
-  if (e.run3_lvl() !== 3) throw new Error("gate should hold the completed level, got " + e.run3_lvl());
+  if (e.run3_lvl() !== 0) throw new Error("gate should hold the completed level, got " + e.run3_lvl());
   const heldProg = e.run3_rowf(), heldEnd = e.run3_level_rows();
   if (!(heldProg > 0 && heldEnd > 0)) throw new Error("gate row bookkeeping broken");
   // the gate must hold still: no runner drift while the scene plays
@@ -141,11 +196,11 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   // one-shot: the arm is consumed, so resuming never pauses on it again
   e.run3_gate_resume();
   if (e.run3_state() !== 1) throw new Error("gate resume should run, got " + e.run3_state());
-  if (e.run3_lvl() !== 4) throw new Error("gate resume did not advance, lvl=" + e.run3_lvl());
+  if (e.run3_lvl() !== 1) throw new Error("gate resume did not advance, lvl=" + e.run3_lvl());
   for (let i = 0; i < 600; i++) e.run3_step(1 / 60);
   if (e.run3_state() === 3) throw new Error("consumed gate fired twice");
   e.run3_mid_clear();
-  console.log(`mid-gate pause/resume OK (paused after ${gated2} steps, held on lvl 3)`);
+  console.log(`mid-gate pause/resume OK (paused after ${gated2} steps, held on lvl 0)`);
 
   // 3. cutscene data: every voiced scene has a valid cast + portrait files
   const sandbox = { console };
@@ -244,6 +299,40 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   }
   console.log(`stage framing OK (${Object.keys(CAMSHOT).length} scenes, continuous camera)`);
 
+  // 3b. props: the ComingThrough map runs its decoded fall — off the wall
+  //     (inset), down onto the runner's floor where it parks on one spot —
+  //     then is cleared when it is handed back (kind "none", because the
+  //     host carries an absent prop forward). Candy's panel, which the bake
+  //     never emitted at all, rides its character and is dropped at frame 2.
+  const ctP = TL.ComingThrough.segs;
+  if (!ctP.some((s) => s.props[0].kind === "map" && s.props[0].inset > 0.5))
+    throw new Error("ComingThrough map never floats off the wall");
+  const landed = ctP.filter((s) => s.f >= 8 && s.f < 20 && s.props[0].kind === "map");
+  if (landed.length < 4) throw new Error("ComingThrough map never lands");
+  if (landed.some((s) => s.props[0].inset !== 0)) throw new Error("landed map still floats");
+  if (new Set(landed.map((s) => s.props[0].ring + ":" + s.props[0].z)).size !== 1)
+    throw new Error("landed map drifts with the runner instead of parking");
+  if (ctP[ctP.length - 1].props[0].kind !== "none")
+    throw new Error("ComingThrough map is never hidden after the hand-over");
+  const cdP = TL.Candy.segs;
+  if (!cdP.some((s) => s.props[0].kind === "candy"))
+    throw new Error("Candy has no candy panel (Candy.as builds one)");
+  if (cdP[cdP.length - 1].props[0].kind !== "none")
+    throw new Error("Candy panel is never dropped");
+  // BoatRide's only visible prop is the TrainRide balloon; the obfuscated
+  // transform the riders are parented to has no model, so no boat/hover prop
+  // may be baked — and StopSolvingProblems draws nothing at all.
+  const brP = TL.BoatRide.segs;
+  if (!brP.some((s) => s.props[0] && s.props[0].kind === "balloon"))
+    throw new Error("BoatRide has no balloon prop (its only visible panel)");
+  for (const nm of ["BoatRide", "StopSolvingProblems"])
+    for (const s of TL[nm].segs)
+      if (s.props[0] && (s.props[0].kind === "boat" || s.props[0].kind === "hover"))
+        throw new Error(`invented ${s.props[0].kind} prop in ${nm} (src draws none)`);
+  if (TL.StopSolvingProblems.segs.some((s) => s.props[0] && s.props[0].kind !== "none"))
+    throw new Error("StopSolvingProblems bakes a prop; the src builds none");
+  console.log(`prop timelines OK (map falls+parks+clears, candy panel rides + drops, balloon only)`);
+
   // 4. the staged camera must not punch a hole in the tube wall. A pitched and
   //    ROLLED scene camera (the authored side pan) swings the far wall right
   //    onto the view plane; culling those quads leaves the sky showing as a
@@ -320,5 +409,36 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   }
   if (!startN || !endN) throw new Error(`no head/tail scenes (start=${startN} end=${endN})`);
   console.log(`scene staging OK (${endN} scenes stage on the level tail, ${startN} at an opening)`);
+
+  // 6. camera angle. A level load must START at the roll for its spot — most
+  //    levels spawn on a wall that is not "up", so zeroing the roll left the
+  //    camera easing round on every load. And a staged scene (S_CUT) is
+  //    rendered without stepping the sim, so its authored camera side has to
+  //    be folded into the roll directly; it used to be dropped entirely.
+  const TAU = Math.PI * 2;
+  let rolledOnLoad = 0;
+  for (const c of [[0, 0], [0, 3], [0, 9], [5, 4], [12, 3], [13, 10], [33, 0], [34, 40]]) {
+    e.run3_init(7);
+    e.run3_seek(c[0], c[1]);
+    const want = -(TAU * e.run3_side()) / e.run3_sides();
+    const got = e.run3_rot();
+    if (Math.abs(got - want) > 1e-3 && Math.abs(got - want + TAU * 8 / 180) > 1e-3)
+      throw new Error(`tun${c[0]} lvl${c[1]}: level load started at roll ${got}, want ${want}`);
+    if (Math.abs(got) > 1e-9) rolledOnLoad++;
+  }
+  if (rolledOnLoad < 4)
+    throw new Error("no sampled level needed a non-zero roll \u2014 the check exercises nothing");
+  console.log(`level-load camera roll OK (${rolledOnLoad} sampled levels spawn off "up")`);
+
+  e.run3_init(9);
+  e.run3_cutscene_backdrop(0, 9);
+  if (e.run3_state() !== 8) throw new Error("cutscene backdrop did not enter S_CUT");
+  e.run3_stage_cam(1, 0);
+  const camR = e.run3_rot();
+  e.run3_stage_cam(-1, 0);
+  const camL = e.run3_rot();
+  if (Math.abs((camR - camL) + 0.56) > 1e-6)
+    throw new Error(`staged camera side dropped (span ${(camR - camL).toFixed(3)}, want -0.56)`);
+  console.log("staged camera angle OK (S_CUT applies the authored side pan)");
   console.log("ALL STAGE CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", (err && err.message) || err); process.exit(1); });

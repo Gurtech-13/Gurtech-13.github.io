@@ -33,15 +33,18 @@
 #define SPEED_MUL 2.25    /* forward walk speed bumped a bit (was 2.0) */
 #define VOID_TIME 5.0     /* seconds spent outside the tunnel before you die */
 
-#define MAX_TUNNELS 40 /* 30 original Run 3 paths + custom extended tunnels */
-#define MAX_LEVELS 200
+#define MAX_TUNNELS 48 /* 30 original Run 3 paths + 12 extended tunnels */
+#define MAX_LEVELS 200 /* per-tunnel checkpoint cap (main extended runs are 140) */
 #define NCHAR 17 /* playable characters (must match CHAR_COUNT in assets_data.h) */
 #define MAX_RPS 7.0
-#define MAX_HOLE 0.26
 #define INF_MODE_SCORE_MAX 999999
 
 /* infinite mode state */
 #define S_INF_RUN 5
+/* endless mode is a chain of the authored segments in levels_baked.h
+   (INF_SEG_*): the speed ramps with distance, the content does not */
+#define INF_BASE_SPEED 2.6
+#define INF_SPEED_PER_ROW 0.010
 
 /* texture IDs for baked-in assets */
 #define TEX_CHAR_RUNNER  0
@@ -64,14 +67,9 @@ typedef struct {
   uint8_t k_tiles;     /* tiles per side (1..8) */
   uint8_t theme;       /* palette 0..4 */
   uint16_t levels;     /* checkpoint levels in this tunnel */
-  uint8_t blockEvery;  /* rows between 4-row wall voids (0 = none) */
-  uint16_t blockStart; /* first level that has void blocks */
   double baseRps;      /* rows/s at level 0 */
   double rpsPer;       /* rows/s added per level */
   double maxRps;
-  double holeStart;    /* hazard probability at level 0 */
-  double holePer;      /* probability added per level */
-  double maxHole;
   double baseTile;     /* base tile size for this tunnel */
 } tunnel_t;
 
@@ -93,8 +91,6 @@ typedef struct {
   uint8_t k;                 /* tiles per side */
   double tile;
   double rowsPer;            /* rows/s for the current level */
-  double holeP;
-  uint16_t blockEvery;
   double prog;               /* absolute row (continuous through the tunnel) */
   double rowStart;           /* absolute row where this level starts (gate) */
   double rowEnd;             /* absolute row where this level ends */
@@ -225,10 +221,16 @@ void run3_cutscene_resume(void);                          /* unfreeze, keep goin
 void run3_stage_cam(double side, double lift);                  /* staged camera angle */
 double run3_stage_liftf(void);                                /* (renderer use) */
 double run3_stage_sidef(void);                                /* (renderer use) */
+double run3_rot(void);                                        /* live view roll (test seam) */
 #define NSTAGE_ACT 8
 #define NSTAGE_PROP 4
 void run3_stage_actor(int i, int ch, double ring, double zrow, int vis);
-void run3_stage_prop(int i, int kind, double ring, double zrow, double size, int vis);
+/* kind 0 hides the slot. inset is how far the prop floats off the wall and
+   toward the tube axis (0 = mounted on the wall, 1 = at the centre line) —
+   the Coming Through map falls through the tube and lands on the floor, so
+   it needs to leave the wall. */
+void run3_stage_prop(int i, int kind, double ring, double zrow, double size,
+                     double inset, int vis);
 void run3_mid_arm(int32_t tun, int32_t lvl);                  /* pause gate at S_GATE */
 void run3_mid_clear(void);
 void run3_gate_resume(void);                              /* leave S_GATE, roll on */
