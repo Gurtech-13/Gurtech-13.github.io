@@ -268,20 +268,24 @@ html, body {
 /* ==================== CUTSCENE VIEWER ==================== */
 #cutview {
   cursor: pointer;
-  /* staged scenes: the live tunnel render stays visible behind the cast */
-  background: rgba(2,6,23,.35);
+  /* staged scenes play in the whole window, exactly like gameplay: the engine
+     renders the tunnel and the cast, so there is no dialog card and no
+     backdrop dimming either. */
+  background: none;
   backdrop-filter: none;
+  padding: 0;
 }
 .cutstage {
   position: relative;
-  width: min(920px, 94vw);
-  aspect-ratio: 4/3;
-  max-height: 88vh;
-  /* transparent middle so the level shows through; vignette edges only */
-  background: linear-gradient(180deg, rgba(2,6,23,.55), rgba(2,6,23,0) 26%, rgba(2,6,23,0) 62%, rgba(2,6,23,.6));
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 16px;
-  box-shadow: 0 24px 80px rgba(0,0,0,.7);
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  aspect-ratio: auto;
+  /* edge vignette only; the engine paints the scene full-frame behind it */
+  background: linear-gradient(180deg, rgba(2,6,23,.45), rgba(2,6,23,0) 18%, rgba(2,6,23,0) 66%, rgba(2,6,23,.55));
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
 }
 /* the cast is staged INSIDE the tunnel render by the engine (staged-cast

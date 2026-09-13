@@ -96,11 +96,43 @@ spot (`cam_rot_target()`), not to 0. 78% of baked levels spawn on a wall that
 is not "up", so zeroing the roll made every load visibly rotate the tunnel into
 place and a just-loaded cutscene backdrop show the wrong angle.
 
+**Outside the tunnel (`space.c`)** — the original's Space backdrop
+(`com/player03/run3/level/<Space>.as`) constructs exactly three models: a
+`Planet`, a `Wormhole` and a distant `TunnelSection`, and its
+`setTunnelSection` (`Section entered`) re-parents the Planet and Wormhole onto
+that section's own map position (`param1.<node>.x/.y`). It also wraps the
+camera in the 6-face skybox cube (`skybox0..5.png`). The demo keeps that
+layering:
+
+1. the star sphere (baked from the skybox faces into `levels/skybox_data.h`,
+   drawn by `sky_render`),
+2. the other tunnels branching off (`space_outer`): the nearest other tunnels
+   by map-node distance, each drawn as a short length of ITS OWN tube built
+   from its own `n_sides` / `k_tiles` / `baseTile`, placed in the direction of
+   its map node and sized by the same projection,
+3. the wormhole (`space_wormhole`): the baked `singledpi_texture_wormhole`
+   spun as a disc at the far end of the bore,
+4. the player's own tube, then the player.
+
+Everything outside is drawn BEFORE the tube and shares its camera pitch, roll
+and origin, so the opaque wall (with its holes) occludes it: the space scene
+shows through the holes and the far opening rather than painted over the wall.
+`run3_space_visible()` / `run3_space_survived()` expose the two counts so a
+suite can prove both that the layer painted and that the tube covered part of
+it (equal counts would mean it was drawn on top).
+
+**Engine file layout** — the engine is split so no file owns everything:
+`run3.h` is the host API; `math.c` holds `ssin/scos/ssqrt/satan2/h32` (the wasm
+build has no libm); `gfx.c` is the framebuffer and its primitives; `render.c`
+is the camera, sky, tube, staged cast, font and map; `space.c` is everything
+outside the tube; `run3.c` is the simulation, state and exports. `render_int.h`
+declares what they share internally.
+
 ## Asset inventory (`demos/run3/assets/`)
 
 | dir | files | what it is | consumer |
 | --- | --- | --- | --- |
-| `images/` | 126 | character sprite sheets, tile/prop textures, map + menu art, closeups | the ones the engine draws are baked by `levels/bake_assets.py` into `assets_data.h` / `char_*.h` / `map_assets.h`; the rest (menu art, student closeups, `character_shadow`, `controls_*`, most `map_*/menu_*` icons) are UI-only and unused by the demo |
+| `images/` | 126 | character sprite sheets, tile/prop textures, map + menu art, closeups, the 6 skybox faces, `singledpi_texture_wormhole.png` | the ones the engine draws are baked by `levels/bake_assets.py` into `assets_data.h` / `char_*.h` / `map_assets.h`, and the skybox faces into `skybox_data.h`; the rest (menu art, student closeups, `character_shadow`, `controls_*`, most `map_*/menu_*` icons) are UI-only and unused by the demo |
 | `atlas/` | 17 | per-character frame metadata (grid + frame roles) | `bake_assets.py` (`atlas/<char>.json`) |
 | `cutscenes/` | 67 | one still per cutscene plus the two pop textures (`trainride_balloon.png`, `candy_balloon.png`) | `app.js` (`sceneIcon`, story cards) and `bake_assets.py` (`tex_balloon_train`) |
 | `fonts/` | 3 | glyph atlas + metrics | `levels/bake_font.py` → `font_data.h` |

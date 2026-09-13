@@ -18,115 +18,12 @@
  */
 #include <stdint.h>
 #include <stddef.h>
-#include "run3.h"
+#include "render_int.h"
+/* the star sphere's raw table (baked from the original's skybox faces) */
+#include "levels/skybox_data.h"
+/* the baked art (tile textures, character atlases, animation ranges): a
+   multi-megabyte generated header, so it is included once, here */
 #include "levels/assets_data.h"
-
-static uint32_t fb[W * H];
-static uint32_t g_sky = 0; /* background colour of the last rendered frame */
-
-/* ==================== FRAMEBUFFER PRIMITIVES ==================== */
-
-static void fill_rect(int x, int y, int w, int h, uint32_t c) {
-  int x0 = x < 0 ? 0 : x; int y0 = y < 0 ? 0 : y;
-  int x1 = x + w; if (x1 > W) x1 = W;
-  int y1 = y + h; if (y1 > H) y1 = H;
-  for (int yy = y0; yy < y1; yy++)
-    for (int xx = x0; xx < x1; xx++)
-      fb[(uint32_t)yy * W + (uint32_t)xx] = c;
-}
-
-static void fill_quad(double x0, double y0, double x1, double y1,
-                      double x2, double y2, double x3, double y3, uint32_t c) {
-  double xs[4] = { x0, x1, x2, x3 }, ys[4] = { y0, y1, y2, y3 };
-  int miny = (int)ys[0], maxy = (int)ys[0];
-  for (int i = 1; i < 4; i++) {
-    if ((int)ys[i] < miny) miny = (int)ys[i];
-    if ((int)ys[i] > maxy) maxy = (int)ys[i];
-  }
-  if (miny < 0) miny = 0; if (maxy >= H) maxy = H - 1;
-  if (miny > maxy) return;
-  for (int y = miny; y <= maxy; y++) {
-    double hits[4]; int nh = 0;
-    for (int e = 0; e < 4; e++) {
-      double xa = xs[e], ya = ys[e], xb = xs[(e+1)&3], yb = ys[(e+1)&3];
-      if ((ya <= (double)y && yb > (double)y) || (yb <= (double)y && ya > (double)y))
-        hits[nh++] = xa + ((double)y - ya) * (xb - xa) / (yb - ya);
-    }
-    if (nh == 2) {
-      double lo = hits[0], hi = hits[1];
-      if (lo > hi) { double t = lo; lo = hi; hi = t; }
-      int x0i = (int)lo + 1, x1i = (int)hi;
-      if (x0i < 0) x0i = 0; if (x1i >= W) x1i = W - 1;
-      if (x0i <= x1i) for (int x = x0i; x <= x1i; x++) fb[(uint32_t)y * W + (uint32_t)x] = c;
-    }
-  }
-}
-
-static void fill_shadow(int cx, int cy, int rx, int ry, double dark) {
-  if (rx < 1) rx = 1; if (ry < 1) ry = 1;
-  int rxx = rx * rx, ryy = ry * ry;
-  for (int dy = -ry; dy <= ry; dy++)
-    for (int dx = -rx; dx <= rx; dx++) {
-      int x = cx + dx, y = cy + dy;
-      if ((uint32_t)x >= (uint32_t)W || (uint32_t)y >= (uint32_t)H) continue;
-      if (dx * dx * ryy + dy * dy * rxx > rxx * ryy) continue;
-      uint32_t c = fb[(uint32_t)y * W + (uint32_t)x];
-      uint32_t nr = (uint32_t)((double)((c>>16)&0xff) * (1.0-dark));
-      uint32_t ng = (uint32_t)((double)((c>>8)&0xff) * (1.0-dark));
-      uint32_t nb = (uint32_t)((double)(c&0xff) * (1.0-dark));
-      fb[(uint32_t)y * W + (uint32_t)x] = (c & 0xff000000u) | (nr<<16) | (ng<<8) | nb;
-    }
-}
-
-/* blit sprite with alpha, scaled to (dw x dh) — nearest neighbor */
-static void blit_sprite(int dx, int dy, int dw, int dh,
-                        const uint32_t *pix, int sw, int sh, double alpha) {
-  if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || !pix) return;
-  for (int y = 0; y < dh; y++) {
-    int sy = (y * sh) / dh; if (sy >= sh) sy = sh - 1;
-    int screenY = dy + y; if (screenY < 0 || screenY >= H) continue;
-    for (int x = 0; x < dw; x++) {
-      int sx = (x * sw) / dw; if (sx >= sw) sx = sw - 1;
-      int screenX = dx + x; if (screenX < 0 || screenX >= W) continue;
-      uint32_t src = pix[sy * sw + sx];
-      unsigned int sa = (src >> 24);
-      if (sa < 10) continue;
-      double a = (double)sa / 255.0 * alpha; if (a > 1.0) a = 1.0;
-      uint32_t dst = fb[(uint32_t)screenY * W + (uint32_t)screenX];
-      int dr = (int)((dst>>16)&0xff), dg = (int)((dst>>8)&0xff), db = (int)(dst&0xff);
-      int sr = (int)((src>>16)&0xff), sg = (int)((src>>8)&0xff), sb = (int)(src&0xff);
-      fb[(uint32_t)screenY * W + (uint32_t)screenX] = 0xFF000000u |
-        ((uint32_t)(int)(dr+(sr-dr)*a) << 16) |
-        ((uint32_t)(int)(dg+(sg-dg)*a) << 8) |
-        (uint32_t)(int)(db+(sb-db)*a);
-    }
-  }
-}
-
-/* blit a mirrored (horizontally flipped) sprite — nearest neighbor */
-static void blit_sprite_mirrored(int dx, int dy, int dw, int dh,
-                                 const uint32_t *pix, int sw, int sh, double alpha) {
-  if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || !pix) return;
-  for (int y = 0; y < dh; y++) {
-    int sy = (y * sh) / dh; if (sy >= sh) sy = sh - 1;
-    int screenY = dy + y; if (screenY < 0 || screenY >= H) continue;
-    for (int x = 0; x < dw; x++) {
-      int sx = sw - 1 - (x * sw) / dw; if (sx < 0) sx = 0;
-      int screenX = dx + x; if (screenX < 0 || screenX >= W) continue;
-      uint32_t src = pix[sy * sw + sx];
-      unsigned int sa = (src >> 24);
-      if (sa < 10) continue;
-      double a = (double)sa / 255.0 * alpha; if (a > 1.0) a = 1.0;
-      uint32_t dst = fb[(uint32_t)screenY * W + (uint32_t)screenX];
-      int dr = (int)((dst>>16)&0xff), dg = (int)((dst>>8)&0xff), db = (int)(dst&0xff);
-      int sr = (int)((src>>16)&0xff), sg = (int)((src>>8)&0xff), sb = (int)(src&0xff);
-      fb[(uint32_t)screenY * W + (uint32_t)screenX] = 0xFF000000u |
-        ((uint32_t)(int)(dr+(sr-dr)*a) << 16) |
-        ((uint32_t)(int)(dg+(sg-dg)*a) << 8) |
-        (uint32_t)(int)(db+(sb-db)*a);
-    }
-  }
-}
 
 /* ==================== PALETTE ==================== */
 
@@ -152,37 +49,133 @@ static const uint32_t LPAL[4] = {
   rgb(6,8,20), rgb(80,110,180), rgb(40,60,110), rgb(22,36,66)
 };
 
-/* ==================== STARS ==================== */
+/* ==================== CAMERA ==================== */
+/* The chase camera is bolted to the runner in every sense:
 
-#define STARS 90
-static int star_x[STARS], star_y[STARS], star_s[STARS];
-static uint32_t star_c[STARS];
+     * its ORIENTATION comes from the runner's own wall point (see run3.c), so
+       the runner never moves on screen;
+     * it also sits OFF the tube axis, on the runner's radial line, which is
+       what makes the level PAN as well as spin. A camera on the axis turns the
+       tunnel into a pure rotation about the screen centre, where the far end
+       (which is on the axis) never moves at all;
+     * its DISTANCES are multiples of the runner's radius instead of fixed
+       lengths, because every level carries its own tile width (0.30..3.00): a
+       fixed camera would zoom 10x between checkpoints. The runner's own sprite
+       is a fixed pixel size and deliberately does not scale with any of this.
+
+   tan(pitch) = (h + t*cam_back)/(t*h - cam_back), t = (CY - 2H/3)/FOCAL,
+   h = rrad - cam_out = how far the runner's wall is below the camera. */
+/* camera framing, all in multiples of the runner's radius (see above) */
+#define CAM_BACK  1.25 /* camera distance behind the runner plane, in radii */
+#define CAM_OUT   0.35 /* camera offset from the axis toward the runner */
+#define VIEW_ROWS 28.0 /* rows drawn ahead: tile width must not decide it */
+double cam_pitch = 0.0;
+double cam_back = DCAM;  /* world units; refreshed every frame */
+double cam_out = 0.0;
+double view_z = VIEW;
+double near_z = NEARZ;
+
+/* ==================== SKY (baked star sphere) ==================== */
+/* The original wraps the camera in a 6-face skybox cube (skybox0..5.png) and
+   renders it into a texture behind everything. Every face is a point
+   starfield, so bake_assets.py bakes each star texel as a unit direction plus
+   its brightness (skybox_data.h) and we project the points here.
+
+   Why points and not a per-pixel cube sample: the tube covers all but the far
+   opening and the holes, so a megapixel of cube sampling would be thrown away
+   almost every frame. Projecting one point per star costs a rotation and a
+   divide each, and gives the real star pattern with true roll/pitch parallax.
+   The sphere also rotates once per run so the sky is not identical every time;
+   the pattern itself is the original's. */
+static double sky_yaw = 0.0;
 void render_init_stars(uint32_t seed) {
-  uint32_t s = seed ? seed : 1u;
-  for (int i = 0; i < STARS; i++) {
-    s = s*1664525u+1013904223u; star_x[i] = (int)(s%W);
-    s = s*1664525u+1013904223u; star_y[i] = (int)(s%H);
-    s = s*1664525u+1013904223u; star_s[i] = (int)(s%2)+1;
-    s = s*1664525u+1013904223u;
-    star_c[i] = rgb(160+(int)(s%90), 160+(int)(s%90), 200+(int)(s%55));
+  sky_yaw = (double)(seed % 360u) * PI / 180.0;
+}
+/* stars written this frame, and how many survived the tube being drawn over
+   them: the visible sky. Recorded so a suite can prove the baked star sphere
+   reaches the frame instead of counting colours. */
+#define SKY_MAXPIX 8192
+static int sky_px_idx[SKY_MAXPIX];
+static uint32_t sky_px_col[SKY_MAXPIX];
+static int sky_npx = 0;
+static int g_skyVis = 0;
+#define SKY_DIST 300.0
+/* dir (unit) -> screen, applying the camera roll then the pitch, exactly as
+   corner()/row_pt() do for tube geometry: the roll is baked into x/y first. */
+static void sky_project(double dx, double dy, double dz, double pitch,
+                        double roll, double *sx, double *sy, int *vis) {
+  double x = dx * SKY_DIST, y = dy * SKY_DIST, z = dz * SKY_DIST;
+  double c = scos(roll), s = ssin(roll);
+  double xr = x * c - y * s, yr = x * s + y * c + cam_out;
+  double cp = scos(pitch), sp = ssin(pitch);
+  double d = cam_back + z;
+  double y1 = yr * cp - d * sp;
+  double d1 = yr * sp + d * cp;
+  if (d1 <= 1.0) { *vis = 0; *sx = 0.0; *sy = 0.0; return; }
+  double k = FOCAL / d1;
+  *sx = CX + xr * k; *sy = CY - y1 * k; *vis = 1;
+}
+void sky_render(uint32_t base, double pitch, double roll) {
+  for (int i = 0; i < W * H; i++) fb[i] = base;
+  sky_npx = 0;
+  double cy = scos(sky_yaw), sy = ssin(sky_yaw);
+  for (int i = 0; i < SKY_STAR_COUNT; i++) {
+    const sky_star_t *st = &sky_stars[i];
+    double dx = 0.01 * (double)st->x, dy = 0.01 * (double)st->y,
+           dz = 0.01 * (double)st->z;
+    double wx = dx * cy - dz * sy, wz = dx * sy + dz * cy;
+    double sx, syy;
+    int vis;
+    sky_project(wx, dy, wz, pitch, roll, &sx, &syy, &vis);
+    if (!vis) continue;
+    int ix = (int)sx, iy = (int)syy;
+    if (ix < 0 || ix >= W || iy < 0 || iy >= H) continue;
+    int b = (int)st->b;
+    /* faint stars fade toward the sky colour so the sphere reads as depth
+       rather than a flat sprinkle of dots */
+    int r = 120 + b * 135 / 255;
+    int g = 140 + b * 115 / 255;
+    int bl = 190 + b * 65 / 255;
+    uint32_t col = rgb(r, g, bl);
+    fb[(uint32_t)iy * W + (uint32_t)ix] = col;
+    if (sky_npx < SKY_MAXPIX) {
+      sky_px_idx[sky_npx] = iy * W + ix;
+      sky_px_col[sky_npx] = col;
+      sky_npx++;
+    }
+    if (b >= 200) { /* the brightest stars are a 2x2 block */
+      int xs[3] = { ix + 1, ix, ix + 1 };
+      int ys[3] = { iy, iy + 1, iy + 1 };
+      for (int q = 0; q < 3; q++) {
+        if (xs[q] < 0 || xs[q] >= W || ys[q] < 0 || ys[q] >= H) continue;
+        fb[(uint32_t)ys[q] * W + (uint32_t)xs[q]] = col;
+        if (sky_npx < SKY_MAXPIX) {
+          sky_px_idx[sky_npx] = ys[q] * W + xs[q];
+          sky_px_col[sky_npx] = col;
+          sky_npx++;
+        }
+      }
+    }
   }
 }
-uint32_t *run3_buffer(void) { return fb; }
-uint32_t run3_sky(void) { return g_sky; } /* background of the last frame */
+/* count the stars the tube did not cover — the sky actually on screen */
+void sky_count_visible(void) {
+  int n = 0;
+  for (int i = 0; i < sky_npx; i++)
+    if (fb[sky_px_idx[i]] == sky_px_col[i]) n++;
+  g_skyVis = n;
+}
+int32_t run3_sky_visible(void) { return g_skyVis; }
 
 /* ==================== PROJECTION ==================== */
 
-/* Centered chase camera, pitched to hold the grounded runner's feet at the
-   top of the lower third (y = 2H/3). The camera stays on the tube axis;
-   orientation alone preserves the runner constraint:
-   tan(pitch) = (R + t*DCAM)/(t*R - DCAM), t = (CY-2H/3)/FOCAL. */
-static double cam_pitch = 0.0;
-
+/* project a tube-space point through the chase camera (see CAMERA above) */
 static void proj(double x, double y, double z, double *sx, double *sy, double *dd) {
-  double d = DCAM + z;
+  double d = cam_back + z;
+  double yr = y + cam_out; /* camera sits at (0, -cam_out) in tube-view space */
   double c = scos(cam_pitch), s = ssin(cam_pitch);
-  double y1 = y * c - d * s;
-  double d1 = y * s + d * c;
+  double y1 = yr * c - d * s;
+  double d1 = yr * s + d * c;
   double k = FOCAL / d1;
   *sx = CX + x * k; *sy = CY - y1 * k;
   if (dd) *dd = d1;
@@ -209,6 +202,29 @@ static int is_low_power(void) {
  * Look up a single frame from a character's baked atlas.
  * Returns pixel pointer and sets *w, *h. Returns NULL if invalid.
  */
+/* the baked art, reachable from the other renderer files (space.c) without
+   them having to include the multi-megabyte assets_data.h */
+const uint32_t *assets_tex(int id, int *w, int *h) {
+  switch (id) {
+    case TEX_CRUMBLING:  *w = tex_crumbling_W;  *h = tex_crumbling_H;  return tex_crumbling;
+    case TEX_WARNSTRIPES: *w = tex_warnstripes_W; *h = tex_warnstripes_H; return tex_warnstripes;
+    case TEX_ICETILE:    *w = tex_icetile_W;    *h = tex_icetile_H;    return tex_icetile;
+    case TEX_RUINEDTILE: *w = tex_ruinedtile_W; *h = tex_ruinedtile_H; return tex_ruinedtile;
+    case TEX_BALLOON:    *w = tex_balloon_W;    *h = tex_balloon_H;    return tex_balloon;
+    case TEX_PLUS:       *w = tex_plus_W;       *h = tex_plus_H;       return tex_plus;
+    case TEX_ARROW:      *w = tex_arrow_W;      *h = tex_arrow_H;      return tex_arrow;
+    case TEX_BATTERY:    *w = tex_battery_W;    *h = tex_battery_H;    return tex_battery;
+    case TEX_ACCEL:      *w = tex_accel_W;      *h = tex_accel_H;      return tex_accel;
+    case TEX_WORMHOLE:   *w = tex_wormhole_W;   *h = tex_wormhole_H;   return tex_wormhole;
+    default: *w = 0; *h = 0; return NULL;
+  }
+}
+uint32_t theme_main(int th) {
+  if (th < 0) th = 0;
+  if (th > 4) th = 4;
+  return PAL[th][1];
+}
+
 static const uint32_t *get_char_frame(int char_id, int compact_idx, int *w, int *h) {
   if (char_id < 0 || char_id >= CHAR_COUNT) { *w = 0; *h = 0; return NULL; }
   if (compact_idx < 0 || compact_idx >= char_frame_counts[char_id]) {
@@ -255,17 +271,12 @@ static int anim_dir_from_tube(void) {
  * Draw the character with proper animation.
  * Uses the animation ranges table baked from the original Run 3 source.
  */
-static void draw_runner(double R) {
-  int n = G.shape, k = G.k;
-  int su = wrap_side(G.ring, k, n);
-  double f = G.ring / (double)k - (double)su;
-  double ax,ay,bx,by;
-  corner(su,&ax,&ay,R); corner(su+1,&bx,&by,R);
-  double mx = ax + (bx-ax)*f, my = ay + (by-ay)*f;
-  double nx = 0.5*(ax+bx), ny = 0.5*(ay+by);
-  double len = ssqrt(nx*nx+ny*ny);
-  double inx = len>1e-12 ? -nx/len : 0.0;
-  double iny = len>1e-12 ? -ny/len : 1.0;
+static void draw_runner(double rlen) {
+  /* The camera roll is taken from the runner's own wall point, so it cancels
+     their angle on the tube exactly: in view space they stand straight down
+     from the axis at x = 0, y = -rlen. They therefore never move on screen —
+     only the level rotates and changes shape around them. */
+  double mx = 0.0, my = -rlen;
 
   int dead = (G.state == S_DEAD);
   double lift = 0.02 + G.jump;
@@ -277,7 +288,7 @@ static void draw_runner(double R) {
   }
   double gx,gy,px,py;
   proj(mx,my,0.0,&gx,&gy,NULL);
-  proj(mx+inx*lift,my+iny*lift,0.0,&px,&py,NULL);
+  proj(mx,my+lift,0.0,&px,&py,NULL);
 
   /* contact shadow — scale with resolution */
   double jh = G.jump, shr = 1.0/(1.0+5.0*jh);
@@ -360,7 +371,6 @@ static void draw_runner(double R) {
 
 /* ==================== STAGED CUTSCENE CAST ==================== */
 /* outlined rect lives with the map helpers below */
-static void stroke_rect(int x, int y, int w, int h, uint32_t c);
 /* Actors/props are placed by the host per timeline segment (ring = tiles
    around the tube, zrow = rows ahead of the staging camera) and drawn in
    S_CUT instead of the runner. Actor art is the gameplay run stance
@@ -408,7 +418,7 @@ static void draw_stage_actor(double R, int ch, double ring, double zrow) {
   anim_range_t ar = CHAR_ANIM_RANGE(cm, STATE_RUN, DIR_CENTER);
   int fw = 0, fh = 0;
   const uint32_t *pix = get_char_frame(cm, ar.start, &fw, &fh);
-  double sc = DCAM / dd; /* perspective size vs the runner plane */
+  double sc = cam_back / dd; /* perspective size vs the runner plane */
   if (sc < 0.15) sc = 0.15;
   if (sc > 3.0) sc = 3.0;
   int spriteH = (int)(24.0 * (H / 360.0) * sc);
@@ -471,19 +481,18 @@ static void draw_stage(double R) {
 /* The engine hands over a route to the end of the level as (row, ring)
    waypoints; each is pinned to the tunnel wall and drawn as a tiny grey
    billboard, so the line of dots reads as a path through the level. */
-static void fill_circle(int cx, int cy, int r, uint32_t c);
 static void draw_hint(double R) {
   int hn = run3_hint_count();
   if (hn <= 0) return;
   uint32_t c = rgb(150, 150, 150);
   for (int i = 0; i < hn; i++) {
     double z = ((double)run3_hint_row(i) - G.prog) * G.tile;
-    if (z < -2.0 || z > VIEW) continue;
+    if (z < -2.0 || z > view_z) continue;
     double mx, my, px, py, dd;
     ring_point(run3_hint_ring(i), R, &mx, &my);
     proj(mx, my, z, &px, &py, &dd);
     if (dd < VIEWPLANE_EPS) continue;
-    double sc = DCAM / dd;
+    double sc = cam_back / dd;
     if (sc > 1.6) sc = 1.6;
     if (sc < 0.10) continue;
     int r = (int)(2.0 * (H / 360.0) * sc + 0.5);
@@ -544,6 +553,50 @@ static void fill_tile_tex(double ax, double ay, double bx, double by,
   }
 }
 
+/* ==================== TUBE CROSS-SECTION PER ROW ==================== */
+/* A level's layout (sides n, tiles per side k, tile width, tint) is per level,
+   so a checkpoint can change the tube's shape. The engine hands the renderer,
+   per row, the owning level's cross-section and the neighbouring level's it
+   leans toward over ROWXC_ROWS rows. Size, side count and colour therefore all
+   morph over a run of solid tiles instead of snapping when the runner crosses.
+   Only the shape is interpolated — the tiles are always the owning level's, so
+   the mask grid and the drawn grid stay the same. */
+
+/* wall point at perimeter fraction u of a regular n-gon (corners at u = c/n) */
+static void poly_u(double u, int n, double R, double *x, double *y) {
+  if (n < 1) { *x = 0.0; *y = -R; return; }
+  u -= (double)(long long)u;
+  if (u < 0.0) u += 1.0;
+  double s = u * (double)n;
+  int si = (int)s;
+  if (si >= n) si = n - 1;
+  double f = s - (double)si;
+  double a0 = -PI / 2.0 - PI / (double)n + TAU * (double)si / (double)n;
+  double a1 = a0 + TAU / (double)n;
+  double rx = (1.0 - f) * scos(a0) + f * scos(a1);
+  double ry = (1.0 - f) * ssin(a0) + f * ssin(a1);
+  *x = R * rx;
+  *y = R * ry;
+}
+static double row_tile(const rowcross_t *xc) {
+  return xc->tile + (xc->btile - xc->tile) * xc->t;
+}
+/* the row's wall point at fraction u, blended between the two shapes and
+   rolled into view space (the same orientation corner() used to give) */
+static void row_pt(const rowcross_t *xc, double u, double *x, double *y) {
+  double px, py;
+  poly_u(u, xc->n, xc->R, &px, &py);
+  if (xc->bn > 0 && xc->t > 0.0) {
+    double qx, qy;
+    poly_u(u, xc->bn, xc->bR, &qx, &qy);
+    px += (qx - px) * xc->t;
+    py += (qy - py) * xc->t;
+  }
+  double c = scos(G.rot), s = ssin(G.rot);
+  *x = px * c - py * s;
+  *y = px * s + py * c;
+}
+
 static void draw_runner(double R);
 static unsigned frameNo = 0; /* shake-jitter clock */
 void render_frame(void) {
@@ -559,63 +612,125 @@ void render_frame(void) {
   if (lpw) lightMul = run3_power();
   uint32_t sky = lpw ? rgb(4,5,14) : PAL[th][0];
   g_sky = sky; /* exposed so tests can spot background showing through walls */
-  for (int i = 0; i < W * H; i++) fb[i] = sky;
-  for (int s = 0; s < STARS; s++)
-    fill_rect(star_x[s], star_y[s], star_s[s], star_s[s], star_c[s]);
 
-  double R = tube_R();
+  double front = G.prog;
+
+  /* per-row cross-sections: the shape (and tint) of the level owning each row,
+     leaning toward the neighbouring level's shape over its transition run */
+  rowcross_t xc0;
+  if (!run3_row_cross((int)front, &xc0)) {
+    xc0.n = n; xc0.k = k; xc0.tile = G.tile;
+    xc0.col0 = run3_level_color0();
+    xc0.R = tube_R();
+    xc0.bn = -1; xc0.bk = 0; xc0.bR = xc0.R; xc0.btile = xc0.tile;
+    xc0.bcol0 = xc0.col0; xc0.t = 0.0;
+  }
+#define XCAP 128
+  static rowcross_t rxc[XCAP];
+  static double rz[XCAP];
+  int rBase = 0, rCount = 0;
+  {
+    double t0 = row_tile(&xc0);
+    if (t0 < 0.01) t0 = 0.01;
+    int rFar = (int)(front + view_z / t0) + 2;
+    int rNear = (int)(front - (cam_back + 2.0 * t0) / t0) - 2;
+    int cnt = rFar - rNear + 1;
+    if (cnt > XCAP) { rNear = rFar - XCAP + 1; cnt = XCAP; }
+    rBase = rNear; rCount = cnt;
+    for (int i = 0; i < cnt; i++)
+      if (!run3_row_cross(rNear + i, &rxc[i])) rxc[i] = xc0;
+    /* z of each row, accumulated outward from the camera row so a tile-width
+       change stretches the tunnel smoothly instead of rescaling in place */
+    int rc = (int)front;
+    if (rc < rBase) rc = rBase;
+    if (rc > rBase + cnt - 1) rc = rBase + cnt - 1;
+    rz[rc - rBase] = ((double)rc - front) * row_tile(&rxc[rc - rBase]);
+    for (int R = rc + 1; R <= rBase + cnt - 1; R++)
+      rz[R - rBase] = rz[R - 1 - rBase] +
+        0.5 * (row_tile(&rxc[R - 1 - rBase]) + row_tile(&rxc[R - rBase]));
+    for (int R = rc - 1; R >= rBase; R--)
+      rz[R - rBase] = rz[R + 1 - rBase] -
+        0.5 * (row_tile(&rxc[R + 1 - rBase]) + row_tile(&rxc[R - rBase]));
+  }
+  /* the camera's own shape: the runner, the hint dots and the pitch use it */
+  double R = xc0.R + (xc0.bR - xc0.R) * xc0.t;
+  /* the runner's own distance from the axis: the camera is placed relative to
+     THIS rather than the tube's nominal radius, so the framing is the same in
+     a level with 0.3-wide tiles as in one with 3.0-wide tiles, and the runner
+     holds the same screen row the whole way round a side */
+  double rrad = run3_runner_rad();
+  double rtile = xc0.tile + (xc0.btile - xc0.tile) * xc0.t;
+  if (rrad < 0.05) rrad = 0.05;
+  cam_back = CAM_BACK * rrad;
+  cam_out = CAM_OUT * rrad;
+  view_z = VIEW_ROWS * rtile;
+  if (view_z < 4.0) view_z = 4.0;
+  near_z = -(cam_back - 0.45);
   /* pitch from the runner constraint (small-angle atan to 3rd order);
      staged scenes add their authored height bias on top */
   {
+    double h = rrad - cam_out;
     double t = ((double)CY - 2.0 * (double)H / 3.0) / FOCAL;
-    double x = (R + t * DCAM) / (t * R - DCAM);
+    double x = (h + t * cam_back) / (t * h - cam_back);
     cam_pitch = x - x * x * x / 3.0;
     if (G.state == S_CUT || G.state == S_GATE)
       cam_pitch += run3_stage_liftf() * 0.06;
   }
-  /* authored per-level tile tint (0 = theme palette) */
-  uint32_t lvlC0 = run3_level_color0();
-  if (lvlC0) lvlC0 |= 0xFF000000u;
-  double front = G.prog;
-  double tile = G.tile;
-  int rFar = (int)(front + VIEW / tile) + 2;
-  int rNear = (int)(front - (DCAM + 2.0*tile) / tile) - 2;
-  double hz = 0.5 * tile;
+  /* the sky goes down first, once the camera's pitch is known, so the star
+     sphere parallaxes with the same orientation the tube is drawn with */
+  sky_render(sky, cam_pitch, G.rot);
+  /* then what is OUTSIDE the tunnel, far to near, before the tube itself:
+     the other tunnels branching off in space, then the wormhole at the end
+     of the bore. Both are drawn before the wall, so the tunnel occludes them
+     and they read only through the holes and the far opening — exactly how
+     an opaque tube with gaps should show the space behind it. */
+  space_outer();
+  space_wormhole();
   uint32_t voidc = lpw ? rgb(2,3,8) : rgb(4,5,11);
+  uint32_t themeTile = lpw ? LPAL[1] : PAL[th][1];
 
-  for (int ri = rFar; ri >= rNear; ri--) {
-    double zc = ((double)ri - front) * tile;
+  for (int ri = rBase + rCount - 1; ri >= rBase; ri--) {
+    const rowcross_t *xc = &rxc[ri - rBase];
+    int rn = xc->n, rk = xc->k;
+    if (rn < 1 || rn > MAXN || rk < 1 || rk > MAXK) continue;
+    double zc = rz[ri - rBase];
+    double hz = 0.5 * row_tile(xc);
     double zFar = zc + hz, zNear = zc - hz;
-    if (zFar > VIEW) continue;
-    if (zFar < -DCAM + 0.2) continue;
-    double zn = zNear < NEARZ ? NEARZ : zNear;
-    double fog = zFar / VIEW * 0.85;
+    if (zFar > view_z) continue;
+    if (zFar < -cam_back + 0.2) continue;
+    double zn = zNear < near_z ? near_z : zNear;
+    double fog = zFar / view_z * 0.85;
     if (fog < 0.0) fog = 0.0; if (fog > 0.85) fog = 0.85;
 
-    double rx[MAXN+1], ry[MAXN+1];
-    for (int c = 0; c <= n; c++) corner(c, &rx[c], &ry[c], R);
+    int nk = rn * rk;
+    /* every wall of the tube is at full brightness: no gravity shading
+       (floor brighter than ceiling) and no alternating side tint. Only
+       distance fog, the low-power dim and the level-to-level tint blend
+       vary a tile's colour. */
+    uint32_t cOwn = xc->col0 ? (xc->col0 | 0xFF000000u) : themeTile;
+    uint32_t base = cOwn;
+    if (xc->bn > 0 && xc->t > 0.0) {
+      uint32_t cNb = xc->bcol0 ? (xc->bcol0 | 0xFF000000u) : themeTile;
+      base = mixc(cOwn, cNb, xc->t);
+    }
+    uint32_t col = mixc(base, sky, fog);
+    if (lpw) {
+      /* low-power tunnel: tiles fade with the light level (the host ducks
+         the music along). Runner and stars stay lit. */
+      double pw = run3_power();
+      if (pw < 1.0) col = mixc(col, rgb(2,3,8), (1.0 - pw) * 0.92);
+    }
+    uint32_t holeCol = mixc(voidc, sky, fog * 0.35);
 
-    for (int side = 0; side < n; side++) {
+    for (int side = 0; side < rn; side++) {
       int mask = mask_at(side, ri);
-      /* every wall of the tube is at full brightness: no gravity shading
-         (floor brighter than ceiling) and no alternating side tint. Only
-         distance fog and the low-power dim vary a tile's colour. */
-      uint32_t base = lvlC0 ? lvlC0 : (lpw ? LPAL[1] : PAL[th][1]);
-      uint32_t col = mixc(base, sky, fog);
-      if (lpw) {
-        /* low-power tunnel: tiles fade with the light level (the host ducks
-           the music along). Runner and stars stay lit. */
-        double pw = run3_power();
-        if (pw < 1.0) col = mixc(col, rgb(2,3,8), (1.0 - pw) * 0.92);
-      }
-      uint32_t holeCol = mixc(voidc, sky, fog * 0.35);
-
-      for (int l = 0; l < k; l++) {
-        double t0 = (double)l/(double)k, t1 = (double)(l+1)/(double)k;
-        double ax2 = rx[side]+(rx[side+1]-rx[side])*t0;
-        double ay2 = ry[side]+(ry[side+1]-ry[side])*t0;
-        double bx2 = rx[side]+(rx[side+1]-rx[side])*t1;
-        double by2 = ry[side]+(ry[side+1]-ry[side])*t1;
+      for (int l = 0; l < rk; l++) {
+        int c = side * rk + l;
+        double u0 = (double)c / (double)nk;
+        double u1 = (double)(c + 1) / (double)nk;
+        double ax2, ay2, bx2, by2;
+        row_pt(xc, u0, &ax2, &ay2);
+        row_pt(xc, u1, &bx2, &by2);
         double p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y,dd0,dd1,dd2,dd3;
         proj(ax2,ay2,zFar,&p0x,&p0y,&dd0); proj(bx2,by2,zFar,&p1x,&p1y,&dd1);
         proj(bx2,by2,zn,&p2x,&p2y,&dd2);  proj(ax2,ay2,zn,&p3x,&p3y,&dd3);
@@ -652,9 +767,10 @@ void render_frame(void) {
     if (lpw && (ri & 7) == 0 && zFar < 15.0 && zFar > 1.0) {
       double pulse = 0.5 + 0.5 * ssin(G.prog * 0.3 + (double)ri * 0.5);
       uint32_t glow = mixc(rgb(40,60,140), sky, 0.7 + 0.3 * (1.0 - pulse));
-      for (int side = 0; side < n; side++) {
+      for (int side = 0; side < rn; side++) {
         double ax3,ay3,bx3,by3;
-        corner(side,&ax3,&ay3,R); corner(side+1,&bx3,&by3,R);
+        row_pt(xc, (double)side / (double)rn, &ax3, &ay3);
+        row_pt(xc, (double)(side + 1) / (double)rn, &bx3, &by3);
         double p0x,p0y,p1x,p1y;
         proj(ax3,ay3,zFar,&p0x,&p0y,NULL); proj(bx3,by3,zFar,&p1x,&p1y,NULL);
         int lx0=(int)p0x, lx1=(int)p1x, ly=(int)p0y;
@@ -673,62 +789,26 @@ void render_frame(void) {
   if (G.state == S_CUT || G.state == S_GATE) {
     draw_stage(R);
   } else {
-    if (G.state == S_RUN && run3_hint_on()) draw_hint(R);
-    draw_runner(R);
+    if (G.state == S_RUN && run3_hint_on()) draw_hint(rrad);
+    draw_runner(rrad);
   }
+  sky_count_visible();
+  space_count_visible(); /* how much of the space scene the tube left showing */
 }
 
 /* ==================== TEXT HELPERS (forward decl for map) ==================== */
 #include "levels/font_data.h"
+/* the font is defined with the menu, below the map, so the map needs the
+   prototypes first */
 static void draw_glyph(int x, int y, char ch, uint32_t col, double scale);
 static int draw_text(int x, int y, const char *s, uint32_t col, double scale);
 static int text_width(const char *s, double scale);
 static void draw_text_centered(int y, const char *s, uint32_t col, double scale);
-static void stroke_rect(int x, int y, int w, int h, uint32_t c);
 
 /* ==================== MAP RENDERING ==================== */
 #include "levels/map_assets.h"
 
 /* Draw a filled circle */
-static void fill_circle(int cx, int cy, int r, uint32_t c) {
-  for (int dy = -r; dy <= r; dy++) {
-    int y = cy + dy;
-    if (y < 0 || y >= H) continue;
-    int dxmax = (int)ssqrt((double)(r*r - dy*dy));
-    for (int dx = -dxmax; dx <= dxmax; dx++) {
-      int x = cx + dx;
-      if (x < 0 || x >= W) continue;
-      fb[(uint32_t)y * W + (uint32_t)x] = c;
-    }
-  }
-}
-
-/* Draw a circle outline */
-static void stroke_circle(int cx, int cy, int r, uint32_t c) {
-  for (int a = 0; a < 360; a++) {
-    double rad = (double)a * PI / 180.0;
-    int x = cx + (int)(scos(rad) * (double)r);
-    int y = cy - (int)(ssin(rad) * (double)r);
-    if (x >= 0 && x < W && y >= 0 && y < H)
-      fb[(uint32_t)y * W + (uint32_t)x] = c;
-  }
-}
-
-/* Draw a line between two points */
-static void draw_line(int x0, int y0, int x1, int y1, uint32_t c) {
-  int dx = x1 - x0, dy = y1 - y0;
-  int steps = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy) ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
-  if (steps == 0) steps = 1;
-  double sx = (double)dx / (double)steps, sy = (double)dy / (double)steps;
-  double x = (double)x0, y = (double)y0;
-  for (int i = 0; i <= steps; i++) {
-    int px2 = (int)x, py2 = (int)y;
-    if (px2 >= 0 && px2 < W && py2 >= 0 && py2 < H)
-      fb[(uint32_t)py2 * W + (uint32_t)px2] = c;
-    x += sx; y += sy;
-  }
-}
-
 /* map background: fully procedural old parchment (no baked texture).
    Warm paper base with subtle fibre grain plus black/brown age spots, all in
    world space so it scrolls 1:1 with the dots. screen_x = world_x + scroll. */
@@ -988,20 +1068,13 @@ static void draw_text_centered(int y, const char *s, uint32_t col, double scale)
   draw_text((W - sw) / 2, y, s, col, scale);
 }
 
-static void stroke_rect(int x, int y, int w, int h, uint32_t c) {
-  fill_rect(x, y, w, 1, c);
-  fill_rect(x, y+h-1, w, 1, c);
-  fill_rect(x, y, 1, h, c);
-  fill_rect(x+w-1, y, 1, h, c);
-}
-
 /* ==================== MAIN MENU — stars bg as requested, not parchment ==================== */
 void render_menu(void) {
-  /* stars bg — same as in-game sky, not parchment */
+  /* the same baked star sphere as in-game, held at a fixed tilt */
   uint32_t sky = rgb(10,12,26);
-  for (int i = 0; i < W * H; i++) fb[i] = sky;
-  for (int s = 0; s < STARS; s++)
-    fill_rect(star_x[s], star_y[s], star_s[s], star_s[s], star_c[s]);
+  g_sky = sky;
+  cam_back = DCAM; cam_out = 0.0; view_z = VIEW; near_z = NEARZ;
+  sky_render(sky, 0.12, 0.0);
 
   int cx = W / 2;
   draw_text_centered(60, "Run 3", rgb(130, 185, 255), 1.6);

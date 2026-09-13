@@ -410,25 +410,169 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   if (!startN || !endN) throw new Error(`no head/tail scenes (start=${startN} end=${endN})`);
   console.log(`scene staging OK (${endN} scenes stage on the level tail, ${startN} at an opening)`);
 
-  // 6. camera angle. A level load must START at the roll for its spot — most
-  //    levels spawn on a wall that is not "up", so zeroing the roll left the
-  //    camera easing round on every load. And a staged scene (S_CUT) is
-  //    rendered without stepping the sim, so its authored camera side has to
-  //    be folded into the roll directly; it used to be dropped entirely.
+  // 6. THE RUNNER NEVER MOVES ON SCREEN. The camera is bolted to the runner:
+  //    its roll is taken from the runner's own wall point, so the runner sits
+  //    dead centre at the low third in every level and every cross-section,
+  //    and it is the LEVEL that rotates, pans and morphs around them. This is
+  //    the property that kills the old "teleport": a level boundary used to
+  //    re-derive the camera from the new layout and shove the runner sideways.
   const TAU = Math.PI * 2;
+  const wrapPi = (a) => { while (a > Math.PI) a -= TAU; while (a <= -Math.PI) a += TAU; return a; };
   let rolledOnLoad = 0;
   for (const c of [[0, 0], [0, 3], [0, 9], [5, 4], [12, 3], [13, 10], [33, 0], [34, 40]]) {
     e.run3_init(7);
     e.run3_seek(c[0], c[1]);
-    const want = -(TAU * e.run3_side()) / e.run3_sides();
-    const got = e.run3_rot();
-    if (Math.abs(got - want) > 1e-3 && Math.abs(got - want + TAU * 8 / 180) > 1e-3)
-      throw new Error(`tun${c[0]} lvl${c[1]}: level load started at roll ${got}, want ${want}`);
-    if (Math.abs(got) > 1e-9) rolledOnLoad++;
+    if (Math.abs(e.run3_runner_offset()) > 1e-6)
+      throw new Error(
+        `tun${c[0]} lvl${c[1]}: runner loads ${e.run3_runner_offset()} off centre`);
+    if (Math.abs(e.run3_rot()) > 1e-9) rolledOnLoad++;
   }
   if (rolledOnLoad < 4)
     throw new Error("no sampled level needed a non-zero roll \u2014 the check exercises nothing");
-  console.log(`level-load camera roll OK (${rolledOnLoad} sampled levels spawn off "up")`);
+  console.log(`level-load camera OK (${rolledOnLoad} sampled levels spawn off "up", runner centred)`);
+
+  // 6b. ...and it stays centred while steering, right through checkpoints. Long
+  //     steering runs cross several level boundaries, which each change the
+  //     tube's side count, tiles per side and tile width.
+  let frames = 0, crossings = 0, worstOff = 0, offAt = "";
+  for (const tun of [0, 5, 13, 33, 34]) {
+    e.run3_init(7);
+    e.run3_seek(tun, 0);
+    if (!e.run3_hint_on()) e.run3_hint_toggle();
+    let lvl = e.run3_lvl();
+    for (let i = 0; i < 1400; i++) {
+      /* follow the H route, the only way to actually clear a level */
+      let steer = 0;
+      const cnt = e.run3_hint_count();
+      if (cnt > 0) {
+        const N = e.run3_sides() * e.run3_lanes();
+        let d = e.run3_hint_ring(cnt > 1 ? 1 : 0) - e.run3_ring();
+        while (d > N / 2) d -= N;
+        while (d < -N / 2) d += N;
+        steer = Math.max(-1, Math.min(1, d * 2));
+      }
+      e.run3_set_input(steer);
+      e.run3_step(1 / 60);
+      frames++;
+      const off = Math.abs(e.run3_runner_offset());
+      if (off > worstOff) {
+        worstOff = off;
+        offAt = `tun${tun} lvl${e.run3_lvl()} frame${i}`;
+      }
+      if (e.run3_lvl() !== lvl) { crossings++; lvl = e.run3_lvl(); }
+      if (e.run3_state() === 4) break; /* S_DONE: tunnel finished */
+    }
+  }
+  if (worstOff > 1e-5)
+    throw new Error(`runner drifted ${worstOff.toExponential(2)} off centre at ${offAt}`);
+  if (crossings < 3)
+    throw new Error(`only ${crossings} checkpoint crossings \u2014 not exercising a level change`);
+  console.log(
+    `runner stays centred OK (${frames} frames, ${crossings} checkpoint crossings, worst ${worstOff.toExponential(1)})`);
+
+  // 6c. A cross-section change must not turn the camera at all: the runner's
+  //     angular position on the tube is preserved across the boundary, and the
+  //     roll depends only on that. So walking the rows either side of a seam
+  //     leaves the roll EXACTLY where it was.
+  let seams = 0, offenders = 0;
+  for (const tun of [0, 5, 13, 33, 34]) {
+    for (let lvl = 1; lvl < 4; lvl++) {
+      e.run3_init(7);
+      e.run3_seek(tun, lvl - 1);
+      const spanPrev = e.run3_level_rows();
+      e.run3_seek(tun, lvl);
+      const head = e.run3_rowf();
+      const span = e.run3_level_rows();
+      if (spanPrev < 20 || span < 20) continue;
+      // the new level's side of the seam: rows head..head+6 blend from half
+      // the neighbour back to pure, and the roll must not move
+      let a = e.run3_rot_at(head);
+      let b = e.run3_rot_at(head + 6);
+      if (Math.abs(wrapPi(b - a)) > 1e-6) offenders++;
+      // the old level's side, blending forward out of pure
+      e.run3_seek(tun, lvl - 1);
+      a = e.run3_rot_at(head - 7);
+      b = e.run3_rot_at(head - 1);
+      if (Math.abs(wrapPi(b - a)) > 1e-6) offenders++;
+      seams++;
+    }
+  }
+  if (seams < 6)
+    throw new Error(`only ${seams} seams exercised \u2014 the check is not testing enough`);
+  if (offenders)
+    throw new Error(`${offenders} seams turned the camera during a cross-section change`);
+  console.log(`checkpoint seams OK (${seams} seams, camera does not turn at a shape change)`);
+
+  // 6d. THE LEVEL PANS. The camera sits off the tube axis on the runner's own
+  //     radial line, so a camera on the axis would rotate the tunnel about the
+  //     screen centre and the far end (which is on the axis) would not move at
+  //     all. With the offset, steering the other way at the SAME row has to
+  //     shift the far end of the tunnel. Compare the top band of two runs that
+  //     differ only in steering.
+  const shot = () => new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  const runDir = (tun, lvl, dir) => {
+    e.run3_init(7);
+    e.run3_seek(tun, lvl);
+    if (e.run3_hint_on()) e.run3_hint_toggle();
+    for (let i = 0; i < 40; i++) { e.run3_set_input(dir); e.run3_step(1 / 60); }
+    return { px: shot(), row: e.run3_rowf(), ring: e.run3_ring() };
+  };
+  let panHits = 0;
+  for (const [tun, lvl] of [[0, 0], [5, 3], [13, 2]]) {
+    const a = runDir(tun, lvl, 1), b = runDir(tun, lvl, -1);
+    if (Math.abs(a.row - b.row) > 0.01)
+      throw new Error(`pan check needs equal rows, got ${a.row} vs ${b.row}`);
+    if (Math.abs(a.ring - b.ring) < 4)
+      throw new Error(`pan check did not move the runner across the tube similar`);
+    let diff = 0;
+    for (let y = 0; y < 200; y++)
+      for (let x = 0; x < W; x++)
+        if (a.px[y * W + x] !== b.px[y * W + x]) diff++;
+    if (diff > 40000) panHits++;
+  }
+  if (panHits < 2)
+    throw new Error(`only ${panHits}/3 levels panned the far end \u2014 the camera is on the axis`);
+  console.log(`camera pans OK (${panHits}/3 levels shifted the tunnel far end when steering)`);
+
+  // 6e. THE SKY IS THE BAKED STAR SPHERE. It is drawn behind the tube from the
+  //     original's 6 skybox faces, so where the tunnel opens up (the far end
+  //     and any hole) real stars must reach the frame, not a flat colour.
+  let lit = 0;
+  for (const [tun, lvl] of [[0, 0], [5, 3], [13, 2], [33, 10]]) {
+    e.run3_init(7);
+    e.run3_seek(tun, lvl);
+    for (let i = 0; i < 30; i++) e.run3_step(1 / 60);
+    const v = e.run3_sky_visible();
+    if (v > 10) lit++;
+  }
+  if (lit < 2)
+    throw new Error(`stars only reached the frame in ${lit}/4 levels \u2014 sky not drawn`);
+  console.log(`star sky OK (${lit}/4 levels show baked skybox stars through the tunnel)`);
+
+  // 6f. THE SPACE LAYER: the distant tunnels that branch off and the wormhole
+  //     are drawn AFTER the stars and BEFORE the player's own tube, so the
+  //     opaque tunnel hides most of them and they read only through its holes
+  //     and its far opening. Both halves of that are asserted: the layer must
+  //     paint (wrote > 0) and the tube must then cover part of it
+  //     (survived < wrote). Equal counts would mean the space scene was drawn
+  //     on top of the wall, i.e. the order is wrong.
+  let spaceOk = 0, spaceSurv = 0, spaceCovered = 0;
+  for (const [tun, lvl] of [[0, 0], [0, 5], [5, 3], [13, 2], [33, 10], [40, 3]]) {
+    e.run3_init(7);
+    e.run3_seek(tun, lvl);
+    for (let i = 0; i < 30; i++) e.run3_step(1 / 60);
+    const wrote = e.run3_space_visible(), survived = e.run3_space_survived();
+    if (wrote > 200) spaceOk++;
+    if (survived > 200) spaceSurv++;
+    if (survived < wrote) spaceCovered++;
+  }
+  if (spaceOk < 4)
+    throw new Error(`the space layer only painted in ${spaceOk}/6 levels \u2014 outer tunnels/wormhole not drawn`);
+  if (spaceSurv < 4)
+    throw new Error(`the space scene only reached the frame in ${spaceSurv}/6 levels \u2014 fully hidden`);
+  if (spaceCovered < 4)
+    throw new Error(`the tube covered the space scene in only ${spaceCovered}/6 levels \u2014 space drawn over the wall`);
+  console.log(`space layer OK (${spaceOk}/6 levels painted, ${spaceSurv}/6 visible, ${spaceCovered}/6 occluded by the tube)`);
 
   e.run3_init(9);
   e.run3_cutscene_backdrop(0, 9);

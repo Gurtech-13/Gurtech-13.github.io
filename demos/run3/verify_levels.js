@@ -68,13 +68,19 @@ const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41];
   // are void, so they read like the baked originals. Sample the first, middle
   // and last level of every extended tunnel (rows are absolute, so offset by
   // the level's start row).
+  //
+  // The first and last 6 rows of a level are engine-forced solid (the
+  // transition band the cross-sections morph over: see SEAM_SOLID), so they are
+  // excluded here — otherwise this measures the transition, not the authored
+  // level.
+  const SEAM = 6;
   const voidOf = (tun, lvl) => {
     e.run3_seek(tun, lvl);
     const n = e.run3_sides(), k = e.run3_lanes();
     const rows = Math.min(200, e.run3_level_rows() | 0);
     const base = e.run3_row();
     let voidN = 0, tot = 0;
-    for (let r = 0; r < rows; r++)
+    for (let r = SEAM; r < rows - SEAM; r++)
       for (let s = 0; s < n; s++) for (let l = 0; l < k; l++) {
         tot++;
         if (!e.run3_tile(s, base + r, l)) voidN++;
@@ -95,15 +101,23 @@ const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41];
   // id-0 main layer has 172 holes, 8 of them in rows 0-3 which the engine
   // always keeps solid (spawn area) -> 164 visible holes. Row 10 is a
   // full-ring gap in the original (a jump), row 9 fully solid.
+  // The level's last 6 rows are the transition band to the next level, which
+  // the engine forces solid (SEAM_SOLID). That band carried 40 of the
+  // original's holes, so the exact-match count runs over the authored rows
+  // (0..47) and the band is checked separately below and in the seam pass.
   e.run3_seek(0, 0);
   const r0 = Math.round(e.run3_level_rows());
   if (r0 !== 54) throw new Error("primary rows " + r0);
-  let holes = 0;
+  let holes = 0, seamSolid = 0;
   for (let r = 0; r < 54; r++)
-    for (let s = 0; s < 4; s++) for (let l = 0; l < 4; l++)
-      holes += e.run3_tile(s, r, l) ? 0 : 1;
-  console.log(`primary lvl0 holes=${holes} (want 164)`);
-  if (holes !== 164) throw new Error("hole mismatch: " + holes);
+    for (let s = 0; s < 4; s++) for (let l = 0; l < 4; l++) {
+      const solid = e.run3_tile(s, r, l);
+      if (r < 48) holes += solid ? 0 : 1;
+      else seamSolid += solid ? 1 : 0;
+    }
+  console.log(`primary lvl0 holes=${holes} (want 124 in the authored rows)`);
+  if (holes !== 124) throw new Error("hole mismatch: " + holes);
+  if (seamSolid !== 6 * 16) throw new Error(`transition band not solid: ${seamSolid}/96`);
   let row9 = 0;
   for (let s = 0; s < 4; s++) for (let l = 0; l < 4; l++) row9 += e.run3_tile(s, 9, l);
   if (row9 !== 16) throw new Error("row9 should be solid");
@@ -170,6 +184,42 @@ const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41];
     }
   }
   console.log(`route exists on ${routed} sampled extended levels`);
+
+  // A level boundary changes the tube's cross-section, and the runner has to
+  // cross that on a solid run of ordinary tiles: no holes and no crumbling
+  // tiles for 6 rows either side of every boundary, in every tunnel. This is
+  // the 12-tile band the shapes morph over, so the transition can never ask
+  // the runner to jump a gap that only exists because two layouts met.
+  let seamTiles = 0, seamHoles = 0, seamCrumb = 0, boundaries = 0;
+  const tunCount = e.run3_tunnel_count();
+  for (let tun = 0; tun < tunCount; tun++) {
+    e.run3_init(7);
+    e.run3_seek(tun, 0);
+    const lvls = e.run3_tunnel_levels();
+    for (let lvl = 1; lvl < lvls; lvl++) {
+      e.run3_init(7);
+      e.run3_seek(tun, lvl - 1);
+      const prevHead = Math.round(e.run3_rowf());
+      const prevRows = Math.round(e.run3_level_rows());
+      e.run3_seek(tun, lvl);
+      const head = Math.round(e.run3_rowf());
+      if (prevHead + prevRows !== head) throw new Error(
+        `tun${tun} lvl${lvl}: rows do not meet (${prevHead}+${prevRows} != ${head})`);
+      boundaries++;
+      const n = e.run3_sides(), k = e.run3_lanes();
+      for (let r = head - 6; r < head + 6; r++)
+        for (let s = 0; s < n; s++)
+          for (let l = 0; l < k; l++) {
+            seamTiles++;
+            if (!e.run3_tile(s, r, l)) seamHoles++;
+            if (e.run3_tile_tex(s, r, l) !== 0) seamCrumb++;
+          }
+    }
+  }
+  if (boundaries < 50) throw new Error(`only ${boundaries} boundaries found`);
+  if (seamHoles) throw new Error(`${seamHoles} holes in a level-transition band`);
+  if (seamCrumb) throw new Error(`${seamCrumb} crumbling tiles in a level-transition band`);
+  console.log(`transition bands OK (${boundaries} boundaries, ${seamTiles} tiles solid, no holes or crumbling)`);
 
   console.log("ALL WASM CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", err && err.message || err); process.exit(1); });

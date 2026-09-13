@@ -59,7 +59,8 @@
 #define TEX_ARROW        9
 #define TEX_BATTERY     10
 #define TEX_ACCEL       11
-#define TEX_COUNT       12
+#define TEX_WORMHOLE    12
+#define TEX_COUNT       13
 
 /* ---- tunnel profile (authored in the levels files) ---- */
 typedef struct {
@@ -114,12 +115,16 @@ extern int GMAP_BASE;            /* absolute row of GMAP row 0 */
 double ssin(double x);
 double scos(double x);
 double ssqrt(double x);
+double satan2(double y, double x);
 uint32_t h32(uint32_t x);
 
 /* renderer (render.c) */
 void render_init_stars(uint32_t seed);
 void render_frame(void);
-uint32_t run3_sky(void);   /* background colour of the last frame (tests) */
+uint32_t run3_sky(void); /* background colour of the last frame (tests) */
+int32_t run3_sky_visible(void); /* star pixels the tube did not cover (tests) */
+int32_t run3_space_visible(void); /* pixels the outside-the-tube layers wrote */
+int32_t run3_space_survived(void); /* of those, how many the tube left showing */
 
 /* hint route (engine -> renderer): a way to the level end, toggled with H */
 void run3_hint_toggle(void);
@@ -222,6 +227,11 @@ void run3_stage_cam(double side, double lift);                  /* staged camera
 double run3_stage_liftf(void);                                /* (renderer use) */
 double run3_stage_sidef(void);                                /* (renderer use) */
 double run3_rot(void);                                        /* live view roll (test seam) */
+double run3_rot_at(double rowAbs);                            /* roll at a row (test seam) */
+double run3_runner_rad(void);                                 /* runner's distance from the axis */
+void   run3_runner_pt(double *px, double *py);                /* runner's tube-space wall point */
+double run3_runner_offset(void);                              /* 0: runner is centre-screen (test) */
+double run3_runner_offset(void);                              /* runner's screen-x offset (always 0) */
 #define NSTAGE_ACT 8
 #define NSTAGE_PROP 4
 void run3_stage_actor(int i, int ch, double ring, double zrow, int vis);
@@ -238,6 +248,34 @@ double run3_power(void);                                  /* light level 0..1 */
 uint32_t run3_level_color0(void);                         /* tile tint, 0 = theme */
 uint32_t run3_level_color1(void);                         /* accent tint, 0 = theme */
 int32_t run3_level_music(void);                           /* music id, 0 = tunnel */
+/* Per-row tube cross-section (engine -> renderer).
+
+   A level's layout can change at a checkpoint: sides, tiles per side, tile
+   width and tint are all per level. Drawing the whole frame from the runner's
+   current level made every row ahead snap to the new cross-section the instant
+   they crossed a boundary, which reads as a teleport. Instead each row carries
+   the cross-section of the level that owns it, blended toward the neighbouring
+   level over a run of ROWXC_ROWS rows centred on the boundary, so size, side
+   count and colour all morph slowly. t is the blend toward the neighbour
+   (0 = pure own, 0..0.5 = approaching the boundary from either side). */
+#define ROWXC_ROWS 12
+/* rows of ordinary, unbroken tile either side of a level boundary: 12 either
+   way is the 8-16 tile run a transition happens over */
+#define SEAM_SOLID (ROWXC_ROWS / 2)
+#define ROWXC_MAX 96
+#define ROWXC_COLS (MAXN * MAXK)
+typedef struct {
+  int n, k;          /* owning level's tile grid (mask lookup grid) */
+  int bn, bk;        /* neighbour's grid, or -1 when there is no blend */
+  double t;          /* blend toward the neighbour, 0..1 */
+  double R, bR;      /* circumradii of the two shapes */
+  double tile, btile;/* row spacing (world units) of the two levels */
+  uint32_t col0, bcol0; /* level tints (0 = theme palette) */
+} rowcross_t;
+/* 1 and *out filled when the row belongs to a real level; 0 when it does not
+   (past the tunnel's last level), in which case the caller keeps the shape it
+   already had. */
+int run3_row_cross(int rowAbs, rowcross_t *out);          /* one row's shape */
 int run3_missmask(int side, int rowAbs);                  /* holes + fallen */
 int run3_tile_tex(int side, int rowAbs, int lane);         /* 0 / TEX_CRUMBLING */
 double run3_shake(int side, int rowAbs, int lane);        /* shake secs left */

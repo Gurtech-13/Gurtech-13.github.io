@@ -117,38 +117,7 @@ static void mid_disarm(int tun, int lvl) {
   }
 }
 
-/* ---------------- math ---------------- */
-double ssin(double x) {
-  x -= TAU * (double)((long long)(x / TAU));
-  if (x < 0.0) x += TAU;
-  int sign = 1;
-  if (x > PI) { x = TAU - x; sign = -1; }
-  if (x > PI / 2.0) x = PI - x;
-  double x2 = x * x;
-  double s = x * (1.0 + x2 * (-1.0 / 6.0 + x2 * (1.0 / 120.0 +
-             x2 * (-1.0 / 5040.0 + x2 / 362880.0))));
-  return sign > 0 ? s : -s;
-}
-double scos(double x) { return ssin(PI / 2.0 - x); }
-double ssqrt(double x) {
-  if (x <= 0.0) return 0.0;
-  double y = x;
-  /* halve into range first: 6 Newton steps from y=x never converge for
-     large x (e.g. squared edge lengths ~1e5), which broke checkpoint pitch */
-  if (y > 1.0) {
-    double lim = 16.0 * x;
-    while (y * y > lim && y > 0.0) y *= 0.5;
-    if (y <= 0.0) y = 1.0;
-  }
-  for (int i = 0; i < 8 && y > 0.0; i++) y = 0.5 * (y + x / y);
-  return y;
-}
-uint32_t h32(uint32_t x) {
-  x ^= x >> 16; x *= 0x7feb352du;
-  x ^= x >> 15; x *= 0x846ca68bu;
-  x ^= x >> 16;
-  return x;
-}
+/* ssin / scos / ssqrt / satan2 / h32 live in math.c */
 
 /* ---- authored level bitmaps (levels_baked.h, baked from the original game).
  * Most original levels are mostly empty space: sparse holes in an otherwise
@@ -182,6 +151,80 @@ static int baked_crumb(const baked_level_t *L, int row, int side, int lane) {
 static int missmask(int side, int i) {
   if (i < 0 || i >= MAPW || side < 0 || side >= MAXN) return 0;
   return (int)(GMAP[side & (MAXN - 1)][i] | GCRUMB[side & (MAXN - 1)][i]);
+}
+
+/* ---- tube cross-section geometry, shared by the sim and the renderer ----
+   A level's layout is a regular n-gon with k tiles per side; the tube
+   position of a tile index is (side*k + lane) out of n*k. */
+/* the wall point at ring position r on the unit circumradius n-gon */
+static void tube_pt(double r, int n, int k, double *x, double *y) {
+  if (n < 1 || k < 1) { *x = 0.0; *y = -1.0; return; }
+  double tot = (double)n * (double)k;
+  while (r < 0.0) r += tot;
+  while (r >= tot) r -= tot;
+  int s = (int)(r / (double)k);
+  if (s >= n) s = n - 1;
+  double f = r / (double)k - (double)s;
+  double a0 = -PI / 2.0 - PI / (double)n + TAU * (double)s / (double)n;
+  double a1 = a0 + TAU / (double)n;
+  *x = (1.0 - f) * scos(a0) + f * scos(a1);
+  *y = (1.0 - f) * ssin(a0) + f * ssin(a1);
+}
+/* Re-express ring r in a different cross-section so it stays on the SAME
+   spot of the tube wall. A tile index only means something relative to its
+   own grid, so a checkpoint whose layout changes ("tunnel8,2" -> "tunnel16,1")
+   used to move the runner to a different wall — and with them the camera roll
+   that follows their wall — the instant the next level loaded, which reads as
+   a teleport. Bisect for the new ring whose wall point lies on the same ray
+   from the tube axis. */
+/* Where the runner stands on the tube wall, in tube space (before the camera's
+   roll). The camera is bolted to the runner — the original's camera class sets
+   its rotation from the character's own position on the tube,
+   angle = atan2(y, x) - PI/2 (character §8J§ §-A§), and its pitch from the
+   tunnel's forward vector — so the runner never moves on screen and it is the
+   LEVEL that rotates and changes shape as it goes past.
+   A side of the n-gon is one flat chord, so this is a continuous function of
+   the runner's ring position: it does NOT step by TAU/n when they cross onto
+   the next wall, and because a ring remap at a checkpoint keeps the runner on
+   the same spot of the wall, a change of sides or size does not move them
+   either. The point is taken from the cross-section actually being drawn for
+   the runner's row, blended toward the neighbouring level over the transition,
+   so the runner keeps their footing while the tube morphs around them. */
+static double ring_remap(double r, int n0, int k0, int n1, int k1);
+static void runner_wall_pt(double *px, double *py) {
+  int n = G.shape > 0 ? G.shape : 1;
+  int k = G.k > 0 ? G.k : 1;
+  double x, y;
+  tube_pt(G.ring, n, k, &x, &y);
+  rowcross_t xc;
+  if (run3_row_cross((int)G.prog, &xc) && xc.bn > 0 && xc.t > 0.0) {
+    double r2 = ring_remap(G.ring, n, k, xc.bn, xc.bk);
+    double qx, qy;
+    tube_pt(r2, xc.bn, xc.bk, &qx, &qy);
+    x += (qx - x) * xc.t;
+    y += (qy - y) * xc.t;
+  }
+  if (px) *px = x;
+  if (py) *py = y;
+}
+static double ring_remap(double r, int n0, int k0, int n1, int k1) {
+  if (n0 < 1 || k0 < 1 || n1 < 1 || k1 < 1) return r;
+  if (n0 == n1 && k0 == k1) return r;
+  double px, py;
+  tube_pt(r, n0, k0, &px, &py);
+  double lo = 0.0, hi = (double)n1 * (double)k1;
+  for (int it = 0; it < 34; it++) {
+    double mid = 0.5 * (lo + hi);
+    double qx, qy;
+    tube_pt(mid, n1, k1, &qx, &qy);
+    /* cross(q, p) > 0 -> q has not reached p's angle yet */
+    if (qx * py - qy * px > 0.0) lo = mid; else hi = mid;
+  }
+  double out = 0.5 * (lo + hi);
+  double tot = (double)n1 * (double)k1;
+  while (out < 0.0) out += tot;
+  while (out >= tot) out -= tot;
+  return out;
 }
 int run3_missmask(int side, int rowAbs) { return missmask(side, rowAbs - GMAP_BASE); }
 /* surface texture a tile renders with (the renderer's choice, and what the
@@ -317,9 +360,131 @@ static void apply_level_look(int lvl) {
   g_powerRate = 1.5;
 }
 
-/* Fill GMAP for the current level window from the level's baked bitmap.
-   Every tunnel ships authored bitmaps (levels_baked.h), so nothing here is
-   generated: the engine only reads the level it was given. */
+/* ---- per-level cross-section table (drives the renderer's row shapes) ----
+   Sides, tiles per side, tile width and tint are all per level, so a
+   checkpoint can change the tube's shape. */
+static void level_xsec(int lvl, int *n, int *k, double *tile, uint32_t *col0) {
+  const tunnel_t *t = tun();
+  int nn = t->n_sides, kk = t->k_tiles;
+  double tl = t->baseTile;
+  uint32_t c0 = 0;
+  const baked_level_t *B = 0;
+  if (baked_at(G.tun, lvl, &B)) {
+    nn = B->n; kk = B->k;
+    int bi = baked_idx(G.tun, lvl);
+    if (bi >= 0) {
+      if (BAKED_TILEW[bi] > 0) tl = (double)BAKED_TILEW[bi] / 100.0;
+      c0 = BAKED_COLOR0[bi];
+    }
+  }
+  *n = nn; *k = kk; *tile = tl; *col0 = c0;
+}
+static double xsec_R(int n, int k, double tile) {
+  if (n < 1 || k < 1) return 1.0;
+  return (double)k * tile / (2.0 * ssin(PI / (double)n));
+}
+/* which level of the current tunnel owns an absolute row (-1 = none) */
+static int level_of_row(int rowAbs) {
+  const tunnel_t *t = tun();
+  int nl = (int)t->levels;
+  if (nl <= 0) return -1;
+  int lo = 0, hi = nl - 1;
+  while (lo < hi) {
+    int mid = (lo + hi + 1) >> 1;
+    if (g_rowStart[mid] <= (double)rowAbs) lo = mid; else hi = mid - 1;
+  }
+  if (g_rowStart[lo] <= (double)rowAbs && (double)rowAbs < g_rowStart[lo + 1]) return lo;
+  return -1;
+}
+/* How far this row leans toward the level on the other side of the nearest
+   boundary: 0 away from it, 0.5 sitting on it, easing over ROWXC_ROWS rows.
+   That is the run of tiles the transition happens across. */
+static double xsec_blend(int rowAbs, int lvl, int *nb) {
+  *nb = -1;
+  if (G.rowEnd > 900000.0 || lvl < 0) return 0.0;
+  int nl = (int)tun()->levels;
+  double dp = (double)rowAbs - g_rowStart[lvl];          /* from the level head */
+  double dn = g_rowStart[lvl + 1] - 1.0 - (double)rowAbs; /* to the level tail */
+  double half = (double)ROWXC_ROWS * 0.5;
+  if (dp < half && lvl > 0) { *nb = lvl - 1; return 0.5 - dp / (double)ROWXC_ROWS; }
+  if (dn < half && lvl + 1 < nl) { *nb = lvl + 1; return 0.5 - dn / (double)ROWXC_ROWS; }
+  return 0.0;
+}
+static void rowcross_fill(int lvl, int nb, double t, rowcross_t *o) {
+  level_xsec(lvl, &o->n, &o->k, &o->tile, &o->col0);
+  o->R = xsec_R(o->n, o->k, o->tile);
+  o->bn = -1; o->bk = 0; o->bR = o->R; o->btile = o->tile; o->bcol0 = o->col0;
+  o->t = 0.0;
+  if (nb >= 0 && t > 0.0) {
+    int n2, k2;
+    double tl2;
+    uint32_t c2;
+    level_xsec(nb, &n2, &k2, &tl2, &c2);
+    o->bn = n2; o->bk = k2; o->bR = xsec_R(n2, k2, tl2);
+    o->btile = tl2; o->bcol0 = c2; o->t = t;
+  }
+}
+int run3_row_cross(int rowAbs, rowcross_t *out) {
+  if (!out) return 0;
+  if (G.rowEnd > 900000.0) { /* endless: one authored shape, no boundaries */
+    out->n = G.shape; out->k = G.k;
+    out->tile = G.tile; out->col0 = run3_level_color0();
+    out->R = xsec_R(out->n, out->k, out->tile);
+    out->bn = -1; out->bk = 0; out->bR = out->R;
+    out->btile = out->tile; out->bcol0 = out->col0; out->t = 0.0;
+    return 1;
+  }
+  int lvl = level_of_row(rowAbs);
+  if (lvl < 0) return 0;
+  int nb;
+  double t = xsec_blend(rowAbs, lvl, &nb);
+  rowcross_fill(lvl, nb, t, out);
+  return 1;
+}
+
+/* Fill one row of the window from a baked level. GMAP is indexed by absolute
+   row, and each row is written with its own level's grid, so a window can
+   carry two levels at once and the renderer reads each row with the grid it
+   was written with. */
+static void fill_rows(int R0, int R1, const baked_level_t *L, int lvlRow0,
+                      int seamHead, int seamTail) {
+  if (!L) return;
+  for (int R = R0; R <= R1; R++) {
+    int i = R - GMAP_BASE;
+    if (i < 0 || i >= MAPW) continue;
+    if (i < 4) continue;
+    int lr = R - lvlRow0;
+    /* The level is entered and left on normal tiles: a checkpoint changes the
+       tube's cross-section, and the runner has to cross that on a solid,
+       unbroken run of floors. Holes and crumbling tiles are suppressed for
+       SEAM_SOLID rows either side of a boundary — the same run the shapes
+       morph over — so the transition is always 2*SEAM_SOLID (12) tiles of
+       ordinary tile, never a gap straddling two layouts. */
+    int seam = 0;
+    if (lr >= 0 && lr < L->rows) {
+      if (seamHead && lr < SEAM_SOLID) seam = 1;
+      if (seamTail && lr >= L->rows - SEAM_SOLID) seam = 1;
+    }
+    for (int s2 = 0; s2 < L->n; s2++) {
+      uint8_t m = 0, mc = 0;
+      if (!seam && lr >= 0 && lr < L->rows) {
+        for (int ln = 0; ln < L->k; ln++) {
+          if (!baked_tile(L, lr, s2, ln)) m |= (uint8_t)(1u << ln);
+          else if (baked_crumb(L, lr, s2, ln)) mc |= (uint8_t)(1u << ln);
+        }
+      } /* otherwise (seam band, or past the baked rows): solid */
+      GMAP[s2][i] = m;
+      GCR0[s2][i] = (uint8_t)(mc & ~m); /* crumble only where solid */
+    }
+  }
+}
+
+/* Fill GMAP for the current level window. Every tunnel ships authored bitmaps
+   (levels_baked.h), so nothing here is generated: the engine only reads the
+   levels it was given. The far lookahead is filled from the NEXT level's own
+   bitmap (not as all-solid), because the rows ahead of a boundary really are
+   the next level: that is what makes the shape morph a spatial change you can
+   see coming rather than a snap at the moment the runner crosses. */
 static void build_window(void) {
   const baked_level_t *B = 0;
   baked_at(G.tun, G.lvl, &B);
@@ -328,24 +493,13 @@ static void build_window(void) {
   for (int i = 0; i < MAPW; i++)
     for (int s = 0; s < MAXN; s++) { GMAP[s][i] = 0; GCR0[s][i] = 0; GCRUMB[s][i] = 0; }
   if (!B) return; /* no data: an unbroken tunnel */
-  int rEnd = (int)g_rowStart[G.lvl + 1] + PADW;
-  if (rEnd > r0 + MAPW - 1) rEnd = r0 + MAPW - 1;
-  for (int R = r0; R <= rEnd; R++) {
-    int i = R - r0;
-    if (i < 4) continue;
-    int lr = R - r0;
-    for (int s2 = 0; s2 < B->n; s2++) {
-      uint8_t m = 0, mc = 0;
-      if (lr >= 0 && lr < B->rows) {
-        for (int ln = 0; ln < B->k; ln++) {
-          if (!baked_tile(B, lr, s2, ln)) m |= (uint8_t)(1u << ln);
-          else if (baked_crumb(B, lr, s2, ln)) mc |= (uint8_t)(1u << ln);
-        }
-      } /* past the baked rows (far lookahead): solid */
-      GMAP[s2][i] = m;
-      GCR0[s2][i] = (uint8_t)(mc & ~m); /* crumble only where solid */
-    }
-  }
+  int nextRow0 = (int)g_rowStart[G.lvl + 1];
+  int last = (int)tun()->levels - 1;
+  fill_rows(r0, nextRow0 - 1, B, r0, G.lvl > 0, 1);
+  int lim = nextRow0 + PADW;
+  if (lim > r0 + MAPW - 1) lim = r0 + MAPW - 1;
+  const baked_level_t *N = 0;
+  if (baked_at(G.tun, G.lvl + 1, &N)) fill_rows(nextRow0, lim, N, nextRow0, 1, G.lvl + 1 < last);
 }
 
 /* ---- infinite mode: hand-made segments, played in order, looping.
@@ -472,6 +626,8 @@ static void open_level(int lvl) {
    fresh tunnel/level tuning is loaded. prog carries its overshoot. */
 static void open_level_continue(int lvl, double over) {
   const tunnel_t *t = tun();
+  int n0 = G.shape, k0 = G.k;
+  double ring0 = G.ring;
   G.lvl = (uint16_t)lvl;
   compute_rows();
   G.shape = t->n_sides;
@@ -489,15 +645,11 @@ static void open_level_continue(int lvl, double over) {
   G.state = S_RUN;
   G.prog = G.rowStart + over;
   if (G.prog >= G.rowEnd) G.prog = G.rowEnd - 0.001;
-  /* ring, vRing, rot, rotT, jump, jv, input, animT, landT preserved; only
-     rewrap the ring if the next level has a different cross-section */
-  {
-    double tot = (double)G.shape * (double)G.k;
-    if (tot > 0.0) {
-      while (G.ring < 0.0) G.ring += tot;
-      while (G.ring >= tot) G.ring -= tot;
-    }
-  }
+  /* ring, vRing, rot, rotT, jump, jv, input, animT, landT preserved. The ring
+     is re-expressed in the new level's grid so the runner keeps their wall;
+     gravSide follows, so the camera roll does not jump either. */
+  G.ring = ring_remap(ring0, n0, k0, G.shape, G.k);
+  G.gravSide = (uint8_t)wrap_side(G.ring, G.k, G.shape);
 }
 
 /* ---------------- helpers ---------------- */
@@ -1084,28 +1236,15 @@ void run3_step(double dt) {
     }
   }
 
-  /* ease the view roll along the shortest path toward the LATCHED gravity
-     wall (not the live ring: mid-air drift must not swing gravity).
-     Without the wrap, the wrap-around corner (side n-1 -> 0) eases almost a
-     full turn instead of one step like every other corner. */
-    double target2 = cam_rot_target();
-    if (G.state == S_CUT || G.state == S_GATE) target2 += -g_stageSide * 0.28;
-  double d = target2 - G.rot;
-  while (d > PI) d -= TAU;
-  while (d <= -PI) d += TAU;
-  if (d * d > 1e-6) {
-    double step = d * (dt * 14.0);
-    if (step > 0.0 && step > d) step = d;
-    if (step < 0.0 && step < d) step = d;
-    G.rot += step;
-    /* keep bounded: +/-TAU is visually identical, so normalize freely */
-    while (G.rot > PI) G.rot -= TAU;
-    while (G.rot <= -PI) G.rot += TAU;
-  } else {
-    G.rot += d; /* snap the (short) remainder */
-    while (G.rot > PI) G.rot -= TAU;
-    while (G.rot <= -PI) G.rot += TAU;
-  }
+  /* The camera is bolted to the runner: the roll is not eased toward a
+     latched wall but taken straight from the runner's own position on the
+     tube, which is already a continuous function of it. Easing a target like
+     this only ever made the runner slide on screen and then snap when the
+     tube changed around them. Because the target is continuous, copying it
+     every step is smooth AND keeps the runner fixed at centre-bottom. */
+  double target2 = cam_rot_target();
+  if (G.state == S_CUT || G.state == S_GATE) target2 += -g_stageSide * 0.28;
+  G.rot = target2;
   G.rotT = target2;
 
   render_frame();
@@ -1139,6 +1278,16 @@ double run3_level_rows(void) { return G.rowEnd - G.rowStart; }
 double run3_ring(void) { return G.ring; }
 /* the view roll the current frame renders with (test seam) */
 double run3_rot(void) { return G.rot; }
+double run3_rot_at(double rowAbs) {
+  /* test seam: the view roll the camera would hold at absolute row rowAbs for
+     the runner's current wall, without disturbing the sim. Lets a suite walk
+     a transition row by row and prove the roll never jumps. */
+  double save = G.prog;
+  G.prog = rowAbs;
+  double r = cam_rot_target();
+  G.prog = save;
+  return r;
+}
 int32_t run3_tile(int32_t side, int32_t row, int32_t lane) {
   int i = row - GMAP_BASE;
   if (i < 0 || i >= MAPW) return 1;
@@ -1179,12 +1328,44 @@ uint32_t run3_level_color0(void) { return g_col0; }
 uint32_t run3_level_color1(void) { return g_col1; }
 int32_t run3_level_music(void) { return g_mus; }
 
+/* the runner's distance from the tube axis, i.e. how far below the camera
+   they stand. It is the circumradius only at a corner, so the pitch below is
+   solved from this rather than from the tube's nominal radius: the runner's
+   feet hold the same row on screen the whole way round a side. */
+double run3_runner_rad(void) {
+  double px, py;
+  runner_wall_pt(&px, &py);
+  /* runner_wall_pt is on the UNIT n-gon (the roll only needs its angle), so
+     scale it by the radius of the tube row the runner is standing on — the
+     same blended radius the renderer draws. That is what makes the camera
+     distance follow the level's own tile width. */
+  double len = ssqrt(px * px + py * py);
+  rowcross_t xc;
+  if (run3_row_cross((int)G.prog, &xc)) {
+    double R = xc.R + (xc.bR - xc.R) * xc.t;
+    return len * R;
+  }
+  return len * xsec_R(G.shape, G.k, G.tile);
+}
+/* the runner's wall point in tube space (test seam / renderer) */
+void run3_runner_pt(double *px, double *py) { runner_wall_pt(px, py); }
+/* test seam: the runner's distance from the screen centre line after the
+   camera roll. The camera is bolted to the runner, so this is always 0 —
+   the runner never moves horizontally on screen, only the level does. */
+double run3_runner_offset(void) {
+  double px, py;
+  runner_wall_pt(&px, &py);
+  double c = scos(G.rot), s = ssin(G.rot);
+  return px * c - py * s;
+}
 /* the view roll the camera holds at the current position (the same target
-   the runner's camera eases toward in run3_step) */
+   the runner's camera eases toward in run3_step). Rolled so the runner's own
+   wall point points straight down: the runner is always dead centre on
+   screen, and the tunnel turns around them. */
 static double cam_rot_target(void) {
-  int n = G.shape > 0 ? G.shape : 1;
-  int gs = G.gravSide < n ? G.gravSide : 0;
-  return -(TAU * (double)gs) / (double)n + g_rotOff;
+  double px, py;
+  runner_wall_pt(&px, &py);
+  return -PI / 2.0 - satan2(py, px) + g_rotOff;
 }
 /* cutscene staging: hold a tunnel frame behind the dialogue overlay.
    hold() freezes the just-finished tunnel (end cutscenes); backdrop()

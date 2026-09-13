@@ -21,9 +21,10 @@ fi
   -Wl,--export=run3_progress -Wl,--export=run3_rows_per \
   -Wl,--export=run3_sides -Wl,--export=run3_lanes -Wl,--export=run3_theme \
   -Wl,--export=run3_side -Wl,--export=run3_lane -Wl,--export=run3_ring \
-  -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows -Wl,--export=run3_rot \
+  -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows -Wl,--export=run3_rot -Wl,--export=run3_rot_at \
+  -Wl,--export=run3_runner_rad -Wl,--export=run3_runner_offset \
   -Wl,--export=run3_tile -Wl,--export=run3_solid -Wl,--export=run3_tile_tex -Wl,--export=run3_tile_hit \
-  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_sky \
+  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_sky -Wl,--export=run3_sky_visible -Wl,--export=run3_space_visible -Wl,--export=run3_space_survived \
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
   -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_backdrop_end -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
@@ -43,6 +44,6 @@ fi
   -Wl,--export=run3_menu_select_char -Wl,--export=run3_menu_char -Wl,--export=run3_set_char_count \
   -Wl,--export=run3_char_set_locked -Wl,--export=run3_char_is_locked \
   -Wl,--export=render_map -Wl,--export=render_menu -Wl,--export=render_frame \
-  -o run3.wasm run3.c render.c levels/levels.c
+  -o run3.wasm run3.c render.c gfx.c math.c space.c levels/levels.c
 
 echo "built $(pwd)/run3.wasm ($(wc -c < run3.wasm) bytes)"
