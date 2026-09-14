@@ -132,6 +132,7 @@ int  run3_hint_on(void);
 int  run3_hint_count(void);
 int  run3_hint_row(int i);
 double run3_hint_ring(int i);
+void   run3_hint_env(double *maxdc, double *leap, double *leapdc); /* planner envelope (test) */
 
 /* small pure helpers shared by both units */
 static inline int wrap_side(double ring, int k, int n) {
@@ -177,10 +178,12 @@ void run3_enter_map(void);
 void run3_enter_menu(void);
 void run3_map_click(int mx, int my);  /* canvas coords -> selects tunnel */
 int  run3_map_hover(int mx, int my);  /* returns tunnel id under cursor, -1 */
-int  run3_map_scroll_y(void);          /* current scroll offset (horizontal) */
-int  run3_map_scroll_x(void);          /* alias for horizontal */
-void run3_map_scroll(int dx);          /* scroll the map horizontally (1D) */
+int  run3_map_scroll_x(void);          /* current horizontal pan (world x) */
+int  run3_map_scroll_y(void);          /* current vertical pan (world y) */
+void run3_map_scroll_xy(int dx, int dy); /* pan the map in 2D (drag/wheel/keys) */
+void run3_map_scroll(int dx);          /* horizontal-only pan (legacy alias) */
 void run3_map_scroll_delta(int dx);    /* alias */
+void run3_map_center_on(int tun);      /* centre the view on a tunnel node */
 int  run3_map_selected(void);          /* selected tunnel id, -1 = none */
 int  run3_map_hovered(void);           /* hovered tunnel id, -1 = none */
 void run3_map_set_hover(int id);       /* set hover from JS mousemove */
@@ -195,6 +198,7 @@ void run3_map_sync_state(int tun, int locked, int cleared); /* bulk helper */
 /* checkpoints: each tunnel is a continuous run of levels, each on the map */
 int  run3_map_checkpoint_count(int tun);          /* levels in tunnel */
 void run3_map_checkpoint_pos(int tun, int lvl, int *x, int *y); /* base coords, no scroll */
+void run3_map_node_pos(int tun, int *x, int *y);              /* tunnel node (path start) */
 int  run3_map_hover_level(int mx, int my);        /* checkpoint lvl under cursor, -1 = node/none */
 int  run3_map_selected_level(void);               /* selected checkpoint lvl, -1 = node/none */
 void run3_map_set_best(int tun, int best);        /* furthest cleared count (unlocks dots) */
@@ -224,14 +228,36 @@ void run3_cutscene_backdrop_end(int32_t tunIdx, int32_t lvl); /* seek level tail
 void run3_cutscene_hold(void);                            /* freeze current frame */
 void run3_cutscene_resume(void);                          /* unfreeze, keep going */
 void run3_stage_cam(double side, double lift);                  /* staged camera angle */
+/* cutscene dialogue: the ENGINE composes and draws it full-window. The host
+   writes NUL-terminated UTF-8 into these buffers, then sets the typewriter /
+   step state. There is no DOM dialog card on screen. */
+char *run3_cut_title_buf(void);                                 /* 96 bytes */
+char *run3_cut_text_buf(void);                                  /* 512 bytes */
+void  run3_cut_show(double y, int small, int shown, int step, int total, int on);
+int32_t run3_cut_chars(void);                                   /* chars drawn (test) */
 double run3_stage_liftf(void);                                /* (renderer use) */
 double run3_stage_sidef(void);                                /* (renderer use) */
 double run3_rot(void);                                        /* live view roll (test seam) */
 double run3_rot_at(double rowAbs);                            /* roll at a row (test seam) */
+double run3_roll_step(void);                                  /* quantized roll step 360/n (rad) */
+int    run3_roll_is_facet(void);                              /* 1: roll is exactly a facet angle */
 double run3_runner_rad(void);                                 /* runner's distance from the axis */
-void   run3_runner_pt(double *px, double *py);                /* runner's tube-space wall point */
+void   run3_runner_pt(double *px, double *py);                /* runner's UNIT tube-space wall point */
+void   run3_runner_world(double *px, double *py);             /* runner's wall point, world units */
+double run3_runner_world_x(void);                             /* runner x in the rolled view frame */
+double run3_runner_world_y(void);                             /* runner y in the rolled view frame */
+double run3_runner_lift(void);                                /* runner's vertical world offset */
+double run3_jump(void);                                       /* height above the wall (test seam) */
+double *run3_scratch(void);                                   /* scratch doubles for host tests */
 double run3_runner_offset(void);                              /* 0: runner is centre-screen (test) */
-double run3_runner_offset(void);                              /* runner's screen-x offset (always 0) */
+/* the chase camera, placed by the engine in the rolled view frame and read by
+   the renderer (see camera-spec.md) */
+double run3_cam_x(void);                                      /* lateral pan */
+double run3_cam_y(void);                                      /* vertical (follows the jump) */
+double run3_cam_back(void);                                   /* distance behind the runner plane */
+double run3_cam_off(void);                                    /* runner's distance below the camera */
+/* where the runner lands on screen through the real projection (render.c) */
+void   run3_runner_screen(double *sx, double *sy);
 #define NSTAGE_ACT 8
 #define NSTAGE_PROP 4
 void run3_stage_actor(int i, int ch, double ring, double zrow, int vis);

@@ -39,7 +39,7 @@ void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
 /* Camera state, live for the frame. The space layers project with the same
    pitch/roll/origin as the tube, so everything outside shares the tunnel's
    own orientation instead of drifting on its own. */
-extern double cam_pitch, cam_back, cam_out, view_z, near_z;
+extern double cam_pitch, cam_back, cam_out, cam_x, cam_y, view_z, near_z;
 
 /* the baked art (assets_data.h) is only compiled into render.c, so the other
    renderer files reach it through this accessor */
@@ -57,5 +57,6 @@ void space_wormhole(void);   /* the wormhole at the far end of the bore */
 void space_count_visible(void);   /* survivors, once the tube is drawn */
 int32_t run3_space_visible(void); /* pixels the space layers wrote (tests) */
 int32_t run3_space_survived(void); /* pixels of them the tube left showing */
+int32_t run3_space_planet(void);   /* the planet's own pixels this frame */
 
 #endif /* RUN3_RENDER_INT_H */

@@ -470,38 +470,100 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   console.log(
     `runner stays centred OK (${frames} frames, ${crossings} checkpoint crossings, worst ${worstOff.toExponential(1)})`);
 
-  // 6c. A cross-section change must not turn the camera at all: the runner's
-  //     angular position on the tube is preserved across the boundary, and the
-  //     roll depends only on that. So walking the rows either side of a seam
-  //     leaves the roll EXACTLY where it was.
-  let seams = 0, offenders = 0;
+  // 6c. THE ROLL IS THE FLAT FACET, IN 360/n STEPS. Away from a seam the
+  //     facet under the runner is laid exactly horizontal, so the roll is an
+  //     exact multiple of 360/n (90 degrees for a square, 60 for a hexagon)
+  //     and the runner is upright. Across a cross-section change the two
+  //     quantized angles are blended by the same t the shape morph uses, so
+  //     the camera glides between them over the seam instead of stepping.
+  let seams = 0, blended = 0, jumped = 0, impure = 0, live = 0, liveJump = 0, crossed = 0;
   for (const tun of [0, 5, 13, 33, 34]) {
     for (let lvl = 1; lvl < 4; lvl++) {
       e.run3_init(7);
       e.run3_seek(tun, lvl - 1);
+      const prevStart = e.run3_rowf();
       const spanPrev = e.run3_level_rows();
+      const stepPrev = e.run3_roll_step();
+      const nP = e.run3_sides(), kP = e.run3_lanes();
+      if (spanPrev < 40) continue;
+      const bnd = prevStart + spanPrev;
+      // off-seam, with the level that OWNS the row active: EXACTLY a facet
+      const qp = e.run3_rot_at(bnd - 20) / stepPrev;
+      if (Math.abs(qp - Math.round(qp)) > 1e-7) impure++;
       e.run3_seek(tun, lvl);
       const head = e.run3_rowf();
       const span = e.run3_level_rows();
-      if (spanPrev < 20 || span < 20) continue;
-      // the new level's side of the seam: rows head..head+6 blend from half
-      // the neighbour back to pure, and the roll must not move
-      let a = e.run3_rot_at(head);
-      let b = e.run3_rot_at(head + 6);
-      if (Math.abs(wrapPi(b - a)) > 1e-6) offenders++;
-      // the old level's side, blending forward out of pure
-      e.run3_seek(tun, lvl - 1);
-      a = e.run3_rot_at(head - 7);
-      b = e.run3_rot_at(head - 1);
-      if (Math.abs(wrapPi(b - a)) > 1e-6) offenders++;
+      if (span < 40 || Math.abs(head - bnd) > 1e-6) continue;
+      const n = e.run3_sides(), k = e.run3_lanes(), step = e.run3_roll_step();
+      const qn = e.run3_rot_at(head + 20) / step;
+      if (Math.abs(qn - Math.round(qn)) > 1e-7) impure++;
+
+      // the NEW level's side of the seam — the rows the player actually walks
+      // once they cross. It must GLIDE from the blended angle at the boundary
+      // onto the pure facet, never by a whole 360/n step in one row.
+      let prev = e.run3_rot_at(head), perRow = 0;
+      const atBnd = prev;
+      for (let r = head + 1; r <= head + 8; r++) {
+        const cur = e.run3_rot_at(r);
+        const d = Math.abs(wrapPi(cur - prev));
+        if (d > perRow) perRow = d;
+        prev = cur;
+      }
+      if (perRow > step * 0.5) jumped++;
+      // a cross-section change genuinely blends: the boundary is between facets
+      if ((n !== nP || k !== kP) && Math.abs(atBnd / step - Math.round(atBnd / step)) > 1e-6)
+        blended++;
       seams++;
     }
   }
   if (seams < 6)
     throw new Error(`only ${seams} seams exercised \u2014 the check is not testing enough`);
-  if (offenders)
-    throw new Error(`${offenders} seams turned the camera during a cross-section change`);
-  console.log(`checkpoint seams OK (${seams} seams, camera does not turn at a shape change)`);
+  if (impure)
+    throw new Error(`${impure} rows away from a seam were not exactly 360/n \u2014 runner not upright`);
+  if (jumped)
+    throw new Error(`${jumped} seams stepped the roll by a whole facet instead of gliding`);
+  if (blended < 3)
+    throw new Error(`only ${blended}/${seams} seams blended the roll \u2014 the check exercises nothing`);
+
+  // 6c-ii. In CONTINUOUS play (a real checkpoint crossing, where the runner's
+  //        wall is preserved) the live roll must never jump a whole facet in a
+  //        frame: it glides. Off-seam it must be exactly upright.
+  for (const tun of [0, 5, 13, 33, 34]) {
+    e.run3_init(7);
+    e.run3_seek(tun, 0);
+    if (!e.run3_hint_on()) e.run3_hint_toggle();
+    let lastRot = e.run3_rot(), lastLvl = e.run3_lvl(), lastStep = e.run3_roll_step();
+    for (let i = 0; i < 2200; i++) {
+      let steer = 0;
+      const cnt = e.run3_hint_count();
+      if (cnt > 0) {
+        const N = e.run3_sides() * e.run3_lanes();
+        let d = e.run3_hint_ring(cnt > 1 ? 1 : 0) - e.run3_ring();
+        while (d > N / 2) d -= N;
+        while (d < -N / 2) d += N;
+        steer = Math.max(-1, Math.min(1, d * 2));
+      }
+      e.run3_set_input(steer);
+      e.run3_step(1 / 60);
+      if (e.run3_state() !== 1) break;
+      const rot = e.run3_rot(), step = e.run3_roll_step();
+      if (e.run3_lvl() === lastLvl && step === lastStep) {
+        /* the engine caps the turn at 6 rad/s, so one frame may never carry a
+           whole facet step (the smallest step, 360/32, is 0.196 rad) */
+        if (Math.abs(wrapPi(rot - lastRot)) > 0.12) liveJump++;
+        live++;
+      } else {
+        crossed++;
+      }
+      lastRot = rot; lastLvl = e.run3_lvl(); lastStep = step;
+    }
+  }
+  if (live < 2000)
+    throw new Error(`only ${live} live frames sampled \u2014 not exercising a real run`);
+  if (liveJump)
+    throw new Error(`${liveJump} live frames stepped the roll a whole facet in one frame`);
+  console.log(`checkpoint seams OK (${seams} seams glided, ${blended} blended, ` +
+    `${crossed} live crossings, ${live} frames under the 6 rad/s turn cap)`);
 
   // 6d. THE LEVEL PANS. The camera sits off the tube axis on the runner's own
   //     radial line, so a camera on the axis would rotate the tunnel about the
@@ -556,7 +618,7 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   //     paint (wrote > 0) and the tube must then cover part of it
   //     (survived < wrote). Equal counts would mean the space scene was drawn
   //     on top of the wall, i.e. the order is wrong.
-  let spaceOk = 0, spaceSurv = 0, spaceCovered = 0;
+  let spaceOk = 0, spaceSurv = 0, spaceCovered = 0, planetDrawn = 0, planetSurv = 0;
   for (const [tun, lvl] of [[0, 0], [0, 5], [5, 3], [13, 2], [33, 10], [40, 3]]) {
     e.run3_init(7);
     e.run3_seek(tun, lvl);
@@ -565,7 +627,14 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     if (wrote > 200) spaceOk++;
     if (survived > 200) spaceSurv++;
     if (survived < wrote) spaceCovered++;
+    /* the planet from the same backdrop class (Planet.as is a vertex-coloured
+       disc parented to the TunnelSection) must actually reach the frame */
+    const pl = e.run3_space_planet ? e.run3_space_planet() : 0;
+    if (pl > 100) planetDrawn++;
+    if (wrote > 0 && survived > 0 && pl > 0) planetSurv++;
   }
+  if (planetDrawn < 3)
+    throw new Error(`the planet only drew in ${planetDrawn}/6 levels \u2014 outer space scene incomplete`);
   if (spaceOk < 4)
     throw new Error(`the space layer only painted in ${spaceOk}/6 levels \u2014 outer tunnels/wormhole not drawn`);
   if (spaceSurv < 4)
@@ -573,6 +642,34 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   if (spaceCovered < 4)
     throw new Error(`the tube covered the space scene in only ${spaceCovered}/6 levels \u2014 space drawn over the wall`);
   console.log(`space layer OK (${spaceOk}/6 levels painted, ${spaceSurv}/6 visible, ${spaceCovered}/6 occluded by the tube)`);
+
+  // the cutscene DIALOGUE is drawn by the engine now, full-window: write a
+  // line into its buffers and prove it reaches the frame (the DOM keeps only
+  // the click target, so its text is not on screen any more)
+  e.run3_init(9);
+  e.run3_cutscene_backdrop(0, 9);
+  const before = shot();
+  const put = (ptr, s) => {
+    const m = new Uint8Array(e.memory.buffer, ptr, s.length + 1);
+    for (let i = 0; i < s.length; i++) m[i] = s.charCodeAt(i) & 0xff;
+    m[s.length] = 0;
+  };
+  put(e.run3_cut_title_buf(), "Coming Through");
+  put(e.run3_cut_text_buf(), "The map was blank all along - the stars were the only guide.");
+  e.run3_cut_show(120, 0, -1, 1, 3, 1);
+  e.render_frame();
+  const cutChars = e.run3_cut_chars();
+  const afterCut = shot();
+  let cutLit = 0;
+  for (let y = Math.floor(H * 0.55); y < H; y++)
+    for (let x = 0; x < W; x++)
+      if (before[y * W + x] !== afterCut[y * W + x]) cutLit++;
+  if (cutChars < 40)
+    throw new Error(`cutscene overlay drew only ${cutChars} characters`);
+  if (cutLit < 4000)
+    throw new Error(`cutscene dialogue band only changed ${cutLit} px`);
+  e.run3_cut_show(0, 0, -1, 0, 0, 0);
+  console.log(`cutscene overlay OK (engine drew ${cutChars} chars, ${cutLit} px in the dialogue band)`);
 
   e.run3_init(9);
   e.run3_cutscene_backdrop(0, 9);

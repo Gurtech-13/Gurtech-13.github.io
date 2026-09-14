@@ -50,28 +50,29 @@ static const uint32_t LPAL[4] = {
 };
 
 /* ==================== CAMERA ==================== */
-/* The chase camera is bolted to the runner in every sense:
+/* The chase camera is PLACED BY THE ENGINE (run3.c — see camera-spec.md): it is
+   bolted to the runner, rolled so the flat facet under them is horizontal and
+   panned laterally onto their own spot, so the runner never moves on screen
+   and is always upright on their floor — it is the TUNNEL that rotates, pans,
+   rises and morphs around them.
 
-     * its ORIENTATION comes from the runner's own wall point (see run3.c), so
-       the runner never moves on screen;
-     * it also sits OFF the tube axis, on the runner's radial line, which is
-       what makes the level PAN as well as spin. A camera on the axis turns the
-       tunnel into a pure rotation about the screen centre, where the far end
-       (which is on the axis) never moves at all;
-     * its DISTANCES are multiples of the runner's radius instead of fixed
-       lengths, because every level carries its own tile width (0.30..3.00): a
-       fixed camera would zoom 10x between checkpoints. The runner's own sprite
-       is a fixed pixel size and deliberately does not scale with any of this.
+   This file consumes the placement. cam_x/cam_y are the camera's position in
+   the ROLLED view frame (the same frame corner()/row_pt() produce), so the
+   projection SUBTRACTS them instead of assuming a camera on the axis; a camera
+   left on the axis would turn the tunnel into a pure spin about the screen
+   centre. cam_back/cam_off are distances set by the engine — multiples of the
+   facet APOTHEM, because every level carries its own tile width (0.30..3.00)
+   and the framing must not zoom along a side or between checkpoints. The
+   runner's own sprite is a fixed pixel size and never scales with any of this.
 
    tan(pitch) = (h + t*cam_back)/(t*h - cam_back), t = (CY - 2H/3)/FOCAL,
-   h = rrad - cam_out = how far the runner's wall is below the camera. */
-/* camera framing, all in multiples of the runner's radius (see above) */
-#define CAM_BACK  1.25 /* camera distance behind the runner plane, in radii */
-#define CAM_OUT   0.35 /* camera offset from the axis toward the runner */
+   h = cam_off = how far the runner's wall is below the camera. */
 #define VIEW_ROWS 28.0 /* rows drawn ahead: tile width must not decide it */
 double cam_pitch = 0.0;
 double cam_back = DCAM;  /* world units; refreshed every frame */
-double cam_out = 0.0;
+double cam_out = 0.0;    /* runner's distance below the camera (= h) */
+double cam_x = 0.0;      /* camera x in the rolled view frame (the pan) */
+double cam_y = 0.0;      /* camera y in the rolled view frame (jump follow) */
 double view_z = VIEW;
 double near_z = NEARZ;
 
@@ -106,7 +107,7 @@ static void sky_project(double dx, double dy, double dz, double pitch,
                         double roll, double *sx, double *sy, int *vis) {
   double x = dx * SKY_DIST, y = dy * SKY_DIST, z = dz * SKY_DIST;
   double c = scos(roll), s = ssin(roll);
-  double xr = x * c - y * s, yr = x * s + y * c + cam_out;
+  double xr = x * c - y * s - cam_x, yr = x * s + y * c - cam_y;
   double cp = scos(pitch), sp = ssin(pitch);
   double d = cam_back + z;
   double y1 = yr * cp - d * sp;
@@ -170,14 +171,24 @@ int32_t run3_sky_visible(void) { return g_skyVis; }
 /* ==================== PROJECTION ==================== */
 
 /* project a tube-space point through the chase camera (see CAMERA above) */
+/* the pitch that puts a point cam_off below the camera at 2H/3 on screen
+   (small-angle atan to 3rd order) */
+static double cam_pitch_for(double off, double back) {
+  double t = ((double)CY - 2.0 * (double)H / 3.0) / FOCAL;
+  double x = (off + t * back) / (t * off - back);
+  return x - x * x * x / 3.0;
+}
 static void proj(double x, double y, double z, double *sx, double *sy, double *dd) {
+  /* x/y arrive in the rolled view frame; the camera is off the axis (panned
+     onto the runner), so subtract its own position first */
   double d = cam_back + z;
-  double yr = y + cam_out; /* camera sits at (0, -cam_out) in tube-view space */
+  double xr = x - cam_x;
+  double yr = y - cam_y;
   double c = scos(cam_pitch), s = ssin(cam_pitch);
   double y1 = yr * c - d * s;
   double d1 = yr * s + d * c;
   double k = FOCAL / d1;
-  *sx = CX + x * k; *sy = CY - y1 * k;
+  *sx = CX + xr * k; *sy = CY - y1 * k;
   if (dd) *dd = d1;
 }
 static void corner(int c, double *x, double *y, double R) {
@@ -271,20 +282,23 @@ static int anim_dir_from_tube(void) {
  * Draw the character with proper animation.
  * Uses the animation ranges table baked from the original Run 3 source.
  */
-static void draw_runner(double rlen) {
-  /* The camera roll is taken from the runner's own wall point, so it cancels
-     their angle on the tube exactly: in view space they stand straight down
-     from the axis at x = 0, y = -rlen. They therefore never move on screen —
-     only the level rotates and changes shape around them. */
-  double mx = 0.0, my = -rlen;
+static void draw_runner(void) {
+  /* The runner's own point on the rolled tube. The camera was panned onto
+     exactly this point and raised with their lift, so the projection puts
+     them back at the screen centre / low third in every frame: they never
+     move on screen (except a cutscene), and it is the level that rotates,
+     pans and changes shape around them. */
+  double mx = run3_runner_world_x(), my = run3_runner_world_y();
 
   int dead = (G.state == S_DEAD);
-  double lift = 0.02 + G.jump;
+  /* the lift is the engine's, so the camera follows it one-for-one */
+  double lift = run3_runner_lift();
   double shrink = 1.0;
   if (dead) {
-    /* falling out of the tunnel: drift away and shrink over VOID_TIME */
+    /* falling out of the tunnel: drift away and shrink over VOID_TIME (the
+       drift is already in run3_runner_lift) */
     double dd = G.fallT; if (dd > VOID_TIME) dd = VOID_TIME;
-    lift = 0.02 - dd*1.1; shrink = 1.0 - dd*0.16; if (shrink < 0.25) shrink = 0.25;
+    shrink = 1.0 - dd*0.16; if (shrink < 0.25) shrink = 0.25;
   }
   double gx,gy,px,py;
   proj(mx,my,0.0,&gx,&gy,NULL);
@@ -342,6 +356,10 @@ static void draw_runner(double rlen) {
 
   int drawX = (int)px - spriteW / 2;
   int drawY = (int)py - spriteH;
+  /* in-place run cycle: a couple of pixels of bounce, SPRITE ONLY — the
+     camera does not follow it, so the runner stays where they were put */
+  if (state == STATE_RUN)
+    drawY += (int)(1.5 * (H / 360.0) * ssin(G.animT * 13.0));
 
   /* blit with optional horizontal mirror */
   if (ar.mirror) {
@@ -367,6 +385,21 @@ static void draw_runner(double rlen) {
       }
     }
   }
+}
+
+/* test seam: where the runner lands on screen through the REAL projection.
+   The camera is panned onto the runner, so this is (CX, 2H/3) in every
+   gameplay frame — a camera left on the axis fails here. It rebuilds the
+   frame's camera state from the engine's placement, so it is also valid
+   before the first frame has been drawn. */
+void run3_runner_screen(double *sx, double *sy) {
+  cam_back = run3_cam_back();
+  cam_out  = run3_cam_off();
+  cam_x    = run3_cam_x();
+  cam_y    = run3_cam_y();
+  cam_pitch = cam_pitch_for(cam_out, cam_back);
+  double mx = run3_runner_world_x(), my = run3_runner_world_y();
+  proj(mx, my + run3_runner_lift(), 0.0, sx, sy, NULL);
 }
 
 /* ==================== STAGED CUTSCENE CAST ==================== */
@@ -597,7 +630,8 @@ static void row_pt(const rowcross_t *xc, double u, double *x, double *y) {
   *y = px * s + py * c;
 }
 
-static void draw_runner(double R);
+static void draw_runner(void);
+static void draw_cut_overlay(void); /* the cutscene's dialogue, drawn by the engine */
 static unsigned frameNo = 0; /* shake-jitter clock */
 void render_frame(void) {
   frameNo++;
@@ -660,22 +694,20 @@ void render_frame(void) {
      holds the same screen row the whole way round a side */
   double rrad = run3_runner_rad();
   double rtile = xc0.tile + (xc0.btile - xc0.tile) * xc0.t;
-  if (rrad < 0.05) rrad = 0.05;
-  cam_back = CAM_BACK * rrad;
-  cam_out = CAM_OUT * rrad;
+  /* the engine placed the camera for this frame (camera-spec.md): copy its
+     position into the frame's projection state */
+  cam_back = run3_cam_back();
+  cam_out  = run3_cam_off();
+  cam_x    = run3_cam_x();
+  cam_y    = run3_cam_y();
   view_z = VIEW_ROWS * rtile;
   if (view_z < 4.0) view_z = 4.0;
   near_z = -(cam_back - 0.45);
   /* pitch from the runner constraint (small-angle atan to 3rd order);
      staged scenes add their authored height bias on top */
-  {
-    double h = rrad - cam_out;
-    double t = ((double)CY - 2.0 * (double)H / 3.0) / FOCAL;
-    double x = (h + t * cam_back) / (t * h - cam_back);
-    cam_pitch = x - x * x * x / 3.0;
-    if (G.state == S_CUT || G.state == S_GATE)
-      cam_pitch += run3_stage_liftf() * 0.06;
-  }
+  cam_pitch = cam_pitch_for(cam_out, cam_back);
+  if (G.state == S_CUT || G.state == S_GATE)
+    cam_pitch += run3_stage_liftf() * 0.06;
   /* the sky goes down first, once the camera's pitch is known, so the star
      sphere parallaxes with the same orientation the tube is drawn with */
   sky_render(sky, cam_pitch, G.rot);
@@ -788,9 +820,12 @@ void render_frame(void) {
      S_GATE) and the host-placed cast plays on it — no runner sprite */
   if (G.state == S_CUT || G.state == S_GATE) {
     draw_stage(R);
+    /* the cutscene is composed ENTIRELY by the engine, full-window like
+       gameplay: the tunnel and cast behind, the dialogue over them. */
+    draw_cut_overlay();
   } else {
     if (G.state == S_RUN && run3_hint_on()) draw_hint(rrad);
-    draw_runner(rrad);
+    draw_runner();
   }
   sky_count_visible();
   space_count_visible(); /* how much of the space scene the tube left showing */
@@ -804,6 +839,138 @@ static void draw_glyph(int x, int y, char ch, uint32_t col, double scale);
 static int draw_text(int x, int y, const char *s, uint32_t col, double scale);
 static int text_width(const char *s, double scale);
 static void draw_text_centered(int y, const char *s, uint32_t col, double scale);
+static int strlen_p(const char *s);
+
+/* ==================== CUTSCENE OVERLAY (engine-owned) ==================== */
+/* The host supplies the strings and the typewriter state; the ENGINE lays the
+   scene out and draws it, full-window, exactly like gameplay. There is no
+   dialog card and no DOM text on screen: the host keeps the click target.
+   The host writes NUL-terminated UTF-8 into these buffers before each frame. */
+#define CUT_TITLE_MAX 96
+#define CUT_TEXT_MAX 512
+static char g_cutTitle[CUT_TITLE_MAX];
+static char g_cutText[CUT_TEXT_MAX];
+static int g_cutSmall = 0, g_cutShown = -1, g_cutStep = 0, g_cutTotal = 0, g_cutOn = 0;
+static double g_cutY = 120.0;
+static int g_cutChars = 0; /* characters the overlay actually drew (test seam) */
+char *run3_cut_title_buf(void) { return g_cutTitle; }
+char *run3_cut_text_buf(void) { return g_cutText; }
+void run3_cut_show(double y, int small, int shown, int step, int total, int on) {
+  g_cutY = y;
+  g_cutSmall = small ? 1 : 0;
+  g_cutShown = shown;
+  g_cutStep = step;
+  g_cutTotal = total;
+  g_cutOn = on ? 1 : 0;
+}
+int32_t run3_cut_chars(void) { return g_cutChars; }
+/* soft dark band over the frame's lower part: the dialogue sits on it */
+static void cut_band(int top, double dark) {
+  if (top < 0) top = 0;
+  for (int y = top; y < H; y++) {
+    uint32_t *row = &fb[(uint32_t)y * W];
+    /* fade the band in over its first 40 rows so it reads as a vignette */
+    double d = dark;
+    if (y - top < 40) d *= (double)(y - top) / 40.0;
+    for (int x = 0; x < W; x++) row[x] = mixc(row[x], rgb(4, 8, 18), d);
+  }
+}
+/* greedy word wrap: writes NUL-separated lines into out, returns the count */
+static int cut_wrap(char *out, int cap, const char *in, double scale, int maxW) {
+  int nl = 0, o = 0;
+  const char *p = in;
+  while (*p && nl < 24) {
+    int best = 0;            /* chars on this line */
+    int lastSpace = -1;
+    int i = 0;
+    while (p[i] && p[i] != '\n') {
+      char tmp[256];
+      int n = i + 1;
+      if (n > 255) n = 255;
+      for (int j = 0; j < n; j++) tmp[j] = p[j];
+      tmp[n] = 0;
+      if (text_width(tmp, scale) > maxW) break;
+      if (p[i] == ' ') lastSpace = i;
+      i++;
+    }
+    if (!p[i] || p[i] == '\n') best = i;
+    else best = (lastSpace > 0) ? lastSpace : i;
+    if (best <= 0) best = i > 0 ? i : 1;
+    int n = best;
+    if (o + n + 1 >= cap) break;
+    for (int j = 0; j < n; j++) out[o++] = p[j];
+    out[o++] = 0;
+    nl++;
+    p += n;
+    while (*p == ' ') p++;
+    if (*p == '\n') p++;
+  }
+  if (o < cap) out[o] = 0;
+  return nl;
+}
+static void draw_cut_overlay(void) {
+  g_cutChars = 0;
+  if (!g_cutOn) return;
+  double scale = g_cutSmall ? 0.44 : 0.56;
+  double lh = 52.0 * scale + 6.0;
+  /* the authored bubble height biases where the band sits, kept inside the
+     lower half so the staged cast above is never covered */
+  double t = (g_cutY - 120.0) / 2.5;
+  double bandTop = H * 0.60 - t * 5.0;
+  if (bandTop < H * 0.38) bandTop = H * 0.38;
+  if (bandTop > H * 0.78) bandTop = H * 0.78;
+  cut_band((int)bandTop, 0.62);
+
+  int pad = (int)(W * 0.08);
+  int maxW = W - 2 * pad;
+  int y = (int)bandTop + 26;
+  if (g_cutTitle[0]) {
+    draw_text(pad, y, g_cutTitle, rgb(150, 185, 235), 0.46);
+    y += 26;
+  }
+  /* typewriter: draw only the first g_cutShown characters (negative = all) */
+  char full[CUT_TEXT_MAX + 1];
+  int shown = 0;
+  while (g_cutText[shown] && shown < CUT_TEXT_MAX) shown++;
+  int lim = (g_cutShown < 0 || g_cutShown > shown) ? shown : g_cutShown;
+  for (int j = 0; j < lim; j++) full[j] = g_cutText[j];
+  full[lim] = 0;
+
+  char wrapped[CUT_TEXT_MAX + 32];
+  int nl = cut_wrap(wrapped, (int)sizeof(wrapped), full, scale, maxW);
+  const char *line = wrapped;
+  for (int i = 0; i < nl; i++) {
+    if (line[0]) {
+      draw_text(pad, y + (int)lh, line, rgb(236, 240, 248), scale);
+      for (const char *q = line; *q; q++) g_cutChars++;
+    }
+    y += (int)lh;
+    line += (int)strlen_p(line) + 1;
+  }
+  /* step counter + continue prompt along the bottom */
+  int by = H - (int)(H * 0.06);
+  if (g_cutTotal > 0) {
+    char buf[24];
+    int n = g_cutStep, m = g_cutTotal, o = 0;
+    if (n > 99) n = 99;
+    if (m > 99) m = 99;
+    buf[o++] = (char)('0' + n / 10);
+    buf[o++] = (char)('0' + n % 10);
+    buf[o++] = '/';
+    buf[o++] = (char)('0' + m / 10);
+    buf[o++] = (char)('0' + m % 10);
+    buf[o] = 0;
+    draw_text(pad, by, buf, rgb(170, 178, 195), 0.46);
+  }
+  const char *cont = "CONTINUE >";
+  draw_text(W - pad - text_width(cont, 0.46), by, cont, rgb(150, 185, 235), 0.46);
+}
+/* tiny strlen for the wrap tables (the wasm build has no libc) */
+static int strlen_p(const char *s) {
+  int n = 0;
+  while (s[n]) n++;
+  return n;
+}
 
 /* ==================== MAP RENDERING ==================== */
 #include "levels/map_assets.h"
@@ -811,20 +978,26 @@ static void draw_text_centered(int y, const char *s, uint32_t col, double scale)
 /* Draw a filled circle */
 /* map background: fully procedural old parchment (no baked texture).
    Warm paper base with subtle fibre grain plus black/brown age spots, all in
-   world space so it scrolls 1:1 with the dots. screen_x = world_x + scroll. */
+   2D world space so it scrolls 1:1 with the dots in both axes.
+   screen_x = world_x + scrollX, screen_y = world_y + scrollY. */
 #define MAP_WORLD_MINX -800
-#define MAP_WORLD_W 5000
+#define MAP_WORLD_W 7600
+#define MAP_WORLD_MINY -500
+#define MAP_WORLD_H 1800
 static int map_floor4(int v) { return v >= 0 ? v >> 2 : -(((-v) + 3) >> 2); }
-static void render_map_bg(int scroll) {
-  /* paper base with a soft vertical tone */
+static void render_map_bg(int scrollX, int scrollY) {
+  /* paper base with a soft world-vertical tone so the 2D pan reads */
   for (int y = 0; y < H; y++) {
-    double t = (double)y / (double)(H - 1);
+    int yworld = y - scrollY;
+    double t = (double)(yworld - MAP_WORLD_MINY) / (double)(MAP_WORLD_H - 1);
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
     uint32_t row = mixc(rgb(201,181,130), rgb(213,195,145), t);
-    int ycell = y >> 2;
+    int ycell = map_floor4(yworld);
     int x = 0;
     while (x < W) {
-      int xcell = map_floor4(x - scroll);
-      int xn = (xcell + 1) * 4 + scroll; /* first screen x of next grain cell */
+      int xcell = map_floor4(x - scrollX);
+      int xn = (xcell + 1) * 4 + scrollX; /* first screen x of next grain cell */
       if (xn <= x) xn = x + 1;
       if (xn > W) xn = W;
       /* subtle fibre grain: one hash per 4px cell */
@@ -841,42 +1014,47 @@ static void render_map_bg(int scroll) {
       x = xn;
     }
   }
-  /* black/brown spots and speckles in world space */
-  for (int i = 0; i < 420; i++) {
+  /* black/brown spots and speckles in 2D world space */
+  for (int i = 0; i < 620; i++) {
     uint32_t h = h32(0x51ECu ^ (uint32_t)(i * 2246822519u));
     int wx = MAP_WORLD_MINX + (int)(h % (uint32_t)MAP_WORLD_W);
-    int sx = wx + scroll;
+    int sx = wx + scrollX;
     if (sx < -3 || sx >= W + 3) continue;
-    int wy = (int)((h >> 9) % (uint32_t)H);
+    int wy = MAP_WORLD_MINY + (int)((h >> 9) % (uint32_t)MAP_WORLD_H);
+    int sy = wy + scrollY;
+    if (sy < -3 || sy >= H + 3) continue;
     if (((h >> 4) & 15u) == 0) {
       /* occasional bigger black spot */
       int r = 2 + (int)((h >> 12) & 3u); /* 2..5 */
-      fill_circle(sx, wy, r, rgb(38,26,14));
-      fill_circle(sx, wy, r > 2 ? r - 2 : 1, rgb(24,16,8));
+      fill_circle(sx, sy, r, rgb(38,26,14));
+      fill_circle(sx, sy, r > 2 ? r - 2 : 1, rgb(24,16,8));
     } else {
       int sz = 1 + (int)((h >> 5) & 1u);
       int dk = 70 + (int)((h >> 16) & 50u);
       uint32_t c = ((h >> 7) & 1u) ? rgb(30,20,10) : rgb(dk, dk - 22, dk - 45);
-      fill_rect(sx, wy, sz, sz, c);
+      fill_rect(sx, sy, sz, sz, c);
     }
   }
 }
 
-/* draw the Run 3 world map on the canvas — 1D horizontal, black circles/lines, discovered only, name on hover */
+/* draw the Run 3 world map on the canvas — free 2D pan, black circles/lines,
+   discovered only, name on hover */
 void render_map(void) {
   int scroll = run3_map_scroll_x();
-  render_map_bg(scroll);
+  int scrollY = run3_map_scroll_y();
+  render_map_bg(scroll, scrollY);
 
-  /* draw each discovered tunnel's ORIGINAL drawn curve, horizontal scroll */
+  /* draw each discovered tunnel's ORIGINAL drawn curve, both axes pan */
   for (int i = 0; i < MAP_TUNNEL_COUNT; i++) {
     if (!run3_map_is_discovered(i)) continue;
     int n = map_wp_n[i];
     if (n < 2) continue;
     const int16_t *w = map_wp[i];
     for (int s = 0; s + 1 < n; s++) {
-      int ax = w[2 * s] + scroll, ay = w[2 * s + 1];
-      int bx = w[2 * s + 2] + scroll, by = w[2 * s + 3];
+      int ax = w[2 * s] + scroll, ay = w[2 * s + 1] + scrollY;
+      int bx = w[2 * s + 2] + scroll, by = w[2 * s + 3] + scrollY;
       if ((ax < -30 && bx < -30) || (ax >= W+30 && bx >= W+30)) continue;
+      if ((ay < -30 && by < -30) || (ay >= H+30 && by >= H+30)) continue;
       if (ax == bx && ay == by) continue;
       draw_line(ax, ay, bx, by, rgb(0,0,0));
     }
@@ -899,6 +1077,7 @@ void render_map(void) {
       int cx, cy;
       run3_map_checkpoint_pos(i, j, &cx, &cy);
       cx += scroll;
+      cy += scrollY;
       if (cx < -12 || cx >= W + 12 || cy < -12 || cy >= H + 12) continue;
       fill_circle(cx, cy, r, rgb(0,0,0));
       stroke_circle(cx, cy, r + 1, rgb(90,90,90));
@@ -916,8 +1095,9 @@ void render_map(void) {
     if (!run3_map_is_discovered(i)) continue;
     const map_node_t *n = &map_nodes[i];
     int nx = n->x + scroll;
-    int ny = n->y;
+    int ny = n->y + scrollY;
     if (nx < -30 || nx >= W + 30) continue;
+    if (ny < -30 || ny >= H + 30) continue;
     int cleared = run3_map_is_cleared(i);
     // black fill, white outline for visibility, gold dot if cleared
     if (i == sel) {
@@ -958,11 +1138,12 @@ void render_map(void) {
       buf[p] = '\0';
       run3_map_checkpoint_pos(hov, hovLvl, &hx, &hy);
       hx += scroll;
+      hy += scrollY;
     } else {
       buf[p] = '\0';
       const map_node_t *hn = &map_nodes[hov];
       hx = hn->x + scroll;
-      hy = hn->y;
+      hy = hn->y + scrollY;
     }
     int tw = text_width(buf, scale);
     int tx = hx - tw/2;
@@ -977,24 +1158,31 @@ void render_map(void) {
 
   /* header — dark ink on parchment */
   draw_text_centered(18, "WORLD MAP", rgb(48,32,16), 0.55);
-  const char *hint = "Horizontal scroll  |  Click discovered tunnel  |  Arrow keys pan";
+  const char *hint = "Drag to pan  |  Click discovered tunnel  |  Arrow keys pan";
   int hw = text_width(hint, 0.32);
   draw_text((W - hw)/2, 48, hint, rgb(96,72,46), 0.32);
-  if (scroll != 0) {
-    char sbuf[24];
+  if (scroll != 0 || scrollY != 0) {
+    /* bottom-right "X: 1234  Y: -56" world offset readout */
+    char sbuf[32];
     sbuf[0]='X'; sbuf[1]=':'; sbuf[2]=' ';
-    int v = scroll;
     int idx = 2;
+    int v = scroll;
     if (v < 0) { sbuf[++idx]='-'; v=-v; }
-    // simple integer
-    int hundreds = (v/100)%10, tens=(v/10)%10, ones=v%10;
-    // skip leading zeros
-    int started=0;
-    if (hundreds) { sbuf[++idx]='0'+hundreds; started=1; }
-    if (tens || started) { sbuf[++idx]='0'+tens; started=1; }
-    sbuf[++idx]='0'+ones;
+    if (v / 10000) sbuf[++idx]='0'+((v/10000)%10);
+    if (v / 1000 || idx > 2) sbuf[++idx]='0'+((v/1000)%10);
+    if (v / 100 || idx > 3) sbuf[++idx]='0'+((v/100)%10);
+    if (v / 10 || idx > 4) sbuf[++idx]='0'+((v/10)%10);
+    sbuf[++idx]='0'+(v%10);
+    sbuf[++idx]=' '; sbuf[++idx]=' ';
+    sbuf[++idx]='Y'; sbuf[++idx]=':'; sbuf[++idx]=' ';
+    int w2 = scrollY;
+    if (w2 < 0) { sbuf[++idx]='-'; w2=-w2; }
+    if (w2 / 1000) sbuf[++idx]='0'+((w2/1000)%10);
+    if (w2 / 100 || idx > 8) sbuf[++idx]='0'+((w2/100)%10);
+    if (w2 / 10 || idx > 9) sbuf[++idx]='0'+((w2/10)%10);
+    sbuf[++idx]='0'+(w2%10);
     sbuf[++idx]='\0';
-    draw_text(W - 100, H - 28, sbuf, rgb(96,72,46), 0.30);
+    draw_text(W - 170, H - 28, sbuf, rgb(96,72,46), 0.30);
   }
 }
 

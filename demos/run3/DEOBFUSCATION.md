@@ -78,6 +78,13 @@ original staged it against; mid-tunnel triggers (`STORY_MID_CUTS`) are the
 checkpoint where the scene fires, with the tunnel it unlocks
 (ComingThrough at Primary-10 unlocks the Skater, etc.).
 
+**Cutscenes are composed by the engine** — a scene has no popup card: the held
+tunnel and the staged cast render full-window exactly as gameplay does, and
+`run3_cut_show` draws the title, the wrapped dialogue and the Continue prompt
+over them. The host keeps only input, timing and audio; the `#cutview` /
+`.cutstage` DOM nodes survive as the click target (and as the text the suites
+read), with no card styling.
+
 **Per-frame staging** — `STORY_TIMELINE` holds, per dialogue frame, the camera
 and every actor's `ring` (tiles around the tube) and `z` (rows ahead of the
 staged camera), plus props. Rows are anchored 6 rows ahead of the camera so a
@@ -95,6 +102,25 @@ view roll directly (`run3_stage_cam`); writing it only into the eased target
 spot (`cam_rot_target()`), not to 0. 78% of baked levels spawn on a wall that
 is not "up", so zeroing the roll made every load visibly rotate the tunnel into
 place and a just-loaded cutscene backdrop show the wrong angle.
+
+**Gameplay camera — facet roll and lateral pan** (`camera-spec.md`) — the
+original keeps the runner upright on the tunnel floor and slides the LEVEL
+around them: the runner never moves on screen (except cutscenes and the
+in-place animation), the tunnel both rotates and pans, and the floor under
+them is level. The port now derives the view roll from the flat chord rather
+than the runner's exact wall point, so it is an exact `-360`°`·side/n` step
+(90° on a square, 60° on a hexagon), eased while steering, frozen while
+airborne (the `gravSide` latch) and blended across a level seam with the same
+`t` as the shape. The camera then translates laterally onto the runner's spot
+*along the chord* and follows the jump / death drift vertically, which lands
+the runner at the fixed low third `(CX, 2H/3)` by construction instead of by
+algebra that cancels; the camera distance is keyed to the facet apothem so the
+framing is rock-steady across a side and identical at every level's tile size.
+The authored per-level `BAKED_ROT` no longer offsets gameplay (it would break
+the exact steps); staged scenes keep their authored `side`/`lift` on top of the
+facet roll. `verify_cam.js` pins the whole contract: exact `360/n` steps
+off-seam, a pan that really sweeps the chord, a zero screen offset in every
+state, and a roll that glides (never steps) on landing.
 
 **Outside the tunnel (`space.c`)** — the original's Space backdrop
 (`com/player03/run3/level/<Space>.as`) constructs exactly three models: a
@@ -120,6 +146,18 @@ shows through the holes and the far opening rather than painted over the wall.
 `run3_space_visible()` / `run3_space_survived()` expose the two counts so a
 suite can prove both that the layer painted and that the tube covered part of
 it (equal counts would mean it was drawn on top).
+
+**World map pan** — the map is a single flat 2D world (`map_nodes` /
+`map_wp` coordinates, x ~55..5760 and y ~40..640 after the extended world was
+authored). It pans freely on BOTH axes now: `run3_map_scroll_xy(dx, dy)` from
+the host's drag / wheel / arrow keys, `run3_map_scroll_x/y` to read it back, and
+`run3_map_center_on(tun)` to put a tunnel's node under the view centre (used
+when a scene gallery replay returns to the map). The background parchment, the
+polylines, the checkpoint dots and the nodes are all drawn in world space with
+the same pan, and the picker adds it back (`map_pick`), so a dot drawn at
+screen `(sx, sy)` is picked at `(sx, sy)`. `verify_map.js` asserts the pan is 2D
+and clamped, that centring makes a node pick at the view centre, and — the
+regression this replaces — that moving EITHER axis alone repaints the frame.
 
 **Engine file layout** — the engine is split so no file owns everything:
 `run3.h` is the host API; `math.c` holds `ssin/scos/ssqrt/satan2/h32` (the wasm
@@ -177,8 +215,15 @@ python3 bake_cutscenes.py              # needs the zip (cutscene data)
 python3 levels/bake_levels.py          # needs levels/orig_levels.bin
 python3 levels/bake_map.py             # needs levels/orig_map.json
 bash build.sh                          # needs ../../zig/zig.exe (or zig on PATH)
-node verify_stage.js && node verify_app.js   # data + full-stack smoke tests
+node verify_levels.js && node verify_hint.js  # data + H-route geometry
+node verify_cam.js && node verify_map.js      # camera contract + 2D map pan
+node verify_stage.js && node verify_app.js    # rendering stages + full-stack smoke
 ```
+
+The suites all run against `run3.wasm` directly (no browser); `verify_app.js`
+boots the real `app.js` behind a minimal DOM stub. `verify_cam.js` and
+`verify_map.js` pin the camera model (`camera-spec.md`) and the free 2D world
+map pan respectively.
 
 ## Not committed / not decoded
 

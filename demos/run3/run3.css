@@ -269,12 +269,15 @@ html, body {
 #cutview {
   cursor: pointer;
   /* staged scenes play in the whole window, exactly like gameplay: the engine
-     renders the tunnel and the cast, so there is no dialog card and no
-     backdrop dimming either. */
+     renders the tunnel, the cast AND the dialogue (full-window), so there is
+     no dialog card, no DOM text and no backdrop dimming. */
   background: none;
   backdrop-filter: none;
   padding: 0;
 }
+/* the engine draws the title, the dialogue and the Continue prompt now; the
+   DOM keeps only the full-window click target (and the text the tests read) */
+.cuttitle, .cutbubble, .cutbar { display: none; }
 .cutstage {
   position: relative;
   width: 100vw;

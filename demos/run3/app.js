@@ -315,9 +315,29 @@
       return [{ m: "New hints unlocked! Replay the Coordination Challenges to view them.", small: false, x: 0, y: 120 }];
     return CUT[name] || null;
   }
-  /* Positioned-bubble cutscene viewer, staged like the original: the held
-     tunnel renders behind (S_CUT / S_GATE) and the cast is placed inside it
-     by the staged-cast player above — the bubble keeps its authored spot. */
+  /* The cutscene is composed by the ENGINE, full-window: the held tunnel and
+     the cast render behind, and the engine draws the title, the dialogue and
+     the Continue prompt over them. The DOM nodes below keep only the click
+     target (and their text, which the tests read) — nothing of the card is
+     visible. */
+  function cutWriteStr(ptr, s) {
+    if (!exps || !ptr || !exps.memory) return;
+    var n = Math.min(s.length, 500);
+    var mem = new Uint8Array(exps.memory.buffer, ptr, n + 1);
+    for (var i = 0; i < n; i++) mem[i] = s.charCodeAt(i) & 0xff;
+    mem[n] = 0;
+  }
+  function cutShow(title, text, y, small, step, total) {
+    try {
+      if (!exps || !exps.run3_cut_show) return;
+      cutWriteStr(exps.run3_cut_title_buf(), title || "");
+      cutWriteStr(exps.run3_cut_text_buf(), text || "");
+      exps.run3_cut_show(y, small, -1, step, total, 1);
+    } catch (e) {}
+  }
+  function cutShowOff() {
+    try { if (exps && exps.run3_cut_show) exps.run3_cut_show(0, 0, -1, 0, 0, 0); } catch (e) {}
+  }
   function showCutscene(name, cb) {
     var lines = cutLines(name);
     if (!lines || !lines.length) { if (cb) cb(); return; }
@@ -352,6 +372,7 @@
         done = true;
         view.classList.remove("on");
         view.onclick = null;
+        cutShowOff();
         stageClose();
         if (cb) cb();
         return;
@@ -361,6 +382,9 @@
       bub.className = "cutbubble" + (L.small ? " small" : "");
       prog.textContent = (i < lines.length) ? (i + "/" + lines.length) : cutTitle(name);
       place(L);
+      /* the engine draws the visible scene; the DOM above is inert */
+      cutShow(cutTitle(name), L.m, typeof L.y === "number" ? L.y : 120,
+              L.small ? 1 : 0, i, lines.length);
       /* the cast walks to this line's keyframe (custom scenes key on the
          line index, baked ones on the authored dialogue frame) */
       if (stage) {
@@ -698,9 +722,14 @@
       /* drag-to-pan: content follows the cursor */
       var r=cv.getBoundingClientRect();
       var fbx=(cv.width||W)/r.width;
+      var fby=(cv.height||H)/r.height;
       var ddx=Math.round((e.clientX-pointer.lx)*fbx);
+      var ddy=Math.round((e.clientY-pointer.ly)*fby);
       pointer.lx=e.clientX; pointer.ly=e.clientY;
-      if (ddx!==0) { try { exps.run3_map_scroll(ddx); } catch(err) {} }
+      if (ddx!==0 || ddy!==0) {
+        try { if (exps.run3_map_scroll_xy) exps.run3_map_scroll_xy(ddx,ddy); else exps.run3_map_scroll(ddx); }
+        catch(err) {}
+      }
     }
     if (st === 6 && exps.run3_map_hover) {
       var c2 = canvasCoords(e);
@@ -719,7 +748,7 @@
         var sfx = locked ? " (locked)" : (clearedH ? " (mapped)" : " (unlocked)");
         document.getElementById("status").textContent = name + sfx + " — " + (t?t.lore:"");
       } else {
-        document.getElementById("status").textContent = T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped — scroll to pan, click a checkpoint to play";
+        document.getElementById("status").textContent = T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped — drag or scroll to pan, click a checkpoint to play";
       }
     }
   });
@@ -727,11 +756,20 @@
     var st = exps ? exps.run3_state() : -1;
     if (st === 6 && exps.run3_map_scroll) {
       e.preventDefault();
-      // 1D horizontal scroll, inverted — use deltaX if present, else deltaY
-      var dx = 0;
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) dx = e.deltaX > 0 ? -30 : 30;
-      else dx = e.deltaY > 0 ? -30 : 30;
-      try { exps.run3_map_scroll(dx); } catch(err) {}
+      // inverted pan: wheel pans horizontally (the map is wide); Shift+wheel or
+      // a trackpad's own deltaY pans vertically, a trackpad deltaX horizontally
+      var dx = 0, dy = 0;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        dx = e.deltaX > 0 ? -30 : 30;
+      } else if (e.shiftKey) {
+        dy = e.deltaY > 0 ? -30 : 30;
+      } else if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        dx = e.deltaY > 0 ? -30 : 30;
+      }
+      if (dx||dy) {
+        try { if (exps.run3_map_scroll_xy) exps.run3_map_scroll_xy(dx,dy); else exps.run3_map_scroll(dx); }
+        catch(err) {}
+      }
     }
   }, {passive:false});
   cv.addEventListener("pointerup",function(e){
@@ -791,11 +829,16 @@
   window.addEventListener("keydown",function(e){
     var c=e.code;
     var stMap = exps?exps.run3_state():-1;
-    // map: 1D horizontal scroll with arrows/horizontal wheel (inverted)
+    // map: 2D pan with the arrow keys / WASD (content follows the keys)
     if(stMap===6){
-      if(c==="ArrowLeft"||c==="KeyA"){ e.preventDefault(); try{exps.run3_map_scroll(30);}catch(x){} return; }
-      if(c==="ArrowRight"||c==="KeyD"){ e.preventDefault(); try{exps.run3_map_scroll(-30);}catch(x){} return; }
-      if(c==="ArrowUp"||c==="KeyW"||c==="ArrowDown"||c==="KeyS"){ e.preventDefault(); try{exps.run3_map_scroll(c==="ArrowUp"||c==="KeyW"?30:-30);}catch(x){} return; }
+      /* 2D pan: left/right move x, up/down move y (content follows the keys) */
+      var mdx=(c==="ArrowLeft"||c==="KeyA")?30:((c==="ArrowRight"||c==="KeyD")?-30:0);
+      var mdy=(c==="ArrowUp"||c==="KeyW")?30:((c==="ArrowDown"||c==="KeyS")?-30:0);
+      if(mdx||mdy){
+        e.preventDefault();
+        try{ if(exps.run3_map_scroll_xy) exps.run3_map_scroll_xy(mdx,mdy); else exps.run3_map_scroll(mdx); }catch(x){}
+        return;
+      }
     }
     if(c==="Space"||c==="ArrowUp"||c==="KeyW"){
       e.preventDefault();
@@ -885,7 +928,7 @@
     var back = function () {
       lastState = -1;
       try {
-        if (ret === 6) { exps.run3_enter_map(); syncAllToWasm(); }
+        if (ret === 6) { exps.run3_enter_map(); if (st && exps.run3_map_center_on) exps.run3_map_center_on(st.tun); syncAllToWasm(); }
         else if (ret === 7) { exps.run3_enter_menu(); }
         else if (exps.run3_cutscene_resume) exps.run3_cutscene_resume();
       } catch (e2) {}

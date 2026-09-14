@@ -34,12 +34,14 @@
    the frame is finished. */
 static int32_t g_spacePix = 0;
 static int32_t g_spaceSurv = 0;
+static int32_t g_planetPix = 0; /* the planet's own pixels (tests) */
 #define SPACE_MAXPIX 6144
 static int sp_px_idx[SPACE_MAXPIX];
 static uint32_t sp_px_col[SPACE_MAXPIX];
 static int sp_npx = 0;
 int32_t run3_space_visible(void) { return g_spacePix; }
 int32_t run3_space_survived(void) { return g_spaceSurv; }
+int32_t run3_space_planet(void) { return g_planetPix; }
 static void sp_record(int idx, uint32_t col) {
   if (sp_npx < SPACE_MAXPIX) { sp_px_idx[sp_npx] = idx; sp_px_col[sp_npx] = col; sp_npx++; }
 }
@@ -56,8 +58,8 @@ void space_count_visible(void) {
    depth in front of the camera, so a caller can size something by it. */
 static int sproj(double wx, double wy, double wz, double *sx, double *sy, double *d1) {
   double c = scos(G.rot), s = ssin(G.rot);
-  double xr = wx * c - wy * s;
-  double yr = wx * s + wy * c + cam_out;
+  double xr = wx * c - wy * s - cam_x;
+  double yr = wx * s + wy * c - cam_y;
   double cp = scos(cam_pitch), sp = ssin(cam_pitch);
   double d = cam_back + wz;
   double y1 = yr * cp - d * sp;
@@ -181,8 +183,56 @@ static void draw_ghost(int tun, double ang, double wz, double off, uint32_t sky)
   }
 }
 
+/* the planet. In the src Planet is a flat 8-segment disc drawn with vertex
+   COLOURS only (a PositionColorVertex shader, no sampler) and Space.as parents
+   it to the same TunnelSection position as the distant tunnel — so it sits in
+   the direction of a neighbouring tunnel, far outside the player's own tube,
+   and is a shaded disc rather than a textured one. */
+static void draw_planet(double ang, double wz, double rw, uint32_t sky) {
+  double ox = scos(ang) * 22.0, oy = ssin(ang) * 22.0;
+  double csx, csy, cd;
+  if (!sproj(ox, oy, wz, &csx, &csy, &cd)) return;
+  double rad = rw * FOCAL / cd;
+  if (rad < 3.0) return;
+  if (csx < -rad || csx > W + rad || csy < -rad || csy > H + rad) return;
+
+  /* a cool body lit from the upper left, with a thin lit rim */
+  uint32_t base = mixc(rgb(28, 34, 62), sky, 0.20);
+  uint32_t lit = mixc(rgb(118, 150, 210), sky, 0.10);
+  int x0 = (int)(csx - rad), x1 = (int)(csx + rad);
+  int y0 = (int)(csy - rad), y1 = (int)(csy + rad);
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > W - 1) x1 = W - 1;
+  if (y1 > H - 1) y1 = H - 1;
+  int drawn = 0;
+  for (int y = y0; y <= y1; y++) {
+    uint32_t *row = &fb[(uint32_t)y * W];
+    double v = ((double)y - csy) / rad;
+    for (int x = x0; x <= x1; x++) {
+      double u = ((double)x - csx) / rad;
+      double rr = u * u + v * v;
+      if (rr > 1.0) continue;
+      /* Lambert-ish: the surface normal over a sphere seen head on, lit from
+         the upper left; the limb falls off to the dark side */
+      double nz = ssqrt(1.0 - rr);
+      double lm = 0.55 - 0.75 * u - 0.35 * v + 0.25 * nz;
+      if (lm < 0.0) lm = 0.0;
+      if (lm > 1.0) lm = 1.0;
+      uint32_t c = mixc(base, lit, lm * 0.9);
+      if (rr > 0.90) c = mixc(c, rgb(150, 175, 225), 0.35); /* limb brightening */
+      row[x] = c;
+      sp_record(y * W + x, c);
+      drawn++;
+    }
+  }
+  g_spacePix += drawn;
+  g_planetPix = drawn;
+}
+
 void space_outer(void) {
   g_spacePix = 0; /* the frame's space pixels are counted from here */
+  g_planetPix = 0;
   sp_npx = 0;
   int cur = (int)G.tun;
   if (cur < 0 || cur >= (int)NTUNNELS) return;
@@ -216,16 +266,23 @@ void space_outer(void) {
   if (rrad < 0.05) rrad = 0.05;
   uint32_t sky = g_sky;
 
+  /* Each branch sits at its OWN map position, not on a ring: the direction
+     comes straight from its map node and both the distance out from the axis
+     and the depth grow with its real map distance, so the nearest tunnel is
+     the biggest and the ones further along the map recede. Space.as moves the
+     Planet and the Wormhole onto the same TunnelSection position, so the
+     planet hangs out past the nearest branch. */
   for (int i = 0; i < SPACE_GHOSTS; i++) {
     int t = best[i];
     if (t < 0) continue;
     int nx, ny;
     run3_map_checkpoint_pos(t, 0, &nx, &ny);
     double ang = satan2((double)(cy - ny), (double)(nx - cx));
-    /* stagger the ring and the depth so four branches do not stack */
-    double off = (1.6 + 1.5 * (double)i) * rrad;
-    double wz = 3.0 * view_z + 0.8 * (double)i * view_z;
+    double md = bestD[i];
+    double off = (1.8 + 2.4 * md / 120.0) * rrad;
+    double wz = 2.6 * view_z + (md / 90.0) * view_z;
     draw_ghost(t, ang, wz, off, sky);
+    if (i == 0) draw_planet(ang, wz + 9.0 * view_z, rrad * 3.2, sky);
   }
 }
 

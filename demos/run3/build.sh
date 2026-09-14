@@ -23,22 +23,26 @@ fi
   -Wl,--export=run3_side -Wl,--export=run3_lane -Wl,--export=run3_ring \
   -Wl,--export=run3_row -Wl,--export=run3_rowf -Wl,--export=run3_level_rows -Wl,--export=run3_rot -Wl,--export=run3_rot_at \
   -Wl,--export=run3_runner_rad -Wl,--export=run3_runner_offset \
+  -Wl,--export=run3_runner_world -Wl,--export=run3_runner_world_x -Wl,--export=run3_runner_world_y -Wl,--export=run3_runner_lift -Wl,--export=run3_runner_screen \
+  -Wl,--export=run3_cam_x -Wl,--export=run3_cam_y -Wl,--export=run3_cam_back -Wl,--export=run3_cam_off \
+  -Wl,--export=run3_roll_step -Wl,--export=run3_roll_is_facet -Wl,--export=run3_jump -Wl,--export=run3_scratch \
   -Wl,--export=run3_tile -Wl,--export=run3_solid -Wl,--export=run3_tile_tex -Wl,--export=run3_tile_hit \
-  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_sky -Wl,--export=run3_sky_visible -Wl,--export=run3_space_visible -Wl,--export=run3_space_survived \
+  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_sky -Wl,--export=run3_sky_visible -Wl,--export=run3_space_visible -Wl,--export=run3_space_survived -Wl,--export=run3_space_planet \
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
   -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_backdrop_end -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
   -Wl,--export=run3_cutscene_resume -Wl,--export=run3_level_color0 -Wl,--export=run3_level_color1 -Wl,--export=run3_level_music -Wl,--export=run3_stage_cam -Wl,--export=run3_dislodged -Wl,--export=run3_is_inf \
   -Wl,--export=run3_stage_liftf -Wl,--export=run3_stage_sidef \
+  -Wl,--export=run3_cut_title_buf -Wl,--export=run3_cut_text_buf -Wl,--export=run3_cut_show -Wl,--export=run3_cut_chars \
   -Wl,--export=run3_stage_actor -Wl,--export=run3_stage_prop \
   -Wl,--export=run3_mid_arm -Wl,--export=run3_mid_clear -Wl,--export=run3_gate_resume \
-  -Wl,--export=run3_hint_toggle -Wl,--export=run3_hint_on -Wl,--export=run3_hint_count -Wl,--export=run3_hint_row -Wl,--export=run3_hint_ring \
+  -Wl,--export=run3_hint_toggle -Wl,--export=run3_hint_on -Wl,--export=run3_hint_count -Wl,--export=run3_hint_row -Wl,--export=run3_hint_ring -Wl,--export=run3_hint_env \
   -Wl,--export=run3_enter_map -Wl,--export=run3_map_click -Wl,--export=run3_map_hover \
-  -Wl,--export=run3_map_scroll -Wl,--export=run3_map_scroll_y -Wl,--export=run3_map_scroll_x -Wl,--export=run3_map_scroll_delta -Wl,--export=run3_map_selected \
+  -Wl,--export=run3_map_scroll -Wl,--export=run3_map_scroll_xy -Wl,--export=run3_map_scroll_y -Wl,--export=run3_map_scroll_x -Wl,--export=run3_map_scroll_delta -Wl,--export=run3_map_center_on -Wl,--export=run3_map_selected \
   -Wl,--export=run3_map_hovered -Wl,--export=run3_map_set_hover \
   -Wl,--export=run3_map_set_locked -Wl,--export=run3_map_set_cleared \
   -Wl,--export=run3_map_is_locked -Wl,--export=run3_map_is_cleared -Wl,--export=run3_map_is_discovered -Wl,--export=run3_map_sync_state \
-  -Wl,--export=run3_map_checkpoint_count -Wl,--export=run3_map_hover_level -Wl,--export=run3_map_selected_level -Wl,--export=run3_map_set_hover_level \
+  -Wl,--export=run3_map_checkpoint_count -Wl,--export=run3_map_checkpoint_pos -Wl,--export=run3_map_node_pos -Wl,--export=run3_map_hover_level -Wl,--export=run3_map_selected_level -Wl,--export=run3_map_set_hover_level \
   -Wl,--export=run3_map_set_best -Wl,--export=run3_map_best \
   -Wl,--export=run3_enter_menu -Wl,--export=run3_menu_click -Wl,--export=run3_menu_hover \
   -Wl,--export=run3_menu_select_char -Wl,--export=run3_menu_char -Wl,--export=run3_set_char_count \

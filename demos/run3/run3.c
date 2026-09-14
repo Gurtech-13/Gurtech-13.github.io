@@ -56,12 +56,19 @@ static double g_glimpseLeft = 0.0; /* rows left of a glimpse flash */
 static uint32_t g_col0 = 0, g_col1 = 0;
 static int g_mus = 0;
 static double g_rotOff = 0.0;      /* authored camera roll offset (rad) */
+/* roll quantization (camera-spec.md): while the player is steering the roll
+   eases onto the next facet so a 360/n step is not a one-frame jerk; the
+   moment the steering settles it snaps to the exact facet angle */
+#define ROLL_EASE_RATE 12.0  /* roll ease onto the next facet (per second) */
+#define ROLL_SNAP_FRAC 0.012 /* snap when the residual is this fraction of a step */
+#define ROLL_MAX_RATE  6.0   /* hard cap on how fast the view may turn (rad/s) */
 static int g_trigIdx = 0;          /* next power trigger to fire */
 static double g_prevProg = 0.0;    /* last prog seen (glimpse row clock) */
 /* staged scene camera, continuous: side -1..1 (pan/roll), lift -1..1
    (height); the host eases both, so they are never quantised */
 static double g_stageSide = 0.0, g_stageLift = 0.0;
 static double cam_rot_target(void); /* view roll for the current position */
+static void cam_place(void);        /* place the camera for the current frame */
 void run3_stage_cam(double side, double lift) {
   if (side < -1.0) side = -1.0;
   if (side > 1.0) side = 1.0;
@@ -73,10 +80,13 @@ void run3_stage_cam(double side, double lift) {
      for gameplay and for S_GATE, but a staged scene (S_CUT) is rendered
      without stepping the sim, so the side offset used to be dropped and every
      cutscene kept the tunnel's own roll — the wrong camera angle. In
-     S_GATE run3_step owns the roll; leave it alone there. */
+     S_GATE run3_step owns the roll; leave it alone there. A staged scene also
+     keeps the AUTHORED per-level roll offset (gameplay drops it so the floor
+     is exactly level); the runner's pin does not apply in a cutscene. */
   if (G.state == S_CUT) {
-    G.rot = cam_rot_target() - g_stageSide * 0.28;
+    G.rot = cam_rot_target() + g_rotOff - g_stageSide * 0.28;
     G.rotT = G.rot;
+    cam_place();
   }
 }
 double run3_stage_liftf(void) { return g_stageLift; }
@@ -616,6 +626,7 @@ static void open_level(int lvl) {
      the roll made every level load visibly spin the tunnel into place (and a
      staged cutscene that had just loaded a level showed the wrong angle). */
   G.rot = G.rotT = cam_rot_target();
+  cam_place();
   G.input = 0.0;
   G.animT = 0.0;
   G.landT = 0.0;
@@ -810,9 +821,51 @@ int run3_tile_hit(int rowAbs, double ring) { return tile_hit(rowAbs, ring); }
    pre-planned line). */
 #define HINT_MAX 600
 #define HINT_COLS (MAXN * MAXK)
-#define HINT_MAXDC 2     /* lanes of drift over one row of running */
-#define HINT_LEAP 8      /* rows a jump can clear */
-#define HINT_LEAPDC 6    /* lanes of drift available inside a jump */
+/* The guide must only plan moves the player can actually EXECUTE, so the
+   envelope is DERIVED from the runner's own physics instead of guessed:
+     running: lanes/row  = lateral speed / forward speed
+     leaping: rows       = airtime * forward speed  (the jump is ballistic, so
+                           its length is set by the airtime, not by the level)
+              lanes      = airtime * lateral speed
+   LEAP_ROW_MIN is the one measured exception, and it is a property of the DP's
+   grid rather than of the runner: the plan's row axis is one forward row, but
+   the follower tracks it with the eased steering ramp (STEER_EASE), so a plan
+   that steps ONE lane per row asks for a sustained lateral speed the runner
+   cannot hold — measured on the Side Path F levels, the follower clears 0/6 at
+   a 1-lane allowance and 6/6 at 2. The lateral step therefore stays at 2: the
+   coarser step is what makes the plan TRACKABLE, which is the whole point of
+   the guide. The leap numbers have no such fudge — they are pure ballistics. */
+#define HINT_MAXDC_CAP 4  /* hard caps so a freak level cannot blow the DP up */
+#define HINT_LEAP_CAP 24
+#define HINT_LEAPDC_CAP 24
+#define HINT_LANE_MIN 2   /* lanes/row floor: a 1-lane plan cannot be tracked */
+static void hint_envelope(int *maxdc, int *leap, int *leapdc) {
+  int cm = char_idx();
+  double fwd = G.rowsPer * SPEED_MUL * CHAR_FWD[cm]; /* rows/s */
+  if (!(fwd > 0.05)) fwd = 0.05;
+  double lat = LATSPD * CHAR_LAT[cm];                /* lanes/s */
+  double grav = GRAV * CHAR_GRAV[cm];
+  if (!(grav > 0.05)) grav = 0.05;
+  double air = 2.0 * (JUMPV * CHAR_JUMP[cm]) / grav; /* s airborne */
+  int d = (int)(lat / fwd + 0.5);
+  int l = (int)(air * fwd + 0.5);
+  int dl = (int)(air * lat + 0.5);
+  if (d < HINT_LANE_MIN) d = HINT_LANE_MIN;
+  if (d > HINT_MAXDC_CAP) d = HINT_MAXDC_CAP;
+  if (l < 2) l = 2;
+  if (l > HINT_LEAP_CAP) l = HINT_LEAP_CAP;
+  if (dl < 1) dl = 1;
+  if (dl > HINT_LEAPDC_CAP) dl = HINT_LEAPDC_CAP;
+  *maxdc = d; *leap = l; *leapdc = dl;
+}
+/* the planner's envelope for the runner's current physics (test seam) */
+void run3_hint_env(double *maxdc, double *leap, double *leapdc) {
+  int d, l, dl;
+  hint_envelope(&d, &l, &dl);
+  if (maxdc) *maxdc = d;
+  if (leap) *leap = l;
+  if (leapdc) *leapdc = dl;
+}
 
 static int g_hintRow[HINT_MAX];
 static float g_hintRing[HINT_MAX];
@@ -840,6 +893,8 @@ static int hint_solid(int col, int rowAbs, int n, int k, int avoidCrumb) {
 #define HINT_JUMPPEN 4
 static int hint_pass(int r0, int R, int n, int k, int c0, int avoidCrumb) {
   int N = n * k;
+  int envDc, envLeap, envLeapDc;
+  hint_envelope(&envDc, &envLeap, &envLeapDc);
   for (int ro = 0; ro < R; ro++)
     for (int c = 0; c < N; c++) { h_prev[ro][c] = 0; h_cost[ro][c] = (int16_t)HINT_INF; }
   h_cost[0][c0] = 0;
@@ -852,7 +907,7 @@ static int hint_pass(int r0, int R, int n, int k, int c0, int avoidCrumb) {
       if (base >= HINT_INF) continue;
       if (ro > best) best = ro;
       if (ro + 1 < R) {
-        for (int dc = -HINT_MAXDC; dc <= HINT_MAXDC; dc++) {
+        for (int dc = -envDc; dc <= envDc; dc++) {
           int nc = c + dc; while (nc < 0) nc += N; while (nc >= N) nc -= N;
           int ncost = base + 1;
           if (ncost >= h_cost[ro + 1][nc]) continue;
@@ -861,8 +916,8 @@ static int hint_pass(int r0, int R, int n, int k, int c0, int avoidCrumb) {
           h_prev[ro + 1][nc] = (int32_t)(ro * HINT_COLS + c + 1);
         }
       }
-      for (int d = 2; d <= HINT_LEAP && ro + d < R; d++) {
-        for (int dc = -HINT_LEAPDC; dc <= HINT_LEAPDC; dc++) {
+      for (int d = 2; d <= envLeap && ro + d < R; d++) {
+        for (int dc = -envLeapDc; dc <= envLeapDc; dc++) {
           int nc = c + dc; while (nc < 0) nc += N; while (nc >= N) nc -= N;
           int ncost = base + d + HINT_JUMPPEN;
           if (ncost >= h_cost[ro + d][nc]) continue;
@@ -987,6 +1042,7 @@ void run3_start_inf(void) {
      the camera on the spawn wall straight away (see open_level) */
   g_rotOff = 0.0;
   G.rot = G.rotT = cam_rot_target();
+  cam_place();
   G.input = 0.0;
   G.animT = 0.0;
   G.landT = 0.0;
@@ -1236,16 +1292,44 @@ void run3_step(double dt) {
     }
   }
 
-  /* The camera is bolted to the runner: the roll is not eased toward a
-     latched wall but taken straight from the runner's own position on the
-     tube, which is already a continuous function of it. Easing a target like
-     this only ever made the runner slide on screen and then snap when the
-     tube changed around them. Because the target is continuous, copying it
-     every step is smooth AND keeps the runner fixed at centre-bottom. */
+  /* The camera is bolted to the runner and the LEVEL moves around them: the
+     roll lays the flat facet under them level (an exact -360*side/n, so 90 deg
+     steps on a square), the camera pans laterally onto their spot along that
+     chord, and it follows the jump / death drift vertically. The runner is
+     pinned at the low third by construction. While airborne the roll is
+     FROZEN (see below) and while steering it eases onto the next facet, so the
+     step is never a one-frame jerk. */
   double target2 = cam_rot_target();
   if (G.state == S_CUT || G.state == S_GATE) target2 += -g_stageSide * 0.28;
-  G.rot = target2;
+  if (G.state == S_RUN && (G.jump > 0.0 || G.jv > 0.0)) {
+    /* airborne: the roll is FROZEN. gravSide does not follow the wall until a
+       touchdown, so the view cannot flip under the player mid-jump; the target
+       is re-quantized and glided onto the moment they land. */
+  } else {
+    /* Ease onto the facet so the 360/n step is never a one-frame jerk — this
+       covers both steering across a side and the re-quantize on landing — and
+       snap as soon as the residual is a small fraction of a step, so a settled
+       player (and a level load) is EXACTLY upright. */
+    double d = target2 - G.rot;
+    while (d > PI) d -= TAU;
+    while (d <= -PI) d += TAU;
+    double ad = d < 0.0 ? -d : d;
+    double snapAt = run3_roll_step() * ROLL_SNAP_FRAC;
+    if (G.state == S_CUT || ad <= snapAt) {
+      G.rot = target2;
+    } else {
+      double ease = ROLL_EASE_RATE * dt;
+      if (ease > 0.5) ease = 0.5;
+      double mv = d * ease;
+      /* a cap in rad/s keeps a big re-quantize (e.g. landing a long jump on a
+         different wall) a visible glide rather than a snap */
+      double cap = ROLL_MAX_RATE * dt;
+      if (mv > cap) mv = cap; else if (mv < -cap) mv = -cap;
+      G.rot += mv;
+    }
+  }
   G.rotT = target2;
+  cam_place();
 
   render_frame();
 }
@@ -1274,6 +1358,12 @@ int32_t run3_side(void) { return side_under(); }
 int32_t run3_lane(void) { return lane_under(); }
 int32_t run3_row(void) { return (int32_t)G.prog; }
 double run3_rowf(void) { return G.prog; }
+/* the runner's height above the wall (test seam) */
+double run3_jump(void) { return G.jump; }
+/* pointer a host test can pass to the exports that write doubles back (test
+   seam; wasm has no way to hand a caller a JS array) */
+static double g_scratch[32];
+double *run3_scratch(void) { return g_scratch; }
 double run3_level_rows(void) { return G.rowEnd - G.rowStart; }
 double run3_ring(void) { return G.ring; }
 /* the view roll the current frame renders with (test seam) */
@@ -1328,17 +1418,14 @@ uint32_t run3_level_color0(void) { return g_col0; }
 uint32_t run3_level_color1(void) { return g_col1; }
 int32_t run3_level_music(void) { return g_mus; }
 
-/* the runner's distance from the tube axis, i.e. how far below the camera
-   they stand. It is the circumradius only at a corner, so the pitch below is
-   solved from this rather than from the tube's nominal radius: the runner's
-   feet hold the same row on screen the whole way round a side. */
+/* the runner's distance from the tube axis (the hint dots and the framing
+   solver use it) */
 double run3_runner_rad(void) {
   double px, py;
   runner_wall_pt(&px, &py);
-  /* runner_wall_pt is on the UNIT n-gon (the roll only needs its angle), so
-     scale it by the radius of the tube row the runner is standing on — the
-     same blended radius the renderer draws. That is what makes the camera
-     distance follow the level's own tile width. */
+  /* runner_wall_pt is on the UNIT n-gon, so scale it by the radius of the tube
+     row the runner is standing on — the same blended radius the renderer
+     draws. */
   double len = ssqrt(px * px + py * py);
   rowcross_t xc;
   if (run3_row_cross((int)G.prog, &xc)) {
@@ -1349,23 +1436,141 @@ double run3_runner_rad(void) {
 }
 /* the runner's wall point in tube space (test seam / renderer) */
 void run3_runner_pt(double *px, double *py) { runner_wall_pt(px, py); }
-/* test seam: the runner's distance from the screen centre line after the
-   camera roll. The camera is bolted to the runner, so this is always 0 —
-   the runner never moves horizontally on screen, only the level does. */
-double run3_runner_offset(void) {
-  double px, py;
-  runner_wall_pt(&px, &py);
-  double c = scos(G.rot), s = ssin(G.rot);
-  return px * c - py * s;
+
+/* ---- camera model (camera-spec.md) ------------------------------------
+   The camera is bolted to the runner in every sense:
+     * ORIENTATION: the roll is quantized to the flat facet under them, so the
+       floor is horizontal and the runner is UPRIGHT. For an n-sided tunnel the
+       roll is an exact multiple of 360/n — 90-degree steps for a square, 60
+       for a hexagon — never in between (except while the shape itself is
+       mid-morph, where the two angles are blended across the seam).
+     * POSITION: panned laterally onto the runner's own spot on that facet, so
+       they never leave centre-x, and raised with their jump, so a jump does
+       not move them on screen either. It is the TUNNEL that rotates, pans,
+       rises and morphs around them.
+     * DISTANCE: a multiple of the facet APOTHEM, so the framing is identical
+       halfway along a side and at a corner, and in a 0.3-tile level as in a
+       3.0-tile one.                                                    */
+#define CAM_BACK 1.25 /* camera distance behind the runner plane, in apothems */
+#define CAM_OUT  0.35 /* camera offset from the runner toward the axis */
+static double g_camX = 0.0, g_camY = 0.0;   /* camera in the rolled view frame */
+static double g_camBack = 0.0, g_camOff = 0.0;
+static double g_runRx = 0.0, g_runRy = 0.0; /* the runner, rolled */
+
+/* the side the roll is quantized to. gravSide only follows the wall on a
+   touchdown, so the roll is FROZEN while airborne and re-quantized on landing */
+static int roll_side(void) { return (int)G.gravSide; }
+/* shortest-path angle interpolation (the two facets can straddle ±PI) */
+static double ang_lerp(double a, double b, double t) {
+  double d = b - a;
+  while (d > PI) d -= TAU;
+  while (d <= -PI) d += TAU;
+  return a + d * t;
 }
-/* the view roll the camera holds at the current position (the same target
-   the runner's camera eases toward in run3_step). Rolled so the runner's own
-   wall point points straight down: the runner is always dead centre on
-   screen, and the tunnel turns around them. */
+/* the view roll the camera holds at the current position: the facet under the
+   runner laid flat. Side s of an n-gon has its midpoint at -PI/2 + TAU*s/n, so
+   laying that side down is exactly -TAU*s/n — the 360/n step. Across a
+   cross-section change the two quantized angles are blended by the same t the
+   shape morph uses, so the camera turns with the ring. The authored per-level
+   roll offset is deliberately NOT applied in gameplay: the floor must be
+   exactly level. */
 static double cam_rot_target(void) {
-  double px, py;
-  runner_wall_pt(&px, &py);
-  return -PI / 2.0 - satan2(py, px) + g_rotOff;
+  int n = G.shape > 0 ? G.shape : 1;
+  int k = G.k > 0 ? G.k : 1;
+  double t = -TAU * (double)roll_side() / (double)n;
+  rowcross_t xc;
+  if (run3_row_cross((int)G.prog, &xc) && xc.bn > 0 && xc.t > 0.0) {
+    double r2 = ring_remap(G.ring, n, k, xc.bn, xc.bk);
+    int s2 = wrap_side(r2, xc.bk, xc.bn);
+    t = ang_lerp(t, -TAU * (double)s2 / (double)xc.bn, xc.t);
+  }
+  return t;
+}
+/* the runner's point in tube space, in world units, on the blended shape that
+   is actually drawn for their row */
+void run3_runner_world(double *px, double *py) {
+  double ux, uy;
+  runner_wall_pt(&ux, &uy);
+  double R = xsec_R(G.shape, G.k, G.tile);
+  rowcross_t xc;
+  if (run3_row_cross((int)G.prog, &xc)) R = xc.R + (xc.bR - xc.R) * xc.t;
+  if (px) *px = ux * R;
+  if (py) *py = uy * R;
+}
+/* the facet apothem of the runner's row (blended): the perpendicular distance
+   from the axis to the floor they stand on */
+static double runner_apothem(void) {
+  rowcross_t xc;
+  if (run3_row_cross((int)G.prog, &xc)) {
+    double a0 = xc.R * scos(PI / (double)xc.n);
+    if (xc.bn > 0 && xc.t > 0.0) {
+      double a1 = xc.bR * scos(PI / (double)xc.bn);
+      return a0 + (a1 - a0) * xc.t;
+    }
+    return a0;
+  }
+  int n = G.shape > 0 ? G.shape : 1;
+  return xsec_R(G.shape, G.k, G.tile) * scos(PI / (double)n);
+}
+/* the runner's vertical world offset this frame: the jump (or the fall out of
+   the tunnel) plus the landing bob. The camera follows it one-for-one, so the
+   runner holds their screen row and the tunnel does the moving. */
+#define LAND_BOB_AMP 0.030 /* world units of the touchdown dip */
+double run3_runner_lift(void) {
+  if (G.state == S_DEAD) {
+    double dd = G.fallT;
+    if (dd > VOID_TIME) dd = VOID_TIME;
+    return 0.02 - dd * 1.1;
+  }
+  double lift = 0.02 + G.jump;
+  if (G.landT > 0.0) {
+    double p = G.landT / 0.25;
+    if (p > 1.0) p = 1.0;
+    lift -= LAND_BOB_AMP * p * p;
+  }
+  return lift;
+}
+/* place the camera for the current runner position (see the model above) */
+static void cam_place(void) {
+  double apo = runner_apothem();
+  if (apo < 0.02) apo = 0.02;
+  g_camBack = CAM_BACK * apo;
+  g_camOff = (1.0 - CAM_OUT) * apo;
+  double Px, Py;
+  run3_runner_world(&Px, &Py);
+  double c = scos(G.rot), s = ssin(G.rot);
+  g_runRx = Px * c - Py * s;
+  g_runRy = Px * s + Py * c;
+  g_camX = g_runRx;                        /* lateral pan: runner dead centre */
+  g_camY = g_runRy + g_camOff + run3_runner_lift();
+}
+double run3_cam_x(void) { return g_camX; }
+double run3_cam_y(void) { return g_camY; }
+double run3_cam_back(void) { return g_camBack; }
+double run3_cam_off(void) { return g_camOff; }
+double run3_runner_world_x(void) { return g_runRx; }
+double run3_runner_world_y(void) { return g_runRy; }
+/* test seam: how far the runner sits off the camera's own centre line. The pan
+   is derived from exactly this point, so it is zero in every frame — which is
+   the point: a camera left on the axis (no pan) fails here. */
+double run3_runner_offset(void) {
+  double Px, Py;
+  run3_runner_world(&Px, &Py);
+  double c = scos(G.rot), s = ssin(G.rot);
+  return Px * c - Py * s - g_camX;
+}
+/* the quantized roll step for the current cross-section: 360/n degrees */
+double run3_roll_step(void) {
+  int n = G.shape > 0 ? G.shape : 1;
+  return TAU / (double)n;
+}
+/* 1 when the view roll is exactly a facet angle (runner exactly upright) */
+int run3_roll_is_facet(void) {
+  double step = run3_roll_step();
+  if (step <= 0.0) return 0;
+  double q = G.rot / step;
+  double r = q - (double)(long long)(q < 0.0 ? q - 0.5 : q + 0.5);
+  return (r < 1e-7 && r > -1e-7) ? 1 : 0;
 }
 /* cutscene staging: hold a tunnel frame behind the dialogue overlay.
    hold() freezes the just-finished tunnel (end cutscenes); backdrop()
@@ -1400,6 +1605,7 @@ static void backdrop_at(int32_t tunIdx, int32_t lvl, int atEnd) {
   G.rot = G.rotT = cam_rot_target();
   G.state = S_CUT;
   g_stageSide = 0; g_stageLift = 0;
+  cam_place();
 }
 void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl) {
   backdrop_at(tunIdx, lvl, 0);
@@ -1444,18 +1650,38 @@ void run3_set_char_count(int n) { if (n > 0) menu_char_count = n; }
 int  run3_menu_char(void) { return menu_char; }
 void run3_menu_select_char(int c) { if (c >= 0 && c < menu_char_count) menu_char = c; }
 
-int run3_map_scroll_y(void) { return map_scroll_x; }
+int run3_map_scroll_y(void) { return map_scroll_y; }
 int run3_map_scroll_x(void) { return map_scroll_x; }
-void run3_map_scroll(int dx) {
-  map_scroll_x += dx;
-  /* 1D horizontal scroll — the original map spans screen x ~55..3400; the
-     extended world (Wormhole X and its branches) runs out past 6200, with
-     Far Drift's tail the furthest point */
-  if (map_scroll_x < -6400) map_scroll_x = -6400;
-  if (map_scroll_x > 200) map_scroll_x = 200;
-  map_scroll_y = map_scroll_x; // keep y in sync for legacy
+/* clamp the pan so the map cannot be thrown entirely out of view */
+#define MAP_CLAMP_X 6400
+#define MAP_CLAMP_Y 640
+static int clamp_scroll(int v, int lim) {
+  if (v < -lim) return -lim;
+  if (v > lim) return lim;
+  return v;
 }
-void run3_map_scroll_delta(int dx) { run3_map_scroll(dx); }
+void run3_map_scroll2(int dx, int dy) {
+  /* 2D pan. The original map spans x ~55..3400 and the extended world
+     (Wormhole X and its branches) runs out past 6200, with Far Drift's tail
+     the furthest point; y is the map's own vertical extent. Both axes are
+     clamped so the map cannot be thrown entirely out of view. */
+  map_scroll_x = clamp_scroll(map_scroll_x + dx, MAP_CLAMP_X);
+  map_scroll_y = clamp_scroll(map_scroll_y + dy, MAP_CLAMP_Y);
+}
+/* both axes (drag / wheel / WASD path) */
+void run3_map_scroll_xy(int dx, int dy) { run3_map_scroll2(dx, dy); }
+/* horizontal-only pan (legacy path) */
+void run3_map_scroll(int dx) { run3_map_scroll2(dx, 0); }
+void run3_map_scroll_delta(int dx) { run3_map_scroll2(dx, 0); }
+/* centre the view on a tunnel (used when a level finishes and the map opens).
+   The framebuffer is 1280x720 in render.c; the map is drawn there. */
+#define MAP_VIEW_CX 640
+#define MAP_VIEW_CY 360
+void run3_map_center_on(int tun) {
+  if (tun < 0 || tun >= MAP_TUNNEL_COUNT) return;
+  map_scroll_x = clamp_scroll(MAP_VIEW_CX - map_nodes[tun].x, MAP_CLAMP_X);
+  map_scroll_y = clamp_scroll(MAP_VIEW_CY - map_nodes[tun].y, MAP_CLAMP_Y);
+}
 
 /* ---- checkpoints: every level of a continuous tunnel shows on the map ----
    Checkpoints are spaced evenly along the tunnel's ORIGINAL drawn polyline
@@ -1476,6 +1702,14 @@ void run3_map_set_best(int tun, int best) {
 int run3_map_best(int tun) {
   if (tun < 0 || tun >= MAX_TUNNELS) return 0;
   return map_best[tun];
+}
+
+/* the tunnel's own map node (path start), un-scrolled. checkpoint_pos(t, -1)
+   is NOT this: a negative lvl clamps to the first checkpoint dot. */
+void run3_map_node_pos(int tun, int *x, int *y) {
+  if (tun < 0 || tun >= MAP_TUNNEL_COUNT) { if (x) *x = 0; if (y) *y = 0; return; }
+  if (x) *x = map_nodes[tun].x;
+  if (y) *y = map_nodes[tun].y;
 }
 
 void run3_map_checkpoint_pos(int tun, int lvl, int *x, int *y) {
@@ -1530,7 +1764,7 @@ static int map_pick(int mx, int my, int *lvlOut) {
   for (int i = 0; i < MAP_TUNNEL_COUNT; i++) {
     if (run3_map_is_locked(i)) continue;
     int nx = map_nodes[i].x + map_scroll_x;
-    int ny = map_nodes[i].y;
+    int ny = map_nodes[i].y + map_scroll_y;
     int dx = mx - nx;
     int dy = my - ny;
     int dd = dx*dx + dy*dy;
@@ -1545,6 +1779,7 @@ static int map_pick(int mx, int my, int *lvlOut) {
       int cx, cy;
       run3_map_checkpoint_pos(i, j, &cx, &cy);
       cx += map_scroll_x;
+      cy += map_scroll_y;
       int dx = mx - cx;
       int dy = my - cy;
       int dd = dx*dx + dy*dy;
@@ -1556,7 +1791,8 @@ static int map_pick(int mx, int my, int *lvlOut) {
   return -1;
 }
 
-/* hit-test: which tunnel node/checkpoint is at canvas coords? Horizontal scroll, discovered only */
+/* hit-test: which tunnel node/checkpoint is at canvas coords? Both scroll
+   axes apply, discovered only */
 int run3_map_hover(int mx, int my) {
   return map_pick(mx, my, 0);
 }
