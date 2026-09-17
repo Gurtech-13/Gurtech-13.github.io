@@ -36,7 +36,7 @@
    wall down the rolled side. The huge coordinates a near-plane projection
    produces are clamped to the framebuffer when the quad is filled, so only
    cull nodes sitting essentially on the plane. */
-#define VIEWPLANE_EPS 0.25
+#define VIEWPLANE_EPS 25.0
 
 static const uint32_t PAL[5][4] = {
   { rgb(10,12,26),  rgb(130,185,255), rgb(64,100,165), rgb(36,58,98) },
@@ -106,13 +106,23 @@ static int g_skyVis = 0;
 static void sky_project(double dx, double dy, double dz, double pitch,
                         double roll, double *sx, double *sy, int *vis) {
   double x = dx * SKY_DIST, y = dy * SKY_DIST, z = dz * SKY_DIST;
+  /* A staged frame draws the sky through the SAME transform as the tube: the
+     original's star sphere is a child of the scene, projected by Scene3D along
+     with everything else, so it takes the authored camera rather than the
+     port's chase-camera model. */
+  double sd;
+  if (stage_view_map(x, y, z, sx, sy, &sd)) {
+    if (sd <= 1.0) { *vis = 0; *sx = 0.0; *sy = 0.0; return; }
+    *vis = 1;
+    return;
+  }
   double c = scos(roll), s = ssin(roll);
   double xr = x * c - y * s - cam_x, yr = x * s + y * c - cam_y;
   double cp = scos(pitch), sp = ssin(pitch);
   double d = cam_back + z;
   double y1 = yr * cp - d * sp;
   double d1 = yr * sp + d * cp;
-  if (d1 <= 1.0) { *vis = 0; *sx = 0.0; *sy = 0.0; return; }
+  if (d1 <= 100.0) { *vis = 0; *sx = 0.0; *sy = 0.0; return; }
   double k = FOCAL / d1;
   *sx = CX + xr * k; *sy = CY - y1 * k; *vis = 1;
 }
@@ -122,8 +132,10 @@ void sky_render(uint32_t base, double pitch, double roll) {
   double cy = scos(sky_yaw), sy = ssin(sky_yaw);
   for (int i = 0; i < SKY_STAR_COUNT; i++) {
     const sky_star_t *st = &sky_stars[i];
-    double dx = 0.01 * (double)st->x, dy = 0.01 * (double)st->y,
-           dz = 0.01 * (double)st->z;
+      /* the baked star direction is the unit vector x 30000, so it is already
+       the sky sphere's radius in world pixels */
+    double dx = (double)st->x, dy = (double)st->y,
+           dz = (double)st->z;
     double wx = dx * cy - dz * sy, wz = dx * sy + dz * cy;
     double sx, syy;
     int vis;
@@ -168,6 +180,21 @@ void sky_count_visible(void) {
 }
 int32_t run3_sky_visible(void) { return g_skyVis; }
 
+/* The frame's projection, exposed for the verifier: where the camera in force
+   puts a world point (and its depth). The suites measure the tube's geometry
+   through this instead of through a drawn sprite, whose box also carries the
+   actor's own tilt (StageActor.updateBillboard) and so cannot be read back as
+   a place in the tunnel. */
+static void proj(double x, double y, double z, double *sx, double *sy, double *dd);
+int stage_view_map(double x, double y, double z, double *sx, double *sy, double *dd);
+static double g_probeX = 0.0, g_probeY = 0.0, g_probeD = 0.0;
+void run3_stage_project(double x, double y, double z) {
+  proj(x, y, z, &g_probeX, &g_probeY, &g_probeD);
+}
+double run3_probe_x(void) { return g_probeX; }
+double run3_probe_y(void) { return g_probeY; }
+double run3_probe_d(void) { return g_probeD; }
+
 /* ==================== PROJECTION ==================== */
 
 /* project a tube-space point through the chase camera (see CAMERA above) */
@@ -178,7 +205,143 @@ static double cam_pitch_for(double off, double back) {
   double x = (off + t * back) / (t * off - back);
   return x - x * x * x / 3.0;
 }
+
+/* ---- STAGED-SCENE CAMERA (the original's model, see run3.c) ----
+   A staged frame draws the level UNROTATED (G.rot = 0) and gives the camera
+   the authored position + quaternion. The view basis is the renderer's own:
+   looks down -z with +y up (Billboard.lookAt orients `position - target` to
+   the camera's -z). The quaternion's ROLL component (its twist about the
+   bore) becomes the view roll, and its pitch/yaw tilt the bore on screen —
+   decomposed the same way `LevelView` reads a camera quaternion back as
+   Euler angles. All of it collapses to identity = straight down the bore. */
+double stage_cam_z = 0.0;      /* the authored bore slide (engine units) */
+double stage_quat[4] = {0.0, 0.0, 0.0, 1.0};
+/* the gauge in force for the frame being drawn (STAGE_GAUGE for an AUTHORED
+   camera, 0 for the fallback path — a scene with no authored camera is shot in
+   the port's own frame, which is already the level's frame with the runner's
+   facet down, so no gauge applies) */
+static double stage_gauged = 0.0;
+/* the gauge actually in force this frame, in radians (host debug/verification
+   seam: it is the number that decides the frame's roll) */
+double run3_stage_gauge(void) { return stage_gauged; }
+/* The port's frame vs the original's. The port's own layout puts side s's
+   midpoint at -PI/2 + TAU*s/n (camera-spec 4.1), while the original indexes
+   sides by the angle of the point turned into the LEVEL's own frame:
+   TunnelLayout3D.getIndexNearest takes `atan2(y, x)` (mirrored: `atan2(y, -x)`)
+   and rounds it by TAU/n, so side s sits at TAU*s/n -- on the +x axis, a
+   quarter turn the other way. GAMEPLAY cannot see the difference: turning the
+   world by a constant and the camera by the same constant is the same picture,
+   which is why the roll only ever pinned the STEPS. A staged frame is viewed
+   through the AUTHORED camera, whose position and rotation are absolute in the
+   original's frame, so the port has to put its own world into that frame --
+   rotate every world offset by +PI/2 about the bore. It moves the cast and the
+   props around the tube but not the tube, which is why the world places read
+   correctly while the shot did not. */
+#define STAGE_GAUGE (PI / 2.0 + PI)
+   /* The gauge is the cross-section QUARTER turn the original's frame needs
+      (`PI/2`) PLUS a HALF TURN — the roll-out the scenes are presented with.
+
+      The quarter turn is the part that matters for correctness and is pinned
+      by verify_stage.js's cross-section assertion: it makes the port's ring
+      index the original's side index, which is what puts an actor placed by
+      `placeAt(ring, row)` on the wall the scene named.
+
+      The half turn on top of it is the scene's own presentation: a frame
+      rolled 180 degrees about the bore, i.e. exactly the 2D rotation of the
+      picture (not a mirror - a mirror would reverse every other turn in the
+      scene too). Its inverse in run3.c is `R(-(PI/2+PI)) = R(PI/2)`, i.e. the
+      camera's pan converts as `(x, y) -> (-y, x)`. The gauge and that inverse
+      have to move TOGETHER: turning the world without turning the camera's
+      own place leaves the camera in a spot the scene never set. */
+/* The inverse of the authored camera's rotation: the quaternion that carries a
+   world offset into the camera's view basis, i.e. the CONJUGATE, applied
+   exactly as the original applies it (`QuaternionUtils.rotateVector`: a child
+   of the camera is turned into the camera's frame by its inverse rotation).
+
+   The whole orientation is carried here rather than decomposed into Euler
+   angles. The bake builds the authored quaternions as `Rx*Ry*Rz`
+   (bake_cutscenes.euler_quat), so the x/y/z Euler components are the angles
+   about x/y/z IN THAT ORDER; reading them back by name and applying each about
+   a different axis (x as the view roll's axis, y about x, z about y) turned a
+   scene's roll about the bore into a tilt ACROSS it -- the bore's tilt about
+   the tunnel axis came out as a tilt of the tunnel. */
+static double st_ux = 0.0, st_uy = 0.0, st_uz = 0.0, st_uw = 1.0;
+/* the roll the space layers and the stars are drawn with (space.c): G.rot in
+   gameplay, the staged frame's own screen roll in a cutscene */
+double view_roll = 0.0;
+
+static void stage_cam_basis(void) {
+  double qx = stage_quat[0], qy = stage_quat[1];
+  double qz = stage_quat[2], qw = stage_quat[3];
+  double n = ssqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+  if (n < 1e-9) { st_ux = st_uy = st_uz = 0.0; st_uw = 1.0; return; }
+  st_ux = -qx / n; st_uy = -qy / n; st_uz = -qz / n; st_uw = qw / n;
+}
+
+/* ---- THE STAGED VIEW TRANSFORM, the original's own, verbatim ----
+   `Scene3D.project` does `view * projection` on the point and then
+   `Vector3D.project()` (divide by w), where the view is
+   `invert(camera.getMatrix3D())` — i.e. `R^-1 * (p - camPos)`, the camera's
+   POSITION subtracted in world axes first (its authored x/y pan and its z are
+   a place in the tunnel, not a screen offset, which is only the same thing
+   while the camera's rotation is identity) and then the offset turned into the
+   view basis: first the quarter-turn gauge (about the bore), then the inverse
+   of the authored rotation, as ONE quaternion turn rather than a pitch/yaw/roll
+   chain.
+
+   The projection is `perspectiveFieldOfViewLH(fovY, surface.width/height, 15,
+   3000)` followed by `appendScale(1,-1,1)`, whose rawData the port's
+   Matrix3D.transformVector3Into4 reads as
+     out.x = (1/tan(fov/2))/aspect * vx
+     out.y = -(1/tan(fov/2)) * vy          <- the appended Y scale
+     out.w = vz                            <- m[11] = 1 (left-handed)
+   and `StageActor.getBounds` turns NDC into pixels with
+     screen = ((ndc.x + 1)/2 * W, (1 - ndc.y)/2 * H).
+   Substituting (FOCAL = H/2/tan(fov/2), and (1/tan)*W/(2*aspect) = H/2/tan):
+     sx = W/2 + vx * FOCAL / vz
+     sy = H/2 + vy * FOCAL / vz
+   — the ORIGINAL's view +y goes DOWN the screen. Gameplay draws the port's own
+   frame (+y up, `sy = CY - y*k`); a staged frame has been mapped into the
+   original's frame by the gauge above, so it must use the original's sign.
+   Subtracting here mirrored the whole shot, and a mirror reverses every
+   rotation: a scene that rolled its camera about the bore came out rolling the
+   other way, which is the tilt-along-the-tunnel-axis error.
+   (The centre is (W/2, H/2) exactly — the gameplay CY offset is the port's own
+   vanishing-point nudge and has no counterpart in the original.)
+
+   Returns 1 for a staged frame, 0 otherwise so the caller can use the port's
+   own chase camera. The tube, the cast, the props, the sky sphere and the
+   space layers ALL come through here: in the original they are children of the
+   one scene and `Scene3D.project` places every one of them. */
+int stage_view_map(double x, double y, double z, double *sx, double *sy, double *dd) {
+  if (G.state != S_CUT && G.state != S_GATE) return 0;
+  double xw = x - cam_x, yw = y - cam_y;
+  double cg = scos(stage_gauged), sg = ssin(stage_gauged);
+  double vx = xw * cg - yw * sg;
+  double vy = xw * sg + yw * cg;
+  double vz = z - stage_cam_z;
+  /* QuaternionUtils.rotateVector(conj(q), v): the standard turn matrix
+     (1-2(y^2+z^2), 2(xy-wz), 2(xz+wy); ... ) on the conjugates above. */
+  double qx = st_ux, qy = st_uy, qz = st_uz, qw = st_uw;
+  double x3 = (1.0 - 2.0 * (qy * qy + qz * qz)) * vx
+            + 2.0 * (qx * qy - qw * qz) * vy
+            + 2.0 * (qx * qz + qw * qy) * vz;
+  double y2 = 2.0 * (qx * qy + qw * qz) * vx
+            + (1.0 - 2.0 * (qx * qx + qz * qz)) * vy
+            + 2.0 * (qy * qz - qw * qx) * vz;
+  double z3 = 2.0 * (qx * qz - qw * qy) * vx
+            + 2.0 * (qy * qz + qw * qx) * vy
+            + (1.0 - 2.0 * (qx * qx + qy * qy)) * vz;
+  double depth = z3;
+  double k = FOCAL / depth;
+  *sx = (double)W / 2.0 + x3 * k;
+  *sy = (double)H / 2.0 + y2 * k;
+  if (dd) *dd = depth;
+  return 1;
+}
+
 static void proj(double x, double y, double z, double *sx, double *sy, double *dd) {
+  if (stage_view_map(x, y, z, sx, sy, dd)) return;
   /* x/y arrive in the rolled view frame; the camera is off the axis (panned
      onto the runner), so subtract its own position first */
   double d = cam_back + z;
@@ -258,8 +421,8 @@ static int anim_state_from_game(void) {
   if (G.state == S_DEAD) return STATE_FALL;
   /* airborne includes the final approach (jump in (0,0.05] while plummeting),
      so there is no 1-frame RUN flash between FALL and LAND */
-  if (G.jump > 0.005 || G.jv > 0.2 || G.jv < -0.2) {
-    if (G.jv > 0.2) return STATE_JUMP;
+  if (G.jump > 0.5 || G.jv > 20.0 || G.jv < -20.0) {
+    if (G.jv > 20.0) return STATE_JUMP;
     else return STATE_FALL;
   }
   if (G.landT > 0.0) return STATE_LAND;
@@ -282,6 +445,11 @@ static int anim_dir_from_tube(void) {
  * Draw the character with proper animation.
  * Uses the animation ranges table baked from the original Run 3 source.
  */
+/* The original's spritesheet size rule, defined below with the cast: the
+   runner on the track and a cutscene's cast are the same characters in the
+   same world, so both are one spritesheet scale through one projection. */
+static double stage_sprite_h(double frame_h, double dd);
+static double stage_char_h(double dd);
 static void draw_runner(void) {
   /* The runner's own point on the rolled tube. The camera was panned onto
      exactly this point and raised with their lift, so the projection puts
@@ -300,19 +468,28 @@ static void draw_runner(void) {
     double dd = G.fallT; if (dd > VOID_TIME) dd = VOID_TIME;
     shrink = 1.0 - dd*0.16; if (shrink < 0.25) shrink = 0.25;
   }
-  double gx,gy,px,py;
-  proj(mx,my,0.0,&gx,&gy,NULL);
+  double gx,gy,px,py,rdd = 0.0;
+  proj(mx,my,0.0,&gx,&gy,&rdd);
   proj(mx,my+lift,0.0,&px,&py,NULL);
 
-  /* contact shadow — scale with resolution */
-  double jh = G.jump, shr = 1.0/(1.0+5.0*jh);
-  double baseR = 9.0 * (H / 360.0);
+  /* The character's screen size is the original's own: the spritesheet scale
+     (0.45681063122923593 world pixels per source pixel, the original's own
+     constant) seen through the camera's perspective — the SAME rule the
+     cutscene cast uses. The old fixed 24px-at-360p was the port's invention
+     and drew the runner at about two thirds of their real size against the
+     tunnel they run in. */
+  double charH = stage_char_h(rdd);        /* a character's screen height here */
+
+  /* contact shadow — it belongs to the character, so it is sized from them */
+  double jh = G.jump / 100.0, shr = 1.0/(1.0+5.0*jh);
+  double baseR = 0.30 * charH;
   double rxS = baseR*shr*(dead?shrink:1.0), ryS = rxS*0.45;
   fill_shadow((int)gx,(int)(gy+rxS*0.1),(int)rxS,(int)ryS,
               0.55*(dead?shrink:1.0)*(0.5+0.5*shr));
 
   if (dead) {
-    int ds = (int)(14.0 * (H / 360.0) * shrink);
+    int ds = (int)(0.29 * charH * shrink);
+    if (ds < 1) ds = 1;
     blit_sprite((int)px-ds/2,(int)py-ds/2,ds, tex_ruinedtile_H*ds/(tex_ruinedtile_W>0?tex_ruinedtile_W:1),
                 tex_ruinedtile, tex_ruinedtile_W, tex_ruinedtile_H, shrink);
     return;
@@ -344,12 +521,12 @@ static void draw_runner(void) {
     return;
   }
 
-  /* scale to fit ~24px tall at 360p, ~48px at 720p — shrunk 25% from 32 */
-  int baseH = (int)(24.0 * (H / 360.0));
-  int spriteH = (int)(baseH * shrink);
+  /* the frame's real size in the world, seen from the chase camera */
+  int spriteH = (int)(stage_sprite_h((double)fh, rdd) * shrink);
+  if (spriteH < 1) spriteH = 1;
   int spriteW = spriteH * fw / (fh > 0 ? fh : 1);
   if (G.jump > 0.0) {
-    double stretch = 1.0 + 0.12 * ssin(G.jump * 3.0);
+    double stretch = 1.0 + 0.12 * ssin(G.jump * 0.03);
     spriteH = (int)(spriteH * stretch);
     spriteW = (int)(spriteW / stretch);
   }
@@ -359,7 +536,7 @@ static void draw_runner(void) {
   /* in-place run cycle: a couple of pixels of bounce, SPRITE ONLY — the
      camera does not follow it, so the runner stays where they were put */
   if (state == STATE_RUN)
-    drawY += (int)(1.5 * (H / 360.0) * ssin(G.animT * 13.0));
+    drawY += (int)(spriteH * 0.03 * ssin(G.animT * 13.0));
 
   /* blit with optional horizontal mirror */
   if (ar.mirror) {
@@ -392,6 +569,7 @@ static void draw_runner(void) {
    gameplay frame — a camera left on the axis fails here. It rebuilds the
    frame's camera state from the engine's placement, so it is also valid
    before the first frame has been drawn. */
+double run3_cam_pitch(void) { return cam_pitch; } /* staged 0, chase otherwise */
 void run3_runner_screen(double *sx, double *sy) {
   cam_back = run3_cam_back();
   cam_out  = run3_cam_off();
@@ -409,6 +587,46 @@ void run3_runner_screen(double *sx, double *sy) {
    S_CUT instead of the runner. Actor art is the gameplay run stance
    (cutscene-only pose sheets are not extractable); motion comes from the
    authored per-segment positions, linearly interpolated by the host. */
+/* Props are measured in character heights (`size`, from the original's own
+   panel pixel sizes), so a prop and a character at the same depth read against
+   each other the way they do in the original; sizing props in TILES instead
+   made every panel enormous next to the cast (a 2.4-tile map projected to ~6
+   character heights).
+
+   ---- THE STAGED SPRITE'S OWN SIZE, straight from the original ----
+   `StageActor` builds its spritesheet quad at
+     (spriteSourceSize.x, spriteSourceSize.y, frame.w, frame.h) * 0.45681063122923593
+   world pixels — its own constant, in the same world pixels the level's own
+   geometry is in (a tile is `tileWidth` of them). 1 engine unit is 100 of
+   those, and an engine unit IS a world pixel (run3.h), so a frame is simply
+   0.45681063122923593 units per source pixel of the baked art. Nothing in a
+   cutscene rescales the cast: its
+   PLACE is authored, its size is the game's, so its screen height is simply
+   what the authored camera's own perspective makes of that size.
+
+   The frame is the CROPPED frame the animation is showing (the same thing the
+   original's atlas frame is), so a crouching frame really is drawn shorter
+   than a standing one, exactly as in the original. */
+#define STAGE_SPRITE_SCALE 0.45681063122923593
+#define STAGE_PX_UNITS 1.0    /* engine units per original world pixel: 1 - the same unit */
+static double stage_sprite_h(double frame_h, double dd) {
+  if (!(dd > 1e-6)) return 0.0;
+  return FOCAL * frame_h * STAGE_SPRITE_SCALE * STAGE_PX_UNITS / dd;
+}
+/* one character's screen height at depth `dd`, for things measured in
+   CHARACTER HEIGHTS (a prop's `size`): the runner's own centre run frame, so a
+   prop and a character at the same depth read against each other as they do in
+   the original. Read once from the baked art. */
+static double stage_char_h(double dd) {
+  static double ref = -1.0;
+  if (ref < 0.0) {
+    int fw = 0, fh = 0;
+    anim_range_t ar = CHAR_ANIM_RANGE(0, STATE_RUN, DIR_CENTER);
+    const uint32_t *p = get_char_frame(0, ar.start, &fw, &fh);
+    ref = (p && fh > 0) ? (double)fh : 76.0;
+  }
+  return stage_sprite_h(ref, dd);
+}
 typedef struct { int ch; double ring, zrow; int vis; } stage_actor_t;
 typedef struct { int kind; double ring, zrow, size, inset; int vis; } stage_prop_t;
 static stage_actor_t g_sactors[NSTAGE_ACT];
@@ -442,28 +660,63 @@ static void ring_point(double ring, double R, double *mx, double *my) {
   *mx = ax + (bx - ax) * f;
   *my = ay + (by - ay) * f;
 }
+/* The screen rotation of the cast and props in a STAGED frame.
+
+   The original's billboards do not take their up axis from the camera: a
+   `StageActor` sets its up to (0,-1,0) turned by the actor's OWN rotation and
+   passes it as the billboard's up (StageActor.updateBillboard), so the sprite
+   is aligned with the level and the CAMERA's roll tilts it on screen with the
+   rest of the world. This port draws its sprites axis-aligned in screen space
+   (which is why gameplay, whose level is rolled to put the runner's facet at
+   the bottom, always looks upright), so a staged frame has to carry the same
+   tilt by hand or the cast stands straight inside a rolled tunnel.
+
+   The reference direction is the one an identity staged camera draws straight
+   up — the view applies the gauge first, so that is `Rz(-g)*(0,1,0)` in the
+   port's own frame — projected through this member's own depth (so the roll is
+   perspective-correct), and the sprite's rotation is where it lands. An
+   identity camera therefore yields exactly 0 and every scene keeps the look it
+   had before. */
+/* The screen angle of the level's OWN up axis at a point, which is what a
+   staged sprite is rotated by. `StageActor.placeAt` gives the actor an up of
+   `(0,-1,0)` turned by THAT RING POSITION's layout rotation, and
+   `updateBillboard` hands that same vector to the billboard — so a member of
+   the cast is tilted by the wall it stands on, at its own place in the tube:
+   the up is the inward RADIAL direction there, not one global axis. (A single
+   constant put every member at 90 degrees to the wall except the one on the
+   side that constant happened to name.) */
+static double stage_sprite_roll(double x, double y, double z) {
+  double ux, uy;
+  double r = ssqrt(x * x + y * y);
+  if (r > 1e-6) { ux = -x / r; uy = -y / r; }   /* inward, i.e. toward the axis */
+  else { ux = 0.0; uy = 1.0; }                  /* on the axis: fall back to +y */
+  const double eps = 0.5;
+  double p1x, p1y, p2x, p2y, d1, d2;
+  proj(x, y, z, &p1x, &p1y, &d1);
+  proj(x + ux * eps, y + uy * eps, z, &p2x, &p2y, &d2);
+  double dx = p2x - p1x, dy = p2y - p1y;
+  if (dx * dx + dy * dy < 1e-9) return 0.0;
+  return satan2(dx, -dy);
+}
 static void draw_stage_actor(double R, int ch, double ring, double zrow) {
   double mx, my, px, py, dd;
   ring_point(ring, R, &mx, &my);
-  proj(mx, my, zrow * G.tile, &px, &py, &dd);
+  proj(mx, my, run3_stage_row_z(zrow), &px, &py, &dd);
   if (dd < VIEWPLANE_EPS) return;
   int cm = ch < 0 ? 0 : (ch >= CHAR_COUNT ? CHAR_COUNT - 1 : ch);
   anim_range_t ar = CHAR_ANIM_RANGE(cm, STATE_RUN, DIR_CENTER);
   int fw = 0, fh = 0;
   const uint32_t *pix = get_char_frame(cm, ar.start, &fw, &fh);
-  double sc = cam_back / dd; /* perspective size vs the runner plane */
-  if (sc < 0.15) sc = 0.15;
-  if (sc > 3.0) sc = 3.0;
-  int spriteH = (int)(24.0 * (H / 360.0) * sc);
+  /* the frame's real world size, seen from the authored camera */
+  int spriteH = (int)stage_sprite_h((double)(fh > 0 ? fh : 1), dd);
+  if (spriteH < 1) spriteH = 1;
   if (!pix || fw <= 0 || fh <= 0) {
     fill_rect((int)px - 4, (int)py - 12, 8, 12, rgb(200, 200, 200));
     return;
   }
+  double roll = stage_sprite_roll(mx, my, run3_stage_row_z(zrow));
   int spriteW = spriteH * fw / (fh > 0 ? fh : 1);
-  int drawX = (int)px - spriteW / 2;
-  int drawY = (int)py - spriteH;
-  if (ar.mirror) blit_sprite_mirrored(drawX, drawY, spriteW, spriteH, pix, fw, fh, 1.0);
-  else blit_sprite(drawX, drawY, spriteW, spriteH, pix, fw, fh, 1.0);
+  blit_sprite_rot(px, py, spriteW, spriteH, roll, pix, fw, fh, 1.0, ar.mirror, 0);
 }
 /* prop kinds: 0 hidden, 1 map, 5 candy, 7 TrainRide balloon.
    The map is not a decorated sheet: ComingThrough.as builds it with
@@ -479,26 +732,40 @@ static void draw_stage_prop(double R, int kind, double ring, double zrow, double
      the tube's interior and lands on the floor) */
   double k2 = 1.0 - inset;
   mx *= k2; my *= k2;
-  proj(mx, my, zrow * G.tile, &px, &py, &dd);
+  proj(mx, my, run3_stage_row_z(zrow), &px, &py, &dd);
   if (dd < VIEWPLANE_EPS) return;
-  double wpp = size * G.tile * FOCAL / dd;
+  /* width in character heights, at the cast's own world size (see stage_char_h) */
+  double wpp = size * stage_char_h(dd);
   if (wpp < 2.0) wpp = 2.0;
   if (wpp > W / 2) wpp = W / 2;
   int cx = (int)px, cy = (int)py;
+  /* a prop is a plane in the level (the map) or a billboard hung in it (the
+     candy panel, the balloon): either way it rides the level, so it takes the
+     staged frame's own tilt exactly like the cast does */
+  double roll = stage_sprite_roll(mx, my, run3_stage_row_z(zrow));
+  double rc = scos(roll), rs = ssin(roll);
   if (kind == 1) { /* map: flat 0xBCAB7C panel (40 x 25 in the original) */
     int w = (int)wpp, h = (int)(wpp * 0.62);
-    fill_rect(cx - w / 2, cy - h / 2, w, h, rgb(188, 171, 124));
+    double hx = w * 0.5, hy = h * 0.5;
+    double ux4[4] = { -hx, hx, hx, -hx }, uy4[4] = { -hy, -hy, hy, hy };
+    double qx[4], qy[4];
+    for (int i = 0; i < 4; i++) {
+      qx[i] = (double)cx + ux4[i] * rc - uy4[i] * rs;
+      qy[i] = (double)cy + ux4[i] * rs + uy4[i] * rc;
+    }
+    fill_quad(qx[0], qy[0], qx[1], qy[1], qx[2], qy[2], qx[3], qy[3],
+              rgb(188, 171, 124));
   } else if (kind == 5) { /* candy: the Candy.png panel from Candy.as */
     int w = (int)wpp;
     int h = (int)(wpp * (double)tex_candy_H / (double)tex_candy_W);
     if (h < 2) h = 2;
-    blit_sprite(cx - w / 2, cy - h / 2, w, h, tex_candy, tex_candy_W, tex_candy_H, 1.0);
+    blit_sprite_rot(px, py, w, h, roll, tex_candy, tex_candy_W, tex_candy_H, 1.0, 0, 1);
   } else if (kind == 7) { /* balloon: the TrainRide balloon panel (BoatRide) */
     int w = (int)wpp;
     int h = (int)(wpp * (double)tex_balloon_train_H / (double)tex_balloon_train_W);
     if (h < 2) h = 2;
-    blit_sprite(cx - w / 2, cy - h / 2, w, h, tex_balloon_train,
-                tex_balloon_train_W, tex_balloon_train_H, 1.0);
+    blit_sprite_rot(px, py, w, h, roll, tex_balloon_train,
+                    tex_balloon_train_W, tex_balloon_train_H, 1.0, 0, 1);
   }
 }
 static void draw_stage(double R) {
@@ -520,7 +787,7 @@ static void draw_hint(double R) {
   uint32_t c = rgb(150, 150, 150);
   for (int i = 0; i < hn; i++) {
     double z = ((double)run3_hint_row(i) - G.prog) * G.tile;
-    if (z < -2.0 || z > view_z) continue;
+    if (z < -200.0 || z > view_z) continue;
     double mx, my, px, py, dd;
     ring_point(run3_hint_ring(i), R, &mx, &my);
     proj(mx, my, z, &px, &py, &dd);
@@ -648,6 +915,11 @@ void render_frame(void) {
   g_sky = sky; /* exposed so tests can spot background showing through walls */
 
   double front = G.prog;
+  /* a staged frame draws the level camera-relative with the AUTHORED camera
+     (run3_stage_pos_z), which the row range below has to reach back for: the
+     scene's camera can sit a couple of dozen units behind the front row */
+  int staged = (G.state == S_CUT || G.state == S_GATE);
+  if (staged) stage_cam_z = run3_stage_pos_z();
 
   /* per-row cross-sections: the shape (and tint) of the level owning each row,
      leaning toward the neighbouring level's shape over its transition run */
@@ -665,9 +937,11 @@ void render_frame(void) {
   int rBase = 0, rCount = 0;
   {
     double t0 = row_tile(&xc0);
-    if (t0 < 0.01) t0 = 0.01;
+    if (t0 < 1.0) t0 = 1.0;
     int rFar = (int)(front + view_z / t0) + 2;
-    int rNear = (int)(front - (cam_back + 2.0 * t0) / t0) - 2;
+    int rNear;
+    if (staged) rNear = (int)(front + stage_cam_z / t0) - 4;
+    else rNear = (int)(front - (cam_back + 2.0 * t0) / t0) - 2;
     int cnt = rFar - rNear + 1;
     if (cnt > XCAP) { rNear = rFar - XCAP + 1; cnt = XCAP; }
     rBase = rNear; rCount = cnt;
@@ -701,16 +975,46 @@ void render_frame(void) {
   cam_x    = run3_cam_x();
   cam_y    = run3_cam_y();
   view_z = VIEW_ROWS * rtile;
-  if (view_z < 4.0) view_z = 4.0;
-  near_z = -(cam_back - 0.45);
-  /* pitch from the runner constraint (small-angle atan to 3rd order);
-     staged scenes add their authored height bias on top */
-  cam_pitch = cam_pitch_for(cam_out, cam_back);
-  if (G.state == S_CUT || G.state == S_GATE)
-    cam_pitch += run3_stage_liftf() * 0.06;
+  if (view_z < 400.0) view_z = 400.0;
+  near_z = -(cam_back - 45.0);
+  /* Pitch: the gameplay chase camera tilts down so the runner lands at the low
+     third (small-angle atan to 3rd order). A STAGED scene does not pitch the
+     runner anywhere — its whole orientation is the authored quaternion (the
+     roll about the bore, plus whatever pitch/yaw the scene tilted in), with
+     the bore slid along z by the authored position. The level draws
+     unrotated: the camera carries the turn, like the original's unparented
+     Transform. */
+  if (staged) {
+    /* the rows are drawn CAMERA-relative (rz[] is 0 at the front row) and
+       run3_stage_pos_z is already in that frame: the camera sits behind the
+       front cast by the scene's own shot distance. Nothing in front of it
+       (nor the tube just behind it) is clipped until the authored camera has
+       actually passed */
+    near_z = stage_cam_z + 50.0;
+    stage_gauged = run3_stage_has_camera() ? STAGE_GAUGE : 0.0;
+    /* the space layers are drawn OUTSIDE proj (their own camera model), so
+       they take the frame's roll as a single angle — measured on the bore a
+       little ahead of the camera, where the perspective factor is negligible */
+    /* The staged cast is sized ONLY by the authored camera's own perspective
+       (render.c's stage_sprite_h, which is the original's own spritesheet size
+       quotient), so it grows and shrinks with the shot distance exactly as
+       everything else in the frame does. The anchor that used to be applied
+       here ("the front member reads at a quarter of the screen height whatever
+       the distance") was the port's own invention: it threw the camera's
+       authored distance away and drew every cutscene character the same size
+       however far off it was staged. */
+    const double *q = run3_stage_quat();
+    stage_quat[0] = q[0]; stage_quat[1] = q[1];
+    stage_quat[2] = q[2]; stage_quat[3] = q[3];
+    stage_cam_basis();
+    cam_pitch = 0.0;               /* gameplay pitch unused in a staged frame */
+  } else {
+    cam_pitch = cam_pitch_for(cam_out, cam_back);
+    view_roll = G.rot;
+  }
   /* the sky goes down first, once the camera's pitch is known, so the star
      sphere parallaxes with the same orientation the tube is drawn with */
-  sky_render(sky, cam_pitch, G.rot);
+  sky_render(sky, cam_pitch, view_roll);
   /* then what is OUTSIDE the tunnel, far to near, before the tube itself:
      the other tunnels branching off in space, then the wormhole at the end
      of the bore. Both are drawn before the wall, so the tunnel occludes them
@@ -718,7 +1022,6 @@ void render_frame(void) {
      an opaque tube with gaps should show the space behind it. */
   space_outer();
   space_wormhole();
-  uint32_t voidc = lpw ? rgb(2,3,8) : rgb(4,5,11);
   uint32_t themeTile = lpw ? LPAL[1] : PAL[th][1];
 
   for (int ri = rBase + rCount - 1; ri >= rBase; ri--) {
@@ -729,7 +1032,7 @@ void render_frame(void) {
     double hz = 0.5 * row_tile(xc);
     double zFar = zc + hz, zNear = zc - hz;
     if (zFar > view_z) continue;
-    if (zFar < -cam_back + 0.2) continue;
+    if (zFar < (staged ? stage_cam_z : -cam_back) + 20.0) continue;
     double zn = zNear < near_z ? near_z : zNear;
     double fog = zFar / view_z * 0.85;
     if (fog < 0.0) fog = 0.0; if (fog > 0.85) fog = 0.85;
@@ -752,8 +1055,6 @@ void render_frame(void) {
       double pw = run3_power();
       if (pw < 1.0) col = mixc(col, rgb(2,3,8), (1.0 - pw) * 0.92);
     }
-    uint32_t holeCol = mixc(voidc, sky, fog * 0.35);
-
     for (int side = 0; side < rn; side++) {
       int mask = mask_at(side, ri);
       for (int l = 0; l < rk; l++) {
@@ -771,8 +1072,13 @@ void render_frame(void) {
             dd2 < VIEWPLANE_EPS || dd3 < VIEWPLANE_EPS) continue;
 
         if (mask & (1u << l)) {
-          /* hole: authored gap, or a crumble tile that already fell through */
-          fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, holeCol);
+          /* HOLE — an authored gap, or a crumble tile that already fell
+             through: the wall is simply not there, so nothing is painted.
+             What stays on screen is whatever the layers before the tube left
+             at these pixels — a wall row further along the tunnel, or the
+             star sphere / space scene showing through the opening. Painting
+             a dark quad here would read as a solid black tile and hide all
+             of it, which is not what a missing tile looks like. */
         } else {
           if (run3_tile_tex(side, ri, l) == TEX_CRUMBLING) {
             /* crumbling tile: the raw cracked texture and nothing else (no
@@ -788,29 +1094,21 @@ void render_frame(void) {
               jy = ((double)((hh >> 3) & 7u) - 3.5) * 0.5 * amp;
             }
             fill_tile_tex(ax2, ay2, bx2, by2, zFar, zn, jx, jy, lightMul);
+          } else if (run3_tile_glow(side, ri, l)) {
+            /* GLOWING TILE: the original's own recipe. A `~glow` tile is an
+               ordinary solid tile whose colour is its level tint interpolated
+               20% toward 0xDDDDDD — `"glow" -> Color.interpolate(colour,
+               14540253, 0.2)` in the tile table — and its surface IS the
+               tunnel's light, so it stays lit whatever the power is: only
+               distance fog fades it. The port used to draw a hot gold core
+               with a brighter inner quad, which read as loose gold tiles
+               floating in a black tunnel rather than a lit floor. */
+            fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y,
+                      mixc(mixc(base, rgb(0xDD, 0xDD, 0xDD), 0.2), sky, fog));
           } else {
             /* plain solid tile: the flat level tint */
             fill_quad(p0x,p0y,p1x,p1y,p2x,p2y,p3x,p3y, col);
           }
-        }
-      }
-    }
-    /* low power: faint glow pulsing on each row */
-    if (lpw && (ri & 7) == 0 && zFar < 15.0 && zFar > 1.0) {
-      double pulse = 0.5 + 0.5 * ssin(G.prog * 0.3 + (double)ri * 0.5);
-      uint32_t glow = mixc(rgb(40,60,140), sky, 0.7 + 0.3 * (1.0 - pulse));
-      for (int side = 0; side < rn; side++) {
-        double ax3,ay3,bx3,by3;
-        row_pt(xc, (double)side / (double)rn, &ax3, &ay3);
-        row_pt(xc, (double)(side + 1) / (double)rn, &bx3, &by3);
-        double p0x,p0y,p1x,p1y;
-        proj(ax3,ay3,zFar,&p0x,&p0y,NULL); proj(bx3,by3,zFar,&p1x,&p1y,NULL);
-        int lx0=(int)p0x, lx1=(int)p1x, ly=(int)p0y;
-        if (ly >= 0 && ly < H) {
-          if (lx0 > lx1) { int t=lx0; lx0=lx1; lx1=t; }
-          if (lx0 < 0) lx0 = 0; if (lx1 >= W) lx1 = W-1;
-          for (int x = lx0; x <= lx1; x++)
-            fb[(uint32_t)ly * W + (uint32_t)x] = mixc(fb[(uint32_t)ly*W+(uint32_t)x], glow, 0.15 * pulse);
         }
       }
     }
@@ -845,17 +1143,25 @@ static int strlen_p(const char *s);
 /* The host supplies the strings and the typewriter state; the ENGINE lays the
    scene out and draws it, full-window, exactly like gameplay. There is no
    dialog card and no DOM text on screen: the host keeps the click target.
-   The host writes NUL-terminated UTF-8 into these buffers before each frame. */
+   The host writes NUL-terminated UTF-8 into these buffers before each frame.
+
+   Dialogue is a BUBBLE, not a full-width band: every authored line carries its
+   own dialog-unit x/y (the 800x600 stage, centre origin), which is where that
+   line's speaker is. The engine anchors the bubble on that point and wraps the
+   text to fit it, so a line spoken from the left wall reads on the left and one
+   from the right reads on the right — the band read every line as if it came
+   from the middle of the tunnel. */
 #define CUT_TITLE_MAX 96
 #define CUT_TEXT_MAX 512
 static char g_cutTitle[CUT_TITLE_MAX];
 static char g_cutText[CUT_TEXT_MAX];
 static int g_cutSmall = 0, g_cutShown = -1, g_cutStep = 0, g_cutTotal = 0, g_cutOn = 0;
-static double g_cutY = 120.0;
+static double g_cutX = 0.0, g_cutY = 120.0; /* bubble centre, dialog units */
 static int g_cutChars = 0; /* characters the overlay actually drew (test seam) */
 char *run3_cut_title_buf(void) { return g_cutTitle; }
 char *run3_cut_text_buf(void) { return g_cutText; }
-void run3_cut_show(double y, int small, int shown, int step, int total, int on) {
+void run3_cut_show(double x, double y, int small, int shown, int step, int total, int on) {
+  g_cutX = x;
   g_cutY = y;
   g_cutSmall = small ? 1 : 0;
   g_cutShown = shown;
@@ -864,15 +1170,24 @@ void run3_cut_show(double y, int small, int shown, int step, int total, int on) 
   g_cutOn = on ? 1 : 0;
 }
 int32_t run3_cut_chars(void) { return g_cutChars; }
-/* soft dark band over the frame's lower part: the dialogue sits on it */
-static void cut_band(int top, double dark) {
-  if (top < 0) top = 0;
-  for (int y = top; y < H; y++) {
-    uint32_t *row = &fb[(uint32_t)y * W];
-    /* fade the band in over its first 40 rows so it reads as a vignette */
-    double d = dark;
-    if (y - top < 40) d *= (double)(y - top) / 40.0;
-    for (int x = 0; x < W; x++) row[x] = mixc(row[x], rgb(4, 8, 18), d);
+/* scale factor from the original's 800x600 stage to this window (the authored
+   bubble positions are dialog units on that stage, x/2.5 = px) */
+static double cut_fit(void) {
+  double fw = (double)W / 800.0, fh = (double)H / 600.0;
+  return fw < fh ? fw : fh;
+}
+/* a bubble panel: a rect with its four corners notched off, so it reads as a
+   rounded speech bubble without carrying a texture. Everything stays inside
+   the (x, y, w, h) box, so a caller can clamp it as a plain rectangle. */
+static void cut_panel(int x, int y, int w, int h, int r, uint32_t col) {
+  if (w < 4 || h < 4) return;
+  if (r < 0) r = 0;
+  if (r > w / 2 - 2) r = w / 2 - 2;
+  if (r > h / 2 - 2) r = h / 2 - 2;
+  fill_rect(x + r, y, w - 2 * r, h, col);
+  if (r > 0) {
+    fill_rect(x, y + r, r, h - 2 * r, col);
+    fill_rect(x + w - r, y + r, r, h - 2 * r, col);
   }
 }
 /* greedy word wrap: writes NUL-separated lines into out, returns the count */
@@ -913,21 +1228,18 @@ static void draw_cut_overlay(void) {
   if (!g_cutOn) return;
   double scale = g_cutSmall ? 0.44 : 0.56;
   double lh = 52.0 * scale + 6.0;
-  /* the authored bubble height biases where the band sits, kept inside the
-     lower half so the staged cast above is never covered */
-  double t = (g_cutY - 120.0) / 2.5;
-  double bandTop = H * 0.60 - t * 5.0;
-  if (bandTop < H * 0.38) bandTop = H * 0.38;
-  if (bandTop > H * 0.78) bandTop = H * 0.78;
-  cut_band((int)bandTop, 0.62);
-
+  double fit = cut_fit();
   int pad = (int)(W * 0.08);
-  int maxW = W - 2 * pad;
-  int y = (int)bandTop + 26;
-  if (g_cutTitle[0]) {
-    draw_text(pad, y, g_cutTitle, rgb(150, 185, 235), 0.46);
-    y += 26;
-  }
+
+  /* the line's own bubble centre, on the original's stage, clamped to the box
+     the host's (hidden) DOM bubble used: 24..76% across, 18..78% down */
+  double cx = (double)W * 0.5 + (g_cutX / 2.5) * fit;
+  double cy = (double)H * 0.5 + (g_cutY / 2.5) * fit;
+  if (cx < W * 0.24) cx = W * 0.24;
+  if (cx > W * 0.76) cx = W * 0.76;
+  if (cy < H * 0.18) cy = H * 0.18;
+  if (cy > H * 0.78) cy = H * 0.78;
+
   /* typewriter: draw only the first g_cutShown characters (negative = all) */
   char full[CUT_TEXT_MAX + 1];
   int shown = 0;
@@ -936,19 +1248,56 @@ static void draw_cut_overlay(void) {
   for (int j = 0; j < lim; j++) full[j] = g_cutText[j];
   full[lim] = 0;
 
+  /* wrap to the bubble's own width, then size the panel to the longest line */
+  int maxW = (int)(W * 0.30);
+  if (maxW < 220) maxW = 220;
   char wrapped[CUT_TEXT_MAX + 32];
   int nl = cut_wrap(wrapped, (int)sizeof(wrapped), full, scale, maxW);
+  int widest = 0;
   const char *line = wrapped;
   for (int i = 0; i < nl; i++) {
+    int tw = text_width(line, scale);
+    if (tw > widest) widest = tw;
+    line += strlen_p(line) + 1;
+  }
+  int padx = (int)(30.0 * scale) + 10, pady = (int)(18.0 * scale) + 8;
+  int bw = widest + 2 * padx, bh = nl * (int)lh + 2 * pady;
+  if (bw < 140) bw = 140;
+  int bx = (int)(cx - 0.5 * (double)bw), by = (int)(cy - 0.5 * (double)bh);
+  if (bx < pad / 2) bx = pad / 2;
+  if (bx + bw > W - pad / 2) bx = W - pad / 2 - bw;
+  int barTop = H - (int)(H * 0.12); /* stay clear of the step/continue bar */
+  if (by < pad / 2) by = pad / 2;
+  if (by + bh > barTop) by = barTop - bh;
+
+  /* the tail points from the panel's bottom edge at the tunnel below it (the
+     cast is staged around the lower centre, whichever wall the line came from) */
+  int tx = (int)(W * 0.5);
+  if (tx < bx + 30) tx = bx + 30;
+  if (tx > bx + bw - 30) tx = bx + bw - 30;
+  uint32_t panel = rgb(10, 17, 32);
+  fill_quad((double)tx - 15.0, (double)(by + bh - 2), (double)tx + 15.0,
+            (double)(by + bh - 2), (double)tx, (double)(by + bh - 2) + 18.0 * fit,
+            (double)(by + bh - 2), (double)(by + bh - 2), panel);
+  /* panel + a thin lit edge so the bubble reads over any tunnel colour */
+  cut_panel(bx, by, bw, bh, 12, rgb(62, 92, 145));
+  cut_panel(bx + 1, by + 1, bw - 2, bh - 2, 11, panel);
+
+  int ty = by + pady;
+  line = wrapped;
+  for (int i = 0; i < nl; i++) {
     if (line[0]) {
-      draw_text(pad, y + (int)lh, line, rgb(236, 240, 248), scale);
+      int tw = text_width(line, scale);
+      draw_text(bx + (bw - tw) / 2, ty, line, rgb(236, 240, 248), scale);
       for (const char *q = line; *q; q++) g_cutChars++;
     }
-    y += (int)lh;
+    ty += (int)lh;
     line += (int)strlen_p(line) + 1;
   }
+  /* the scene title sits above the bubble, out of its way */
+  if (g_cutTitle[0]) draw_text(pad, (int)(H * 0.06), g_cutTitle, rgb(150, 185, 235), 0.46);
   /* step counter + continue prompt along the bottom */
-  int by = H - (int)(H * 0.06);
+  int barY = H - (int)(H * 0.06);
   if (g_cutTotal > 0) {
     char buf[24];
     int n = g_cutStep, m = g_cutTotal, o = 0;
@@ -960,10 +1309,10 @@ static void draw_cut_overlay(void) {
     buf[o++] = (char)('0' + m / 10);
     buf[o++] = (char)('0' + m % 10);
     buf[o] = 0;
-    draw_text(pad, by, buf, rgb(170, 178, 195), 0.46);
+    draw_text(pad, barY, buf, rgb(170, 178, 195), 0.46);
   }
   const char *cont = "CONTINUE >";
-  draw_text(W - pad - text_width(cont, 0.46), by, cont, rgb(150, 185, 235), 0.46);
+  draw_text(W - pad - text_width(cont, 0.46), barY, cont, rgb(150, 185, 235), 0.46);
 }
 /* tiny strlen for the wrap tables (the wasm build has no libc) */
 static int strlen_p(const char *s) {
@@ -1277,10 +1626,14 @@ void render_menu(void) {
   draw_text_centered(500, "Character:", rgb(180, 180, 200), 0.49);
   int nchar = CHAR_COUNT;
   int sel = run3_menu_char();
-  // bigger boxes 80x80, 90px pitch, 2 rows (9+8) — spread out
+  // bigger boxes 80x80, 90px pitch, 2 rows (9+8) — spread out.
+  // i is the sprite-atlas id (the art lookup), but the BOX POSITION comes
+  // from the character's slot in the original game's registry order, so the
+  // grid reads in the original order (see CHAR_MENU_ORDER in run3.c).
   for (int i = 0; i < nchar; i++) {
-    int row = i / 9;
-    int col = i % 9;
+    int pres = run3_char_pres(i);
+    int row = pres / 9;
+    int col = pres % 9;
     int bx = 40 + col * 90;
     int by = 520 + row * 100;
     if (by + 80 > H - 20) break;

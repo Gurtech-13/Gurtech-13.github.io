@@ -5,12 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Run 3</title>
 <link rel="stylesheet" href="../../style.css">
-<link rel="stylesheet" href="run3.css?v=0.8.8">
+<link rel="stylesheet" href="run3.css">
 </head>
 <body>
 <div class="wrap demo-wrap">
 <nav class="topnav"><a class="back" href="../../index.html">&larr; All projects</a></nav>
-<div id="ver" title="game version">v0.8.8</div>
+<!-- no version is written here: app.js paints this from the wasm's own build
+     string (run3.c's RUN3_VERSION), so the label can only show the engine that
+     is really loaded -->
+<div id="ver" title="game version (from the engine)">v&hellip;</div>
 
 <canvas id="cv" width="1280" height="720" style="display:block;cursor:pointer"></canvas>
 <div style="position:absolute;bottom:14px;left:50%;transform:translateX(-50%);display:flex;justify-content:center;gap:8px;z-index:20">
@@ -24,6 +27,7 @@
   <img class="card-img" id="cardimg" style="display:none" alt="">
   <h2 id="cardtitle"></h2><p id="cardtext"></p><p class="who" id="cardwho"></p>
   <button type="button" id="cardbtn">Continue</button>
+  <button type="button" id="cardbtn2" style="display:none">Buy</button>
 </div></div>
 
 <div class="card" id="shopview" style="display:none"><div class="inner" style="max-width:400px">
@@ -55,10 +59,57 @@
 
 <p id="status" class="statusline">Loading&hellip;</p>
 </div>
-<script src="story.js?v=0.8.8"></script>
-<script src="cutscenes.js?v=0.8.8"></script>
-<script src="custom_cutscenes.js?v=0.8.8"></script>
-<script src="achievements.js?v=0.8.8"></script>
-<script src="app.js?v=0.8.8"></script>
+<script>
+/* ===== HOST ASSET LOADER =====
+   The host scripts and the engine are one build, so they must never be paired
+   across versions: a stale app.js against a fresh run3.wasm is exactly the
+   "I rebuilt but nothing changed" failure, and it is invisible because the
+   ENGINE reports the new version while the old host code runs.
+
+   Nothing here knows the version number. The token is a property of the build:
+   the newest Last-Modified across the engine AND the host assets, read with
+   HEAD (headers only - the 31 MB body is never fetched). So it changes when any
+   part of the build changes, including JS-only edits that leave the wasm
+   alone, and a reload always fetches the matching set. The number the player
+   sees is still painted from the loaded wasm, never from here.
+
+   If the server exposes no validator, a per-load timestamp is used instead:
+   correct, just uncacheable. This script is deliberately tiny and stable so
+   that being cached itself is harmless. */
+(function () {
+  var ASSETS = ["story.js", "cutscenes.js", "custom_cutscenes.js",
+                "achievements.js", "app.js"];
+  var PROBE = ASSETS.concat(["run3.wasm"]);
+  function load(tok) {
+    var q = "?v=" + encodeURIComponent(tok);
+    var css = document.querySelector('link[href="run3.css"]');
+    if (css) css.href = "run3.css" + q;
+    for (var i = 0; i < ASSETS.length; i++) {
+      var s = document.createElement("script");
+      s.async = false;              /* dynamic scripts default to async: keep order */
+      s.src = ASSETS[i] + q;
+      document.head.appendChild(s);
+    }
+  }
+  var done = false;
+  function go(tok) { if (done) return; done = true; load(tok || String(Date.now())); }
+  /* safety net: never leave the page blank if the probes hang */
+  setTimeout(function () { go(""); }, 2000);
+  try {
+    Promise.all(PROBE.map(function (f) {
+      return fetch(f, { method: "HEAD", cache: "no-store" }).then(function (r) {
+        return r.headers.get("last-modified") || r.headers.get("etag") || "";
+      }).catch(function () { return ""; });
+    })).then(function (vals) {
+      var newest = 0;
+      for (var i = 0; i < vals.length; i++) {
+        var d = Date.parse(vals[i]);
+        if (d > newest) newest = d;
+      }
+      go(newest > 0 ? String(newest) : "");
+    }).catch(function () { go(""); });
+  } catch (e) { go(""); }
+})();
+</script>
 </body>
 </html>

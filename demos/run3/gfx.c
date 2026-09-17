@@ -116,6 +116,62 @@ void blit_sprite_mirrored(int dx, int dy, int dw, int dh,
   }
 }
 
+/* blit a sprite ROTATED by `ang` about an anchor. `ang` is the screen rotation
+   of the sprite's own up axis (0 = upright, exactly what blit_sprite draws) and
+   `centre` picks the anchor: 0 = the sprite's feet, the way the cast is drawn
+   (the projected point is where the character stands), 1 = its centre, the way
+   the panels are drawn. Inverse-mapped, nearest neighbour: at ang = 0 this is
+   pixel for pixel the same blit as blit_sprite, so a frame with no roll in it
+   is untouched. */
+void blit_sprite_rot(double fx, double fy, int dw, int dh, double ang,
+                     const uint32_t *pix, int sw, int sh, double alpha,
+                     int mirror, int centre) {
+  if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || !pix) return;
+  double c = scos(ang), s = ssin(ang);
+  int ax = (int)fx, ay = (int)fy;
+  double hw = dw * 0.5, v0 = centre ? -hw : -(double)dh, v1 = centre ? hw : 0.0;
+  /* the rotated rect's screen bounding box */
+  double cs[4] = { -hw, hw, hw, -hw }, vs[4] = { v0, v0, v1, v1 };
+  double bx0 = 1e18, by0 = 1e18, bx1 = -1e18, by1 = -1e18;
+  for (int i = 0; i < 4; i++) {
+    double X = (double)ax + cs[i] * c - vs[i] * s;
+    double Y = (double)ay + cs[i] * s + vs[i] * c;
+    if (X < bx0) bx0 = X; if (X > bx1) bx1 = X;
+    if (Y < by0) by0 = Y; if (Y > by1) by1 = Y;
+  }
+  int ix0 = (int)(bx0 - 1.0), ix1 = (int)(bx1 + 1.0);
+  int iy0 = (int)(by0 - 1.0), iy1 = (int)(by1 + 1.0);
+  if (ix0 < 0) ix0 = 0; if (iy0 < 0) iy0 = 0;
+  if (ix1 > W - 1) ix1 = W - 1; if (iy1 > H - 1) iy1 = H - 1;
+  if (ix0 > ix1 || iy0 > iy1) return;
+  for (int Y = iy0; Y <= iy1; Y++) {
+    double ry = (double)Y - (double)ay;
+    for (int X = ix0; X <= ix1; X++) {
+      double rx = (double)X - (double)ax;
+      /* back into the sprite's own frame */
+      double u = c * rx + s * ry;
+      double v = -s * rx + c * ry;
+      if (u < -hw || u >= hw || v < v0 || v >= v1) continue;
+      int sx = (int)((u + hw) * (double)sw / (double)dw);
+      int sy = (int)((v - v0) * (double)sh / (double)dh);
+      if (sx < 0) sx = 0; if (sx > sw - 1) sx = sw - 1;
+      if (sy < 0) sy = 0; if (sy > sh - 1) sy = sh - 1;
+      if (mirror) sx = sw - 1 - sx;
+      uint32_t src = pix[sy * sw + sx];
+      unsigned int sa = (src >> 24);
+      if (sa < 10) continue;
+      double a = (double)sa / 255.0 * alpha; if (a > 1.0) a = 1.0;
+      uint32_t dst = fb[(uint32_t)Y * W + (uint32_t)X];
+      int dr = (int)((dst>>16)&0xff), dg = (int)((dst>>8)&0xff), db = (int)(dst&0xff);
+      int sr = (int)((src>>16)&0xff), sg = (int)((src>>8)&0xff), sb = (int)(src&0xff);
+      fb[(uint32_t)Y * W + (uint32_t)X] = 0xFF000000u |
+        ((uint32_t)(int)(dr+(sr-dr)*a) << 16) |
+        ((uint32_t)(int)(dg+(sg-dg)*a) << 8) |
+        (uint32_t)(int)(db+(sb-db)*a);
+    }
+  }
+}
+
 void fill_circle(int cx, int cy, int r, uint32_t c) {
   for (int dy = -r; dy <= r; dy++) {
     int y = cy + dy;

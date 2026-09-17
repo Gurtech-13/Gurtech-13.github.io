@@ -1,68 +1,126 @@
 /*
  * story.js - display metadata for the world map, lore and characters.
- * 30 original Run 3 paths (ids 0-29) plus 6 custom extended tunnels
- * (ids 30-35): side spurs F/S/V, the small Wormhole X at the end of
- * Primary, and the Far Shore / Far Drift on the other side.
- * Characters unlock through gameplay (clearing tunnels), no power cell cost.
+ * 30 original Run 3 paths (ids 0-29), 12 custom extended tunnels (ids 30-41:
+ * side spurs F/S/V, the small Wormhole X at the end of Primary, the Far
+ * Shore / Far Drift beyond it, and their six branches) and 4 recovered
+ * ORIGINAL paths (42-45): the home planet's two plan runs and the P wormhole
+ * with its crossing - real levels that ship in the game but that the explore
+ * map never linked in.
+ * The character list below is in the ORIGINAL game's registry order and
+ * carries the original names, descriptions, unlock hints and power-cell
+ * prices (character/§'O§.init() in the decompiled source).
  */
 "use strict";
 (function (global) {
-  /* Bump on every release AND mirror it into index.html script ?v= so browsers
-     never run stale cached JS/WASM against a fresh page. Shown top-right. */
-  global.GAME_VERSION = "0.8.8";
-  /* Characters — all unlock through gameplay (clearing tunnels) */
+  /* NO VERSION HERE. The game version is defined once, in the engine
+     (run3.c's RUN3_VERSION), and read back out of the wasm by app.js — that is
+     what the label top-right shows. Nothing in this file or index.html names a
+     version, so the number on screen can only ever be the build actually
+     loaded. (global.GAME_VERSION is set by app.js from the engine.) */
+  /* Characters. THIS ORDER IS THE ORIGINAL GAME'S REGISTRY ORDER
+     (character/§'O§.init()): Runner, Skater, Student, Angel, Lizard,
+     Gentleman, (id 6 is the unused random slot), (id 7 Zombie is not
+     playable and has no class), Duplicator, Skier, Bunny, Child, Pastafarian,
+     JackOLantern, Climber, Ghost, IceSkater, Pirate, Ninja.
+
+     Fields:
+       id     - the ORIGINAL character id (registry index)
+       sprite - this port's sprite-atlas id (bake_assets.py CHARS order); the
+                atlas order is a storage detail and is NOT the original order
+       name   - CharacterDef name, with the §]w§ display-name override applied
+                (IceSkater -> "Ice Skater", JackOLantern -> "Jack-o-Lantern")
+       desc   - CharacterDef §7!9§ (the original's own one-liner)
+       hint   - CharacterDef §;G§ (the original's unlock hint; "Or..." means
+                the price below is the alternative)
+       price  - CharacterDef §1V§, the power-cell price (§4H§() returns it and
+                the unlock path spends it). 0 = free / not for sale.
+       unlock - the non-purchase unlock condition. Only the conditions this
+                port can evaluate are carried: the Skater's level-10 scene,
+                the Lizard's 40 finished levels, the Child's low-power area
+                (the Dark tunnel) and the Bunny's 8 achievements. Every other
+                character's registry condition depends on the original's
+                explore level-group tables (§>K§), which this port does not
+                carry, so those are purchase-only here. */
   var C = [
-    { id: 0, name: "The Runner", col: "#9fdcff", img: "character_runner.png",
+    { id: 0, sprite: 0, name: "Runner", col: "#9fdcff", img: "character_runner.png",
       frontImg: "menu_characterselection_runnerfront.png",
-      desc: "Well-rounded and quick on the ground.", need: 0 },
-    { id: 1, name: "The Skater", col: "#ffb05c", img: "character_skater.png",
+      desc: "Wants to see everything at least once, and she does mean everything.",
+      hint: null, price: 0, unlock: "free" },
+    { id: 1, sprite: 1, name: "Skater", col: "#ffb05c", img: "character_skater.png",
       frontImg: "menu_characterselection_skaterfront.png",
-      desc: "Fast strafing, shorter jumps.", need: 1 },
-    { id: 2, name: "The Child", col: "#96eb78", img: "character_child.png",
-      frontImg: "menu_characterselection_childfront.png",
-      desc: "Weighs almost nothing, falls slowly.", need: 2 },
-    { id: 3, name: "The Angel", col: "#c4b5fd", img: "character_angel.png",
-      frontImg: "menu_characterselection_angelfront.png",
-      desc: "Glides through the air effortlessly.", need: 3 },
-    { id: 4, name: "The Ghost", col: "#e2e8f0", img: "character_ghost.png",
-      frontImg: "menu_characterselection_ghostfront.png",
-      desc: "Transparent, passes through walls.", need: 4 },
-    { id: 5, name: "The Lizard", col: "#4ade80", img: "character_lizard.png",
-      frontImg: "menu_characterselection_lizardfront.png",
-      desc: "Climbs walls, sticks to surfaces.", need: 5 },
-    { id: 6, name: "The Ninja", col: "#1e293b", img: "character_ninja.png",
-      frontImg: "menu_characterselection_ninjafront.png",
-      desc: "Extra fast and silent movement.", need: 6 },
-    { id: 7, name: "The Student", col: "#8fd8ff", img: "character_student.png",
+      desc: "Enjoys challenging himself almost as much as he enjoys going fast.",
+      hint: "Finish level 10 in Explore Mode to unlock this speedster. Or...",
+      price: 300, unlock: { cut: [0, 9] } },
+    { id: 2, sprite: 7, name: "Student", col: "#8fd8ff", img: "character_student.png",
       frontImg: "menu_characterselection_studentfront.png",
-      desc: "Analytical mind, runs the numbers.", need: 8 },
-    { id: 8, name: "The Gentleman", col: "#d9a6ff", img: "character_gentleman.png",
+      desc: "Once you figure out how something works, it's yours to use. This includes gravity.",
+      hint: "Collect power cells to find out what's in the backpack.",
+      price: 10000, unlock: null },
+    { id: 3, sprite: 3, name: "Angel", col: "#c4b5fd", img: "character_angel.png",
+      frontImg: "menu_characterselection_angelfront.png",
+      desc: "He solves practical problems, and creates personal problems.",
+      hint: "Collect power cells to unlock this self-proclaimed hero.",
+      price: 12000, unlock: null },
+    { id: 4, sprite: 5, name: "Lizard", col: "#4ade80", img: "character_lizard.png",
+      frontImg: "menu_characterselection_lizardfront.png",
+      desc: "Lizards are known for being green and jumping really high.",
+      hint: "Finish level 40 in Explore Mode to unlock this high-jumper. Or...",
+      price: 600, unlock: { levels: 40 } },
+    { id: 5, sprite: 8, name: "Gentleman", col: "#d9a6ff", img: "character_gentleman.png",
       frontImg: "menu_characterselection_gentlemanfront.png",
-      desc: "Falls slowly, drawn to power cells.", need: 10 },
-    { id: 9, name: "The Pastafarian", col: "#f97316", img: "character_pastafarian.png",
-      frontImg: "menu_characterselection_pastafarianfront.png",
-      desc: "Devout follower of the Flying Spaghetti Monster.", need: 12 },
-    { id: 10, name: "The Bunny", col: "#fbbf24", img: "character_bunny.png",
-      frontImg: "menu_characterselection_bunnyfront.png",
-      desc: "Highest jumper in the galaxy.", need: 14 },
-    { id: 11, name: "The Climber", col: "#a3e635", img: "character_climber.png",
-      frontImg: "character_climber.png",
-      desc: "Hooks onto walls, never loses grip.", need: 16 },
-    { id: 12, name: "The Duplicator", col: "#ff8fa3", img: "character_duplicator.png",
+      desc: "Employs magnets for rapid procurement of power cells.",
+      hint: "Earn power cells to unlock this eccentric power cell collector.",
+      price: 2000, unlock: null },
+    { id: 8, sprite: 12, name: "Duplicator", col: "#ff8fa3", img: "character_duplicator.png",
       frontImg: "menu_characterselection_duplicatorfront.png",
-      desc: "Many in one, doodles on the map.", need: 18 },
-    { id: 13, name: "The Pirate", col: "#dc2626", img: "character_pirate.png",
-      frontImg: "menu_characterselection_piratefront.png",
-      desc: "Adventurous and bold explorer.", need: 20 },
-    { id: 14, name: "The Skier", col: "#60a5fa", img: "character_skier.png",
+      desc: "Suspicious of others, but he trusts alien technology that's been lying around for ages. Go figure.",
+      hint: "Collect power cells to unlock this self-replicator.",
+      price: 6000, unlock: null },
+    { id: 9, sprite: 14, name: "Skier", col: "#60a5fa", img: "character_skier.png",
       frontImg: "menu_characterselection_skierfront.png",
-      desc: "Fast on slopes and icy surfaces.", need: 22 },
-    { id: 15, name: "The Icy", col: "#67e8f9", img: "character_iceskater.png",
-      frontImg: "menu_characterselection_iceskaterfront.png",
-      desc: "Slides on ice, cool under pressure.", need: 24 },
-    { id: 16, name: "The Jack-o'-lantern", col: "#f97316", img: "character_jackolantern.png",
+      desc: "Listen, ANYONE would have trouble staying in control on frictionless skis.",
+      hint: null, price: 500, unlock: null },
+    { id: 10, sprite: 10, name: "Bunny", col: "#fbbf24", img: "character_bunny.png",
+      frontImg: "menu_characterselection_bunnyfront.png",
+      desc: "It doesn't care if you call it the \"Rabbit\" or the \"Bunny.\" All it cares about is bouncing.",
+      hint: "Earn any 8 achievements to unlock this bundle of energy.",
+      price: 0, unlock: { ach: 8 } },
+    { id: 11, sprite: 2, name: "Child", col: "#96eb78", img: "character_child.png",
+      frontImg: "menu_characterselection_childfront.png",
+      desc: "Sometimes clever, sometimes immature. For example: he carries a balloon to help him jump farther, but it's filled with water so he can splash people.",
+      hint: "Complete the low-power area to unlock this light-weight youngster. Or...",
+      price: 2000, unlock: { tunnel: 13 } },
+    { id: 12, sprite: 9, name: "Pastafarian", col: "#f97316", img: "character_pastafarian.png",
+      frontImg: "menu_characterselection_pastafarianfront.png",
+      desc: "Her faith in the Flying Spaghetti Monster allows her to run across empty space. Her faith also allows her to ignore the Student's alternate explanation.",
+      hint: "Earn power cells to unlock this pastafarian bridge builder.",
+      price: 6000, unlock: null },
+    { id: 13, sprite: 16, name: "Jack-o-Lantern", col: "#f97316", img: "character_jackolantern.png",
       frontImg: "menu_characterselection_jackolanternfront.png",
-      desc: "A seasonal spirit, glows in the dark.", need: 26 }
+      desc: "Well, I guess that's one idea for a costume. Isn't it heavy, though?",
+      hint: null, price: 1000, unlock: null },
+    { id: 14, sprite: 11, name: "Climber", col: "#a3e635", img: "character_climber.png",
+      frontImg: "character_climber.png",
+      desc: "She helped build the Tunnels, but sadly she can't seem to explain the details.",
+      hint: "Earn power cells to unlock this outside-the-box thinker.",
+      price: 8000, unlock: null },
+    { id: 15, sprite: 4, name: "Ghost", col: "#e2e8f0", img: "character_ghost.png",
+      frontImg: "menu_characterselection_ghostfront.png",
+      desc: "He worked very hard on this costume. Pretend to be scared, ok?",
+      hint: null, price: 2000, unlock: null },
+    { id: 16, sprite: 15, name: "Ice Skater", col: "#67e8f9", img: "character_iceskater.png",
+      frontImg: "menu_characterselection_iceskaterfront.png",
+      desc: "Everyone tries new things sometimes.",
+      hint: null, price: 500, unlock: null },
+    { id: 17, sprite: 13, name: "Pirate", col: "#dc2626", img: "character_pirate.png",
+      frontImg: "menu_characterselection_piratefront.png",
+      desc: "Yarr!",
+      hint: null, price: 6000, unlock: null },
+    { id: 18, sprite: 6, name: "Ninja", col: "#1e293b", img: "character_ninja.png",
+      frontImg: "menu_characterselection_ninjafront.png",
+      /* the original sets no §7!9§ for the Ninja */
+      desc: null,
+      hint: null, price: 2000, unlock: null }
   ];
 
   /* Map decorations */
@@ -83,7 +141,7 @@
     { img: "map_planet.png", x: 3050, y: 320, w: 56, h: 56, opacity: 0.5 },
   ];
 
-  /* Tunnel map — 30 original Run 3 paths + 6 custom extended tunnels */
+  /* Tunnel map — 30 original paths + 12 extended + 4 recovered originals */
   var T = [
     /* ===== ORIGINAL PATHS ===== */
     { id: 0, kind: "name", name: "Primary", col: "#7dd3fc", x: 0, y: 0,
@@ -222,14 +280,32 @@
     { id: 41, kind: "letter", name: "Ember", col: "#f0abfc", x: 6620, y: 620,
       music: "CrumblingWalls",
       lore: "A warm branch off Far Drift. Something burned here a long time ago." },
+
+    /* ===== RECOVERED ORIGINAL PATHS =====
+       Real levels that ship in the game but that the explore map never
+       linked in: the home planet's two plan tunnels (each split across a
+       second path in the files) and the P wormhole with its crossing. */
+    { id: 42, kind: "name", name: "Home Plan A", col: "#93c5fd", x: 520, y: 540,
+      music: "LeaveTheSolarSystem",
+      lore: "The plan-A run under the home planet. Sixteen checkpoints of unmapped corridor." },
+    { id: 43, kind: "name", name: "Home Plan C", col: "#93c5fd", x: 180, y: 470,
+      music: "LeaveTheSolarSystem",
+      lore: "The plan-C run. Somebody drew these walls and never told anyone." },
+    { id: 44, kind: "letter", name: "Wormhole P", col: "#c084fc", x: 2320, y: -130,
+      music: "WormholeToSomewhere",
+      lore: "A wormhole the maps skipped. Ten checkpoints of it, humming quietly." },
+    { id: 45, kind: "letter", name: "The Crossing", col: "#c084fc", x: 2620, y: -40,
+      music: "WormholeToSomewhere",
+      lore: "The single level where Wormhole P crosses something else. Nobody agrees on what." },
   ];
 
   /* Branching edges � unlock topology from the original game's
      explorelevels (unlockPath/unlockPoint); Primary seeds the early map */
   var EDGES = [
     [0, [5, 6, 8, 9, 10, 12, 13, 14, 28, 30, 33]], /* Primary -> A,B,G,L,M,Winter,Dark,Boxes,U,F + Wormhole X */
-    [1, [2, 3]],          /* Home0 -> Home1, Home2 */
+    [1, [2, 3, 42]],      /* Home0 -> Home1, Home2, Home Plan A */
     [2, [4]],             /* Home1 -> Home3 */
+    [3, [43]],            /* Home2 -> Home Plan C */
     [6, [5, 22]],         /* B -> A, N */
     [9, [11]],            /* L -> T */
     [10, [16]],           /* M -> River */
@@ -239,7 +315,8 @@
     [17, [23, 25]],       /* WormholeC -> Space, Runway0 */
     [18, [20, 21]],       /* WormholeH -> J, K */
     [19, [17, 18]],       /* WormholeI -> C, H */
-    [22, [19]],           /* WormholeN -> I */
+    [22, [19, 44]],       /* WormholeN -> I, Wormhole P */
+    [44, [45]],           /* Wormhole P -> the Crossing */
     [25, [26]],           /* Runway0 -> Runway1 */
     [28, [7]],            /* U -> D */
     [33, [34, 36, 37]],   /* Wormhole X -> Far Shore + X-Rift / X-Echo */
@@ -247,9 +324,10 @@
     [35, [40, 41]],       /* Far Drift -> Wake / Ember */
   ];
 
-  /* NOTE: tunnels 0-29 are the original game's 30 map paths; 30-35 are
-     custom extended tunnels. Node positions are the original first
-     waypoints (custom ones are hand-placed, node = path start). */
+  /* NOTE: tunnels 0-29 are the original game's 30 map paths; 30-41 are
+     custom extended tunnels; 42-45 are recovered original paths (real
+     levels the explore map never linked in). Node positions are the
+     original first waypoints (the rest are hand-placed, node = path start). */
 
   /* Rename beats */
   var RENAME = {

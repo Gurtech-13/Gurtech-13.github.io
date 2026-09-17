@@ -202,6 +202,11 @@ with open(OUT, "w") as f:
         (39, 1, 5960, 540,    103,232,249),   # Reef (Far Shore branch)
         (40, 1, 6840, 660,    240,171,252),   # Wake (Far Drift branch)
         (41, 1, 6620, 620,    240,171,252),   # Ember (Far Drift branch)
+        # --- recovered original paths (real levels, never linked on the map) ---
+        (42, 0, 520, 540,     147,197,253),   # Home Plan A (under Home 0)
+        (43, 0, 180, 470,     147,197,253),   # Home Plan C (under Home 2)
+        (44, 1, 2320, -130,   192,132,252),   # Wormhole P (off Wormhole N)
+        (45, 1, 2620, -40,    192,132,252),   # The Crossing (P's single level)
     ]
 
     # Custom waypoint polylines (original map coords) for ids 30+.
@@ -224,6 +229,11 @@ with open(OUT, "w") as f:
         39: [(5960, 540), (6020, 460), (6080, 390), (6120, 300)],
         40: [(6840, 660), (6980, 700), (7120, 720)],
         41: [(6620, 620), (6620, 520), (6600, 430), (6570, 340)],
+        # recovered original paths: short hand-placed runs under their parents
+        42: [(520, 540), (660, 600), (800, 640)],
+        43: [(180, 470), (60, 520), (-60, 560)],
+        44: [(2320, -130), (2450, -170), (2560, -140)],
+        45: [(2620, -40), (2700, -80), (2780, -110)],
     }
 
     import json as _json
@@ -238,8 +248,9 @@ with open(OUT, "w") as f:
     f.write("/* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b.\n")
     f.write(" * Node coords = original first waypoints (uniform map transform).\n")
     f.write(" * Ids 30+ are custom extended tunnels (hand-placed, node = path start);\n")
-    f.write(" * 33/34/35 are the 140-checkpoint main runs, 36-41 their branches. */\n")
-    f.write("#define MAP_TUNNEL_COUNT 42\n\n")
+    f.write(" * 33/34/35 are the 140-checkpoint main runs, 36-41 their branches,\n")
+    f.write(" * 42-45 the recovered original paths. */\n")
+    f.write("#define MAP_TUNNEL_COUNT 46\n\n")
 
     f.write("typedef struct {\n")
     f.write("  int16_t x, y;\n")
@@ -286,8 +297,9 @@ with open(OUT, "w") as f:
         "U", "W",
         "F", "S", "V", "WH X", "Shore", "Drift",
         "X-Rift", "X-Echo", "Shoal", "Reef", "Wake", "Ember",
+        "Plan A", "Plan C", "WH P", "Crossing",
     ]
-    assert len(NAMES) == len(TUNNELS_DATA) == 42
+    assert len(NAMES) == len(TUNNELS_DATA) == 46
 
     f.write("/* Tunnel name strings */\n")
     f.write("static const char *map_tunnel_names[MAP_TUNNEL_COUNT] = {\n")

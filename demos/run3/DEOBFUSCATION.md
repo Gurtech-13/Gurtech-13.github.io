@@ -10,6 +10,7 @@ lives in — so the decode survives without the original bundle.
 | thing | location | committed |
 | --- | --- | --- |
 | decompiled ActionScript sources | `demos/run3/src/` (`bake_src.py`) | yes — 867 classes, 15 MB |
+| readable mirror of the same tree | `demos/run3/readable_src/` (`make_readable.py`) | generated — see below |
 | decompiler output (all `.as`, assets, level text) | `Run3.swf_Decompiler.com.zip` (repo root) | no — >100 MB, see `.gitignore` |
 | extracted asset tree used by the older analysis scripts | `/tmp/run3assets/…` (`analyze_levels.py`) | no (scratch) |
 
@@ -18,6 +19,47 @@ tree as the decompiler emitted it (including the `§`-obfuscated folders), and
 the two classes that only exist outside it sit at `src/`. Nothing in the site
 reads them (or the zip) at runtime — every decoder below writes a committed
 artifact, so a fresh checkout runs with no original files present.
+
+## Reading the original: `src/` vs `readable_src/`
+
+`src/` is the decompiler's output exactly as emitted and is what every decoder
+and suite references by name, so it stays untouched — that faithfulness is what
+lets a decode be re-checked later. `readable_src/` is a **generated mirror** of
+it (`python3 make_readable.py`) in which the identifiers this project has
+*established* are replaced by readable names, so the camera / layout / level /
+staging classes can be read without a legend open in another window.
+
+* Packages and classes are rewritten everywhere in the mirror (both are
+globally unique by construction — a class name is a file name, a package name
+is a directory), so the directory and file are renamed with them and every
+`import` / `new` / `extends` / type annotation moves together.
+* Members are rewritten **only inside the classes the project reads and edits**:
+obfuscated member and local tokens are assigned per class, not globally, so a
+global rewrite would mislabel unrelated members.
+* Everything not established keeps its emitted token. A name in the mirror is
+therefore either *known* or *untouched* — never a guess dressed up as a fact;
+the few names read from use sites rather than stated by the source are marked
+**inferred**.
+* `readable_src/RENAME_MAP.md` lists every rename with its evidence. Some names
+come straight out of the original: `Layout3D`'s abstract stubs are
+`getRelativeIndex()`, `getPosition()`, `getIndexNearest()` and
+`getAreaBounds()`, its spec factory `parseSpec(String)` matches `"line"`, a
+grid spec and a tunnel spec, and `TunnelLayout3D`'s own errors say *"Tunnels
+need at least three sides."*
+
+Two decodes that came out of building the mirror, both relevant to cutscenes:
+
+* **How a 3D node faces the camera** — `Billboard.lookAt(position, target, up,
+  skipRoll)` builds an orthonormal basis from `(position - target)` and `up` and
+  writes it to the target transform with `setRotation(Quaternion)`; the
+  `Billboard` scene node calls it every frame against `World.camera`, which is
+  how a staged actor keeps a flat sprite turned toward the viewer.
+* **The camera's own orientation is a quaternion.** `World.camera` is a plain
+  `Transform`, and a cutscene frame sets both its `position` (a `Point3D`) and
+  its `rotation` (a `Quaternion`, `axis·sin(a)` / `cos(a)`). The renderer,
+  `LevelView`, converts that quaternion to Euler angles on resize/render — so a
+  scene's authored angle is expressible, it is only the bake that has yet to
+  carry it (see the *Stage camera* note below).
 
 ## Shape of the decompiled source
 
@@ -80,23 +122,124 @@ checkpoint where the scene fires, with the tunnel it unlocks
 
 **Cutscenes are composed by the engine** — a scene has no popup card: the held
 tunnel and the staged cast render full-window exactly as gameplay does, and
-`run3_cut_show` draws the title, the wrapped dialogue and the Continue prompt
-over them. The host keeps only input, timing and audio; the `#cutview` /
+`run3_cut_show` draws the dialogue bubble, the scene title and the Continue
+prompt over them. The bubble is anchored on the line's **own** authored x/y
+(dialog units on the original 800x600 stage, `x/2.5` = px, clamped to the box
+the retired DOM bubble used: 24..76% across, 18..78% down) and wraps the text to
+its own width, so a line spoken from the left wall reads on the left — a
+centred full-width band read every line as if it came from the middle of the
+tunnel. The host keeps only input, timing and audio; the `#cutview` /
 `.cutstage` DOM nodes survive as the click target (and as the text the suites
 read), with no card styling.
 
 **Per-frame staging** — `STORY_TIMELINE` holds, per dialogue frame, the camera
 and every actor's `ring` (tiles around the tube) and `z` (rows ahead of the
-staged camera), plus props. Rows are anchored 6 rows ahead of the camera so a
-scene plays just in front of the viewer.
+staged camera), plus props. Rows are anchored a row ahead of the camera so a
+scene plays just in front of the viewer — the original camera sits *in* the
+scene, level with the cast, and anchoring the cast down the tube shrank it to a
+fraction of the runner's sprite size (a camera that read as "too far").
+
+**Cast and prop scale** — a staged actor is an ordinary spritesheet of the
+game's own size: `StageActor` builds its quad at
+`(spriteSourceSize.x, spriteSourceSize.y, frame.w, frame.h) *
+0.45681063122923593` world px, the same world pixels the level's geometry is in
+(1 engine unit = 100 of them, `STAGE_PX`). So the sprite's screen height is
+`FOCAL * frame.h * 0.4568 / 100 / depth` and nothing else — no anchor, no
+quarter-screen rule, no wall floor. Props are measured in the SAME unit: a
+prop's `size` is its panel **width in character heights**, from its own pixel
+size in the original against the ~25px character (map 40/25 = 1.6, candy
+25/25 = 1.0, TrainRide balloon 18.27/25 ~ 0.73). Sizing props in tunnel tiles
+instead (the old `size * G.tile * FOCAL/dd`) made every panel ~6 characters
+wide next to a cast member a row or two further down the bore.
+
+**Where the cast can stand** — an actor is pinned to the tube WALL: `ring`
+selects a point on the level's own cross-section at radius `R`, so a cast
+member's screen x is where that wall point projects and its screen y is the
+tunnel's perspective for its depth. The original places each character at a
+free world `(x, y, z)`, so it can stand anywhere in the frame (mid-tube, in
+front of the camera, beside another character at the same depth). Reproducing
+that means giving the stage a free `(side, lift)` offset from the axis — rolled
+by `G.rot` exactly like the staged camera's — instead of a ring index.
+
+**Last checkpoint** — a scene that fires as a checkpoint completes stages on
+the level's TAIL, so the rows ahead are the NEXT level's bitmap. The tunnel's
+final checkpoint has no next level, so those rows are the solid fill: the
+staged camera backs off `STAGE_TAIL_BACK` rows from the tail so the level's own
+rows fill the view instead of a blank wall. A level whose FINISH row sits
+before the end of its own terrain needs no back-off — see the win row below.
+
+**Win row vs level end** — the original's `result-win` trigger (`BAKED_WIN`) is
+where that checkpoint's cutscene starts, *not* the end of the level's terrain:
+only a handful of levels carry one, and both of the originals' continue for
+dozens of rows past it (the Low-Power Tunnel's last part finishes on a glow
+wedge that widens and then narrows; home 1's corridor runs on). Every level
+therefore loads ALL of its authored rows, and `BAKED_WIN` is kept as the
+level's FINISH row (`level_finish_row`), which is what gameplay, the progress
+bar, the hint route and the cutscene staging use. Truncating the terrain at the
+win row was the "cutoff level problem": the rows after it fell into the solid
+fill, so the tunnel visibly ended a few rows past the trigger.
 
 **Stage camera** — the authored `Point3D` offsets are normalised to continuous
 `side = x/250`, `lift = y/150` (clamped to ±1) so the host can ease the held
-frame instead of snapping between buckets. At render time the roll is
-`cam_rot_target() - side * 0.28`, `lift` a pitch of `0.06`. A staged scene
-renders without stepping the sim (S_CUT), so the side has to be folded into the
-view roll directly (`run3_stage_cam`); writing it only into the eased target
-(run3_step) silently dropped it and every scene kept the tunnel's own roll.
+frame instead of snapping between buckets. They are a camera **position**, not
+an angle — the per-frame authored camera *quaternion* is a separate field the
+bake does not carry yet (see `readable_src`, above). The original's cutscene camera is an unparented `Transform` whose rest
+position is on the tunnel AXIS (`x=2, y=0` in `Tunnel`), and each scene frame
+moves it to an authored `(x, y)` in world axes while the tunnel rotates under
+it — so `run3_stage_cam` folds `(side, lift)` into `cam_place` as the camera's
+position *relative to the axis*, at one facet apothem per authored unit, in the
+held frame's own (world) axes (rolled by that frame's `G.rot`, since the port
+emulates the camera roll by rotating the level). The authored `y` is measured
+with **+y along gravity** — the tunnel starts with the floor at +y, which is
+why the map in `ComingThrough` can fall toward it — while the port's tube space
+has the runner's floor at **negative y** (`corner()` puts side 0 below the
+axis), so `lift` is negated before the roll: taking it as-is put the staged
+camera on the far side of the axis from the floor in every scene, which threw
+the cast off the bottom of the frame and left only the small distant sprites
+bunched around the screen centre. The held tunnel is viewed **straight down the
+bore** (`cam_pitch = 0`, the axis at `CY`), not through the gameplay chase
+camera's pitch: reusing that camera put every scene a facet apothem up the
+runner's wall and tilted 0.22 rad down. Mapping the offsets onto the view roll
+instead also tilted every scene's tunnel; the placement is what every camera
+consumer sees (tube, cast, props, `run3_runner_screen`). Its distance is
+`CAM_BACK_STAGE` apothems (closer than the chase camera's `CAM_BACK`), because
+the original views the scene from inside it rather than from behind a wall.
+
+**Authored cutscene camera — position AND quaternion** (`camera-spec.md` §10).
+The scenes set the camera two ways, and the bake now reads both: field writes
+(`Point3D = tunnel.<cam>.position; .x/.y/.z = ...` + an
+`axis*sin(A), cos(A)` quaternion) and the decompiler's push/pop form
+(`§§push(tunnel.<cam>); §§push(x); §§push(y); §§push(<z>);
+§§pop().<setPosition>(...)` + `QuaternionUtils.setFromEuler(...)`), which
+Candy uses as `setPosition(0, 150, endZ - 800)` with a small tilt and **no
+level roll** — the bake used to miss that form, leaving Candy on the fallback
+path where the port rolls the whole level and the angle comes out wrong. The
+`z` carries a base: `endZ + k` (the level's own end, where a cutscene fires —
+resolvable exactly, since the level's own length cancels), `startZ + k`, or a
+bare literal whose absolute origin is not in the data (measured across the
+baked scenes it disagrees with the cast's place by -90..+130 tunnel radii).
+Sprites are drawn far larger in a cutscene than on the track — up to 200 px on
+the original's 600 px stage — so the staged front cast is anchored at a quarter
+of the screen height and the rest of the cast scales with depth from it,
+never closer than one apothem (the wall the cast stands on). The view itself
+carries a quarter turn (`STAGE_GAUGE`): the port's cross-section frame puts side
+0's midpoint at `-PI/2` while the original's layout angle origin is the `+x`
+axis (`TunnelLayout3D.getIndexNearest` indexes a side by `atan2(y, x)` of the
+point turned into the level's own frame and rounds it by `TAU/n`), so at the
+authoring's own identity rotation every scene came out 90° round the bore — the
+cast's world places read correctly (they move with the level) while the shot did
+not. It applies to AUTHORED scenes only: a fallback scene is shot in the port's
+own frame (the level already rolled to the runner's facet), so it takes no
+gauge. The authored rotation is applied as ONE quaternion turn (the original's
+`QuaternionUtils.rotateVector(conj(q), offset)`), never as a pitch/yaw/roll
+chain: the bake builds the quaternions as `Rx*Ry*Rz`, so reading their Euler
+components back by name and applying each about a different axis turned a
+scene's roll about the bore into a TILT of the bore — the tunnel leaned instead
+of the frame turning. The cast and the props ride that tilt too, because the
+original's billboards take their up axis from the actor rather than the camera
+(`StageActor.updateBillboard`), and the stars / neighbouring tunnels /
+wormhole, drawn outside the staged projection, take it as the single angle
+`view_roll`.
 
 **Level load camera** — `open_level` sets the view roll to the target for that
 spot (`cam_rot_target()`), not to 0. 78% of baked levels spawn on a wall that
@@ -182,15 +325,37 @@ declares what they share internally.
 | --- | --- | --- |
 | cutscene dialogue + staging + camera | `cutscenes.js` (`STORY_CUT`, `STORY_PATH_CUT`, `STORY_CAMSHOT`, `STORY_TIMELINE`) | `bake_cutscenes.py` |
 | `explorelevels` level text (paths, RLE terrain bitmaps, music/colour, light triggers) | `levels/levels_baked.h`, `levels/levels.c` | `levels/bake_levels.py` |
+| the 10 unmapped `explorelevels` paths | tunnels 42-45 (4 of them; see below) | `levels/bake_levels.py` |
 | map polylines + node positions | `levels/map_assets.h` | `levels/bake_map.py` |
 | character sprite sheets, tile textures | `levels/assets_data.h`, `levels/char_*.h` | `levels/bake_assets.py` |
 | text glyph atlas | `levels/font_data.h` | `levels/bake_font.py` |
 | music track names / per-level music ids | `story.js` (`T[].music`), `app.js` (`LEVEL_TRACKS`) | hand-mapped |
 | `MapOfTheStars.mp3` | `assets/music/mapofthestars.mp3`, enum 7 in `levels/bake_levels.py` | — |
 
+**The unmapped original paths.** `orig_levels.bin` ships 39 paths, but the
+explore map only links 29 of them (+ `wormholeSpace`, which has no valid data
+and is authored). The other ten are not scenery: `homePlanA` /
+`homePlanAPart2`, `homePlanC` / `homePlanCPart2`, `wormholeP` and
+`wormholeCrossing` are full-content levels (60-95% void, varied
+cross-sections, per-level `tileWidth`s) that nothing in the decompiled map
+data ever reached, and they are baked as tunnels 42-45 (a `Part2` path is the
+same tunnel continued, so its levels concatenate onto the first part's). The
+remaining four (`homeLaunchSiteA` / `homeLaunchSiteC`: single `model` scenes,
+no tunnel; `working`: a dev scratch path of unassigned level ids) are not
+playable tunnel content.
+
 Level bit layout (from `levels_baked.h`): 1 bit per tile, `bit = row*n*k +
 side*k + lane`, LSB-first, out-of-range rows read solid; levels are authored
-mostly empty, so sparse holes are the hazard. `char_*_h` carry the per-character
+mostly empty, so sparse holes are the hazard. Three bit planes share that
+layout: `BAKED_BITS` (solid), `BAKED_CRUMB` (shakes and falls when stepped on)
+and `BAKED_GLOW` (a `~glow` terrain layer). A glow tile is an ordinary solid
+tile whose surface IS the tunnel's light, so it stays lit when a low-power
+level's power is 0 — the Low-Power Tunnel finishes on a strip of them. Its
+colour is the original's own recipe, `"glow" -> Color.interpolate(colour,
+14540253, 0.2)`: the level tint pulled 20% toward 0xDDDDDD, then fogged with
+distance and nothing else. The port used to paint a hot gold core with a
+brighter inner quad, which read as loose gold tiles floating in a black tunnel
+rather than a lit floor. `char_*_h` carry the per-character
 frame counts and `CHAR_ANIM_RANGE(ch, STATE, DIR)` the run/jump/fall/land ranges
 (AnimationSet A/B above).
 

@@ -24,8 +24,13 @@ const EXPECT = [
   [33, 140, null], [36, 30, null], [37, 30, null],
   [34, 140, null], [38, 30, null], [39, 30, null],
   [35, 140, null], [40, 30, null], [41, 30, null],
+  // recovered original paths (real levels the explore map never linked in):
+  // homePlanA + homePlanAPart2, homePlanC + homePlanCPart2, wormholeP, and
+  // the single crossing level.
+  [42, 16, null], [43, 22, null], [44, 10, null], [45, 1, null],
 ];
-const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41];
+const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+                  42, 43, 44, 45];
 
 (async () => {
   const { instance } = await WebAssembly.instantiate(bytes, {});
@@ -40,15 +45,15 @@ const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41];
   }
   e.run3_init(12345);
   console.log("tunnel_count =", e.run3_tunnel_count());
-  if (e.run3_tunnel_count() !== 42) throw new Error("bad tunnel count");
+  if (e.run3_tunnel_count() !== 46) throw new Error("bad tunnel count");
   let total = 0;
-  for (let t = 0; t < 42; t++) {
+  for (let t = 0; t < 46; t++) {
     const c = e.run3_levels_in(t);
     total += c;
     if (c <= 0) throw new Error(`tun ${t} has no levels - every tunnel must ship bitmaps`);
   }
   console.log(`total levels across all tunnels: ${total}`);
-  if (total !== 956) throw new Error("total level count drifted: " + total);
+  if (total !== 1005) throw new Error("total level count drifted: " + total);
 
   for (const [tun, count, first] of EXPECT) {
     const got = e.run3_levels_in(tun);

@@ -216,6 +216,68 @@
     L("Somebody else got this far and did not come back.", -80, 220),
   ];
 
+  /* ---- the recovered original paths (42-45): the home planet's two plan
+     runs and the P wormhole with its crossing. Real levels that ship in the
+     game but that the explore map never linked in, so the cast gets to find
+     them. ---- */
+  CUT.BelowTheHouse = [
+    L("Under the house. There is a whole tunnel under the house.", 220, -140),
+    L("It was on the survey. Just not on any map anyone drew.", -230, 60),
+    L("So we are the first ones down here?", 240, -30),
+    L("Unless somebody built it and left. Look at the tiles.", 0, -260),
+    L("They are clean. Nobody has run these.", -120, 190),
+    L("Then we have some runs to give it.", 180, 120),
+  ];
+  CUT.PlanARecorded = [
+    L("Sixteen checkpoints. Plan A is on the map now.", 230, -120),
+    L("It was always there. We just had not walked it.", -230, 70),
+    L("Writing it down counts.", 240, -40),
+    L("Then write down the other one too.", 0, -260),
+    L("The other one?", -80, 220),
+  ];
+  CUT.PlanCUnlisted = [
+    L("These walls do not match the plan.", 220, -130),
+    L("Which plan?", -230, 60),
+    L("Any of them. The survey says this is a straight run.", 0, -260),
+    L("It is not straight.", 240, -30),
+    L("Nothing on this planet is straight.", -120, 200),
+  ];
+  CUT.PlanCMapped = [
+    L("Twenty-two checkpoints. Plan C, end to end.", 0, -230),
+    L("Both plan runs, walked and recorded.", -230, 80),
+    L("Somebody owes me a better map.", 240, -20),
+    L("Somebody just made one.", 240, 200),
+    L("Fair.", -120, -280),
+  ];
+  CUT.HushInP = [
+    L("Wormhole P. Why does nobody talk about this one?", 220, -130),
+    L("Because it is quiet. Listen.", -230, 60),
+    L("...nothing. No hum, no drift.", 240, -30),
+    L("That is what worries me.", 0, -260),
+    L("Then do not stop in it.", -100, 220),
+  ];
+  CUT.WormholeSkipped = [
+    L("Every wormhole we know has a letter. This one skipped the list.", 230, -130),
+    L("It still has a mouth and an end. Same as the rest.", -230, 70),
+    L("Ten checkpoints, then the crossing.", 0, -260),
+    L("The crossing of what?", 240, -20),
+    L("Of P, presumably. Keep moving.", -80, 220),
+  ];
+  CUT.TheCrossingAhead = [
+    L("P is behind us. The crossing is through there.", 220, -130),
+    L("That is not a tunnel mouth. That is a seam.", -230, 60),
+    L("Two tunnels meeting. That is all a seam is.", 0, -260),
+    L("Nobody has ever run one.", 240, -30),
+    L("Nobody has ever found one, either. Go.", -100, 220),
+  ];
+  CUT.CrossedOver = [
+    L("That was a crossing. We went through a crossing.", 0, -230),
+    L("And came out the other side of a tunnel we were not in.", -230, 80),
+    L("Which means the two tunnels are the same tunnel.", 230, -30),
+    L("Out here? Probably.", 0, 200),
+    L("Then we add it to the map and never explain it.", 200, -280),
+  ];
+
   /* Start/end cutscene per custom tunnel (index 30-35). */
   var CUSTOM_PATH_CUT = [
     { start: null, end: "Shortcut" },            /* 30 F */
@@ -227,6 +289,17 @@
   ];
   for (var i = 0; i < CUSTOM_PATH_CUT.length; i++) {
     PATH_CUT[30 + i] = CUSTOM_PATH_CUT[i];
+  }
+
+  /* Recovered original paths (42-45), in tunnel id order. */
+  var RECOVERED_PATH_CUT = [
+    { start: "BelowTheHouse", end: "PlanARecorded" },      /* 42 Home Plan A */
+    { start: null, end: "PlanCMapped" },                   /* 43 Home Plan C */
+    { start: "WormholeSkipped", end: "TheCrossingAhead" }, /* 44 Wormhole P */
+    { start: null, end: "CrossedOver" },                   /* 45 the Crossing */
+  ];
+  for (var r = 0; r < RECOVERED_PATH_CUT.length; r++) {
+    PATH_CUT[42 + r] = RECOVERED_PATH_CUT[r];
   }
 
   /* Sequel cutscenes: played once after a tunnel's regular end cutscene. */
@@ -298,6 +371,14 @@
     Settling: [0, 2],
     WarmWalls: [0, 7],
     ComingThrough: [0, 1],   /* Runner + Skater: the map, the jumps */
+    BelowTheHouse: [0, 7],
+    PlanARecorded: [7, 0],
+    PlanCUnlisted: [7, 12],
+    PlanCMapped: [0, 7],
+    HushInP: [0, 7],
+    WormholeSkipped: [0, 1],
+    TheCrossingAhead: [1, 0],
+    CrossedOver: [0, 7],
   };
   var k;
   for (k in BAKED_CAST) CAST[k] = BAKED_CAST[k];
@@ -337,6 +418,9 @@
     { tun: 39, lvl: 29, cut: "OldGrowth" },
     { tun: 40, lvl: 29, cut: "Settling" },
     { tun: 41, lvl: 29, cut: "WarmWalls" },
+    /* recovered original paths */
+    { tun: 43, lvl: 10, cut: "PlanCUnlisted" },
+    { tun: 44, lvl: 4, cut: "HushInP" },
   ];
   global.STORY_MID_CUTS = MID_CUTS;
   /* PlanetStolen is NOT here: the original unlocks it via achievements

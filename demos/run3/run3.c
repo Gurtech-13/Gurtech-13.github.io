@@ -22,6 +22,10 @@ int GMAP_BASE = 0;
    every CRUMB_WAVE_CS, so the runner can try to outrun it. */
 static uint8_t GCR0[MAXN][MAPW];
 static uint8_t GCRUMB[MAXN][MAPW];
+/* glowing tiles: ordinary solid tiles whose surface is the tunnel's own light
+   (the Low-Power Tunnel ends on a strip of them, so they stay lit with the
+   power off). Static, so they are rebuilt with the window like GCR0. */
+static uint8_t GGLOW[MAXN][MAPW];
 #define CRUMB_WAVE_CS 10                 /* wave step, centiseconds */
 static uint16_t g_crumble[MAXN][MAXK][MAPW]; /* wave timer, centiseconds */
 static int g_armedN = 0;
@@ -67,8 +71,15 @@ static double g_prevProg = 0.0;    /* last prog seen (glimpse row clock) */
 /* staged scene camera, continuous: side -1..1 (pan/roll), lift -1..1
    (height); the host eases both, so they are never quantised */
 static double g_stageSide = 0.0, g_stageLift = 0.0;
+/* the authored staged camera (the overhaul): px position + quaternion, set
+   by run3_stage_camera further down; forward-declared so the fallback path in
+   run3_stage_cam can see whether a scene has an authored camera at all */
+static double g_stageX = 0.0, g_stageY = 0.0, g_stageZ = 0.0;
+static double g_stageRot[4] = {0.0, 0.0, 0.0, 1.0};
+static int    g_stageAuthored = 0;
 static double cam_rot_target(void); /* view roll for the current position */
 static void cam_place(void);        /* place the camera for the current frame */
+static double level_tilew(int lvl); /* a level's tile width (world units) */
 void run3_stage_cam(double side, double lift) {
   if (side < -1.0) side = -1.0;
   if (side > 1.0) side = 1.0;
@@ -76,15 +87,20 @@ void run3_stage_cam(double side, double lift) {
   if (lift > 1.0) lift = 1.0;
   g_stageSide = side;
   g_stageLift = lift;
-  /* fold the authored camera side into the view roll. run3_step does this
-     for gameplay and for S_GATE, but a staged scene (S_CUT) is rendered
-     without stepping the sim, so the side offset used to be dropped and every
-     cutscene kept the tunnel's own roll — the wrong camera angle. In
-     S_GATE run3_step owns the roll; leave it alone there. A staged scene also
-     keeps the AUTHORED per-level roll offset (gameplay drops it so the floor
-     is exactly level); the runner's pin does not apply in a cutscene. */
+  /* a normalised-pan call means "this scene has NO authored camera": clear
+     the flag so a fallback scene after an authored one is not swallowed, and
+     reset the rotation to the rest pose (identity, straight down the bore),
+     so it cannot inherit the previous scene's authored quaternion either */
+  g_stageAuthored = 0;
+  g_stageRot[0] = g_stageRot[1] = g_stageRot[2] = 0.0;
+  g_stageRot[3] = 1.0;
+  /* Scenes with an AUTHORED camera (run3_stage_camera) ignore the normalised
+     pan entirely — the scene set position and rotation in original pixels and
+     that is the whole camera. This path remains for scenes the bake found no
+     camera setup in: the port stages them at the axis plus (side, lift) with
+     the held frame's facet roll, as before. */
   if (G.state == S_CUT) {
-    G.rot = cam_rot_target() + g_rotOff - g_stageSide * 0.28;
+    G.rot = cam_rot_target() + g_rotOff;
     G.rotT = G.rot;
     cam_place();
   }
@@ -156,6 +172,14 @@ static int baked_crumb(const baked_level_t *L, int row, int side, int lane) {
   uint32_t idx = L->bit + (uint32_t)row * (uint32_t)L->n * (uint32_t)L->k +
                  (uint32_t)side * (uint32_t)L->k + (uint32_t)lane;
   return (BAKED_CRUMB[idx >> 3] >> (idx & 7)) & 1;
+}
+/* 1 = the tile glows (parallel layout to baked_tile). */
+static int baked_glow(const baked_level_t *L, int row, int side, int lane) {
+  if (!L || row < 0 || side < 0 || side >= L->n || lane < 0 || lane >= L->k) return 0;
+  if (row >= L->rows) return 0;
+  uint32_t idx = L->bit + (uint32_t)row * (uint32_t)L->n * (uint32_t)L->k +
+                 (uint32_t)side * (uint32_t)L->k + (uint32_t)lane;
+  return (BAKED_GLOW[idx >> 3] >> (idx & 7)) & 1;
 }
 /* combined missing-lane mask (holes + fallen crumble tiles) */
 static int missmask(int side, int i) {
@@ -241,6 +265,13 @@ int run3_missmask(int side, int rowAbs) { return missmask(side, rowAbs - GMAP_BA
    crumble tests pin): 0 = the flat tint, TEX_CRUMBLING = a crumbling tile
    still standing, shaking or not. A hole — authored gap or a crumble tile
    that already fell — has no surface at all. */
+/* 1 = the tile's surface glows (stays lit with the low-power lights out). */
+int run3_tile_glow(int side, int rowAbs, int lane) {
+  int i = rowAbs - GMAP_BASE;
+  if (i < 0 || i >= MAPW || side < 0 || side >= MAXN || lane < 0 || lane >= MAXK) return 0;
+  if (missmask(side, i) & (uint8_t)(1u << lane)) return 0;
+  return (GGLOW[side][i] >> lane) & 1;
+}
 int run3_tile_tex(int side, int rowAbs, int lane) {
   int i = rowAbs - GMAP_BASE;
   if (i < 0 || i >= MAPW || side < 0 || side >= MAXN || lane < 0 || lane >= 8) return 0;
@@ -332,6 +363,15 @@ static int baked_idx(int tun, int lvl) {
   return (int)BAKED_TUN_START[tun] + lvl;
 }
 
+/* Every level loads ALL of its authored rows. The original's `result-win`
+   trigger (BAKED_WIN) is NOT the end of the level's terrain: it is the row
+   where that checkpoint's cutscene starts. A handful of levels carry one —
+   the Low-Power Tunnel's last part (its closing glow wedge keeps widening and
+   then narrows past the trigger) and home 1 (its narrow corridor runs on) —
+   and cutting the terrain there left those rows unloaded, so the tunnel ended
+   in the solid fill a few rows past the trigger. The win row is kept as the
+   level's FINISH row (see level_finish_row), which is what gameplay and the
+   cutscene staging use. */
 static void compute_rows(void) {
   const tunnel_t *t = tun();
   g_rowStart[0] = 0.0;
@@ -339,26 +379,53 @@ static void compute_rows(void) {
     const baked_level_t *B = 0;
     double rows = 45.0;
     if (baked_at(G.tun, j, &B)) rows = (double)B->rows;
-    /* authored early level end (result-win trigger): finish at that row */
-    {
-      int bi = baked_idx(G.tun, j);
-      if (bi >= 0 && BAKED_WIN[bi] > 0 && (double)BAKED_WIN[bi] < rows)
-        rows = (double)BAKED_WIN[bi];
-    }
     g_levelRows[j] = rows;
     g_rowStart[j + 1] = g_rowStart[j] + rows;
   }
 }
+/* The row where a level's checkpoint fires and its scene stages: the authored
+   `result-win` row when the level has one ("the cutscene starts here"), the
+   end of its terrain otherwise. The terrain past a finish row is still this
+   level's own (see compute_rows), so a scene staged on it looks down the real
+   tunnel. */
+/* The level's own tile width, in world pixels. BAKED_TILEW is the original's
+   own `tileWidth` value verbatim (so it is ALREADY pixels - no scaling), and
+   a level whose data carried no `tileWidth` uses the original loader's
+   default of 75 (see TunnelSection's parseInt(..., "tileWidth", 75)). */
+#define DEFAULT_TILEW 75.0
+static double level_tilew(int lvl) {
+  int bi = baked_idx(G.tun, lvl);
+  if (bi >= 0 && BAKED_TILEW[bi] > 0) return (double)BAKED_TILEW[bi];
+  return DEFAULT_TILEW;
+}
+/* The tile width a tunnel's own levels use (its first baked level's own
+   `tileWidth`, else the loader's 75 default). The space layer draws a branch
+   tunnel at its own levels' scale, and `baseTile` is now a single constant
+   (the default), so it has to ask per tunnel. */
+double run3_tunnel_tile(int tun) {
+  if (tun < 0 || tun >= (int)NTUNNELS) return DEFAULT_TILEW;
+  int bi = baked_idx((uint16_t)tun, 0);
+  if (bi >= 0 && BAKED_TILEW[bi] > 0) return (double)BAKED_TILEW[bi];
+  return DEFAULT_TILEW;
+}
+static double level_finish_row(int lvl) {
+  double end = g_rowStart[lvl + 1];
+  int bi = baked_idx(G.tun, lvl);
+  if (bi >= 0 && BAKED_WIN[bi] > 0) {
+    double w = g_rowStart[lvl] + (double)BAKED_WIN[bi];
+    if (w < end) end = w;
+  }
+  return end;
+}
 
 static void apply_level_look(int lvl) {
   /* per-level tile size / roll / music / light state (authored data) */
-  const tunnel_t *t = tun();
   int bi = baked_idx(G.tun, lvl);
-  G.tile = t->baseTile;
+  G.tile = DEFAULT_TILEW;
   g_col0 = 0; g_col1 = 0; g_mus = 0; g_rotOff = 0.0;
   g_powerBase = 1.0; g_trigIdx = 0; g_glimpseLeft = 0.0;
   if (bi >= 0) {
-    if (BAKED_TILEW[bi] > 0) G.tile = (double)BAKED_TILEW[bi] / 100.0;
+    if (BAKED_TILEW[bi] > 0) G.tile = (double)BAKED_TILEW[bi];
     g_col0 = BAKED_COLOR0[bi];
     g_col1 = BAKED_COLOR1[bi];
     g_mus = BAKED_MUSIC[bi];
@@ -376,14 +443,14 @@ static void apply_level_look(int lvl) {
 static void level_xsec(int lvl, int *n, int *k, double *tile, uint32_t *col0) {
   const tunnel_t *t = tun();
   int nn = t->n_sides, kk = t->k_tiles;
-  double tl = t->baseTile;
+  double tl = DEFAULT_TILEW;
   uint32_t c0 = 0;
   const baked_level_t *B = 0;
   if (baked_at(G.tun, lvl, &B)) {
     nn = B->n; kk = B->k;
     int bi = baked_idx(G.tun, lvl);
     if (bi >= 0) {
-      if (BAKED_TILEW[bi] > 0) tl = (double)BAKED_TILEW[bi] / 100.0;
+      if (BAKED_TILEW[bi] > 0) tl = (double)BAKED_TILEW[bi];
       c0 = BAKED_COLOR0[bi];
     }
   }
@@ -476,15 +543,17 @@ static void fill_rows(int R0, int R1, const baked_level_t *L, int lvlRow0,
       if (seamTail && lr >= L->rows - SEAM_SOLID) seam = 1;
     }
     for (int s2 = 0; s2 < L->n; s2++) {
-      uint8_t m = 0, mc = 0;
+      uint8_t m = 0, mc = 0, mg = 0;
       if (!seam && lr >= 0 && lr < L->rows) {
         for (int ln = 0; ln < L->k; ln++) {
           if (!baked_tile(L, lr, s2, ln)) m |= (uint8_t)(1u << ln);
           else if (baked_crumb(L, lr, s2, ln)) mc |= (uint8_t)(1u << ln);
+          if (baked_glow(L, lr, s2, ln)) mg |= (uint8_t)(1u << ln);
         }
       } /* otherwise (seam band, or past the baked rows): solid */
       GMAP[s2][i] = m;
       GCR0[s2][i] = (uint8_t)(mc & ~m); /* crumble only where solid */
+      GGLOW[s2][i] = (uint8_t)(mg & ~m); /* glow only where solid */
     }
   }
 }
@@ -501,11 +570,17 @@ static void build_window(void) {
   int r0 = (int)g_rowStart[G.lvl];
   GMAP_BASE = r0;
   for (int i = 0; i < MAPW; i++)
-    for (int s = 0; s < MAXN; s++) { GMAP[s][i] = 0; GCR0[s][i] = 0; GCRUMB[s][i] = 0; }
+    for (int s = 0; s < MAXN; s++) { GMAP[s][i] = 0; GCR0[s][i] = 0; GCRUMB[s][i] = 0; GGLOW[s][i] = 0; }
   if (!B) return; /* no data: an unbroken tunnel */
   int nextRow0 = (int)g_rowStart[G.lvl + 1];
   int last = (int)tun()->levels - 1;
-  fill_rows(r0, nextRow0 - 1, B, r0, G.lvl > 0, 1);
+  /* The tail seam band is the solid run a level boundary is crossed on. A
+     level with no following level has no boundary there, and a level whose
+     finish row (result-win: where the cutscene starts) sits before the end of
+     its own terrain keeps its authored rows, so the tunnel's closing stretch
+     is drawn — the Low-Power Tunnel's glow wedge narrows right to the end. */
+  int tailSeam = (G.lvl < last) || (G.rowEnd >= g_rowStart[G.lvl + 1]);
+  fill_rows(r0, nextRow0 - 1, B, r0, G.lvl > 0, tailSeam);
   int lim = nextRow0 + PADW;
   if (lim > r0 + MAPW - 1) lim = r0 + MAPW - 1;
   const baked_level_t *N = 0;
@@ -608,7 +683,7 @@ static void open_level(int lvl) {
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
   G.rowStart = g_rowStart[lvl];
-  G.rowEnd = g_rowStart[lvl + 1];
+  G.rowEnd = level_finish_row(lvl);
   build_window();
   crumb_reset();
   g_hintDirty = 1;
@@ -649,7 +724,7 @@ static void open_level_continue(int lvl, double over) {
   G.theme = t->theme;
   G.rowsPer = rpsAt(lvl);
   G.rowStart = g_rowStart[lvl];
-  G.rowEnd = g_rowStart[lvl + 1];
+  G.rowEnd = level_finish_row(lvl);
   build_window();
   crumb_reset();
   g_hintDirty = 1;
@@ -664,6 +739,24 @@ static void open_level_continue(int lvl, double over) {
 }
 
 /* ---------------- helpers ---------------- */
+/* A scene staged as a checkpoint is completed sits the camera at the level's
+   TAIL (see backdrop_at) so it shows the stretch just run. Past a level's last
+   row the window is filled from the NEXT level's own bitmap — but the tunnel's
+   FINAL checkpoint has no next level, so those rows are the solid fill and a
+   camera sitting on rowEnd stares at a blank wall. Back the staged camera up
+   so the level's own tail rows are what fills the view. A level whose finish
+   row sits before the end of its terrain (the win trigger: the scene fires
+   while the authored tunnel still runs on) needs no back-off — the view is
+   already the level's own rows. */
+#define STAGE_TAIL_BACK 16.0
+static void stage_back_from_tail(void) {
+  const tunnel_t *t = tun();
+  if (G.lvl + 1 < (int)t->levels) return; /* a next level really is drawn ahead */
+  if (g_rowStart[G.lvl + 1] > G.rowEnd + 1.0) return; /* authored rows still ahead */
+  double back = G.rowEnd - STAGE_TAIL_BACK;
+  if (back < G.rowStart) back = G.rowStart;
+  if (G.prog > back) G.prog = back;
+}
 static int side_under(void) { return wrap_side(G.ring, G.k, G.shape); }
 static int lane_under(void) { return wrap_lane(G.ring, G.k); }
 
@@ -674,8 +767,13 @@ static int lane_under(void) { return wrap_lane(G.ring, G.k); }
  * Base values from the base character class: jump 900, speed 270,
  * run 300, fall 300, ease 0.9; per-character multipliers/overrides from
  * each character's constructor (Runner extends base 1.17x/1.21x/...,
- * Skater maxspeed 600, Angel gravity 0.4, Ghost/Pirate reuse the Child /
- * Pastafarian factories, ...). Normalized to Runner = 1.0.
+ * Skater maxspeed 600, Lizard jump 1080 / fall 285 (Lizard.as ctor * 1.2 and
+ * §,A§'s awake branch), Ghost/Pirate reuse the Child / Pastafarian factories,
+ * ...). Normalized to Runner = 1.0.
+ * Angel is the ONE row below that is not a direct copy: Angel.as overrides no
+ * fall value at all (its 0.4 is §>!7§ air control, and its glide lives in the
+ * §4Y§/§'s§ ability objects, which this engine does not have), so the 0.3636
+ * GRAV value is this port's stand-in for that unported glide.
  * JUMP = jump velocity, FWD = forward speed, LAT = strafe speed,
  * GRAV = fall gravity (Angel uses its 0.4 glide factor), EASE = steering
  * response. Special abilities (bridges, glides, duplicates, wall-sticks)
@@ -686,7 +784,7 @@ static const double CHAR_JUMP[NCHAR] = {
   0.3306, /* child 360 */
   0.8264, /* angel (base 900) */
   0.3306, /* ghost = child */
-  0.8264, /* lizard (base) */
+  0.9917, /* lizard 1080 (Lizard.as ctor: jump * 1.2, and §,A§ sets §?!>§=1080) */
   0.8264, /* ninja (base) */
   0.6612, /* student 720 */
   0.5372, /* gentleman 585 */
@@ -743,7 +841,7 @@ static const double CHAR_GRAV[NCHAR] = {
   0.8333, /* child 285 */
   0.3636, /* angel glide 0.4 */
   0.8333, /* ghost = child */
-  0.8772, /* lizard (base 300) */
+  0.8333, /* lizard 285 (Lizard.as §,A§ awake branch; 240 when asleep) */
   0.8772, /* ninja (base) */
   0.7895, /* student 270 */
   0.8333, /* gentleman 285 */
@@ -1024,7 +1122,7 @@ void run3_start_inf(void) {
   G.tun = 0;
   G.shape = INF_SEG_N;
   G.k = INF_SEG_K;
-  G.tile = 0.70;
+  G.tile = DEFAULT_TILEW;
   G.theme = 0;
   g_infSpeed = INF_BASE_SPEED;
   g_infRows = 0;
@@ -1093,8 +1191,8 @@ void run3_flap(void) {
   if (G.state == S_READY) {
     G.state = S_RUN;
   } else if (G.state == S_RUN) {
-    if (G.jump <= 0.001 && G.jv <= 0.0) {
-      G.jump = 0.001;
+    if (G.jump <= 0.1 && G.jv <= 0.0) {
+      G.jump = 0.1;
       G.jv = JUMPV * CHAR_JUMP[char_idx()];
       G.landT = 0.0; /* leaving ground cancels the landing pose */
     }
@@ -1225,6 +1323,7 @@ void run3_step(double dt) {
       if (mid_armed(G.tun, G.lvl)) {
         mid_disarm(G.tun, G.lvl);
         G.prog = G.rowEnd; /* sit on the tail of the finished level */
+        stage_back_from_tail(); /* last checkpoint: keep authored rows ahead */
         G.state = S_GATE;
       } else {
         double over = G.prog - G.rowEnd;
@@ -1268,7 +1367,7 @@ void run3_step(double dt) {
       } else if (!lane_ok_at((int)G.prog)) {
         /* ran off an edge: automatic last-moment jump. Normal landing rules
            apply from here — if it comes down in the void, the runner dies. */
-        G.jump = 0.001;
+        G.jump = 0.1;
         G.jv = JUMPV * CHAR_JUMP[char_idx()];
         G.landT = 0.0;
       }
@@ -1299,8 +1398,12 @@ void run3_step(double dt) {
      pinned at the low third by construction. While airborne the roll is
      FROZEN (see below) and while steering it eases onto the next facet, so the
      step is never a one-frame jerk. */
+  /* a staged scene (S_CUT / S_GATE) adds no authored roll: its camera is a
+     POSITION (see run3_stage_cam), it does not tilt the held tunnel. It does
+     keep the level's AUTHORED roll offset, which gameplay drops so the floor is
+     exactly level. */
   double target2 = cam_rot_target();
-  if (G.state == S_CUT || G.state == S_GATE) target2 += -g_stageSide * 0.28;
+  if (G.state == S_CUT || G.state == S_GATE) target2 += g_rotOff;
   if (G.state == S_RUN && (G.jump > 0.0 || G.jv > 0.0)) {
     /* airborne: the roll is FROZEN. gravSide does not follow the wall until a
        touchdown, so the view cannot flip under the player mid-jump; the target
@@ -1351,6 +1454,18 @@ double run3_progress(void) {
   return p < 0.0 ? 0.0 : (p > 1.0 ? 1.0 : p);
 }
 double run3_rows_per(void) { return G.rowsPer; }
+/* THE VERSION LIVES HERE AND NOWHERE ELSE.
+
+   It is the engine's own build string, handed to the host so the page can show
+   which wasm it is actually running - the point being that a stale cached
+   build can never silently masquerade as a new one. index.html and the JS
+   carry no version number at all: the host reads it back out of the engine it
+   loaded (run3_version/run3_version_len) and paints the label from that, and
+   the engine is fetched with cache revalidation so the bytes are never the
+   old ones. Bump this ONE line per build. */
+#define RUN3_VERSION "0.9.6"
+const char *run3_version(void) { return RUN3_VERSION; }
+int32_t run3_version_len(void) { return (int32_t)(sizeof(RUN3_VERSION) - 1); }
 int32_t run3_sides(void) { return G.shape; }
 int32_t run3_lanes(void) { return G.k; }
 int32_t run3_theme(void) { return G.theme; }
@@ -1365,6 +1480,15 @@ double run3_jump(void) { return G.jump; }
 static double g_scratch[32];
 double *run3_scratch(void) { return g_scratch; }
 double run3_level_rows(void) { return G.rowEnd - G.rowStart; }
+/* the level's authored row count (test seam). `level_finish_row` can sit
+   BEFORE this when the level carries a result-win trigger, and whether it does
+   is exactly what decides whether the staged camera has to back off the tail:
+   rows past a finish row inside the level's own terrain are real tunnel, rows
+   past the authored end are the solid fill. */
+double run3_level_authored_rows(void) {
+  if (G.lvl < 0 || G.lvl >= MAX_LEVELS) return 0.0;
+  return g_levelRows[G.lvl];
+}
 double run3_ring(void) { return G.ring; }
 /* the view roll the current frame renders with (test seam) */
 double run3_rot(void) { return G.rot; }
@@ -1451,11 +1575,205 @@ void run3_runner_pt(double *px, double *py) { runner_wall_pt(px, py); }
      * DISTANCE: a multiple of the facet APOTHEM, so the framing is identical
        halfway along a side and at a corner, and in a 0.3-tile level as in a
        3.0-tile one.                                                    */
-#define CAM_BACK 1.25 /* camera distance behind the runner plane, in apothems */
+#define CAM_BACK 1.25       /* chase camera behind the runner plane (apothems) */
+#define CAM_BACK_STAGE 1.0  /* staged camera behind the scene (apothems): used
+                               when the scene sets no camera of its own */
 #define CAM_OUT  0.35 /* camera offset from the runner toward the axis */
 static double g_camX = 0.0, g_camY = 0.0;   /* camera in the rolled view frame */
 static double g_camBack = 0.0, g_camOff = 0.0;
+static double g_castRef = 0.0;  /* cast sprite scale reference (runner plane) */
 static double g_runRx = 0.0, g_runRy = 0.0; /* the runner, rolled */
+
+/* ---- STAGED SCENE CAMERA: the original's own model (overhaul) ----
+   A cutscene camera in the original is an unparented Transform whose position
+   AND rotation the scene sets per frame:
+
+     Point3D = tunnel.<cam>.<position>;  _loc1_.x/y/z = <x>, <y>, <z>;
+     var _loc2_ = tunnel.<cam>.<rotation>;      (a quaternion)
+     _loc2_.x = a*sin(A); ... .w = cos(A);      (a turn of 2A about axis a,b,c)
+
+   and the renderer (`Context3DUtils`) projects with a fixed VERTICAL fov of
+   1.2566370614359172 rad = 72 degrees, near 15, far 3000. So a staged frame is
+   fully authored in ORIGINAL PIXELS, and the port stages it the same way:
+
+   * WORLD SCALE: one engine unit IS one original world pixel (see run3.h's
+     WORLD UNITS note). A 75-px tile level is 75 units across, and z = 11298
+     in Obvious is 11298 units down the bore — sensible against the original's
+     own 15..3000 near/far and against scenes that `translate(0, 0, 80)` their
+     camera as a dolly. Nothing is converted on the way in.
+   * REST POSE: position (2, 0, z), rotation identity — the unparented camera
+     rests ON THE TUNNEL AXIS looking straight down the bore (Tunnel's own
+     camera rest is x=2, y=0).
+   * VIEW BASIS: the renderer looks down -z with +y up (Billboard.lookAt
+     orients `position - target` to the camera's -z with up +y). The tunnel's
+     bore runs along +z with the floor at -y (corner() puts side 0 below the
+     axis), which is the SAME handedness once the camera's own +z faces back
+     up the bore; the projection multiplies depth by -1, so the authored z
+     (always large and positive) means 'down the tunnel'.
+   * ORIENTATION: the quaternion is consumed as-is — every component of it,
+     as one turn. The view is `R^-1 * (p - camPos)`, exactly the original's
+     own `QuaternionUtils.rotateVector(camera.rotation.conjugate(), offset)`:
+     the roll about the bore AND the tilt of the bore come out of the same
+     rotation, so a scene that rolls its camera gets a rolled frame rather
+     than a tilt across the bore. The port's 'rotate the level by G.rot'
+     emulation stays for GAMEPLAY only; a staged scene draws the level
+     unrotated (G.rot = 0) and lets the camera carry the turn. */
+#define STAGE_PX 1.0         /* engine units per original pixel: 1 - the same unit */
+/* THE STAGED CAMERA'S PAN OFFSET, in original pixels, calibrated on
+   ComingThrough.
+
+   A scene's authored x/y is a place in the original's cross-section, so the
+   port turns it into its own frame before it is subtracted from the world.
+   That place is not the bore axis, though: ComingThrough's frame 0 sets the
+   camera to (2, 106) - x equal to the camera's own rest pose and y the scene's
+   first raised pan - and the original's whole camera rig carries that offset.
+   Subtracting it puts ComingThrough's camera exactly ON the bore axis (so the
+   centre pixel of the frame IS the tunnel axis, at every depth) while every
+   other scene keeps its own authored pan relative to that rig, rather than the
+   pan being thrown away. `notes.txt` §7 has the measurements. */
+#define STAGE_PAN_X 2.0      /* the rig's x, from ComingThrough's authored x */
+#define STAGE_PAN_Y 106.0    /* the rig's y, from that same frame's pan */
+/* the cast's own z baseline: bake_cutscenes.py emits a scene's cast z as
+   STAGE_NEAR_ROWS + (row - sceneFront), so the FRONT cast member sits here */
+#define STAGE_NEAR_ROWS 1.0
+
+/* Per frame: the camera's authored z, the base it is measured from, and the
+   FRONT cast member's raw row (the same anchor bake_cutscenes.py measures the
+   cast z from).
+
+   The original writes the camera's z in one of two ways, and only the first is
+   resolvable from the data (see camera-spec.md 10):
+
+     zb 1  `<level>.endZ + z`  — z px before the level's END, where a cutscene
+            fires (Candy's setPosition(0, 150, endZ - 800)). The level's own
+            end is a place this port knows, so the distance is EXACT:
+            (front row + z) ahead of the front cast — no level origin
+            needed, because the cast's rows and the level's end are both in
+            the level's own coordinates.
+     zb 2  `<level>.startZ + z` — measured from the level's start.
+     zb 0  a bare literal: the absolute coordinate the scene was authored in.
+            Its origin is not recoverable (measured across the baked scenes it
+            disagrees with the cast's own place by -90..+130 tunnel radii), so
+            this form keeps the port's own shot: the authored z read against
+            the cast's rows when that lands inside the original's 15..3000 px
+            near/far band, and one tube radius otherwise. */
+static double g_stageZb = 0.0, g_stageFront = 0.0; /* g_stageZ is the camera's z */
+void run3_stage_shot(double zpx, double zb, double frontRow) {
+  g_stageZ = zpx;
+  g_stageZb = zb;
+  g_stageFront = frontRow;
+}
+/* The camera's distance ahead of the front cast member, in engine units.
+
+   The cast's rows and the camera's authored z are the SAME coordinate: the
+   level's own row chain, a row being the level's own tile width (levels differ
+   — the game ships tile widths from a few tens of px to a few hundred, and
+   level_tilew is the one this level uses). So `front * tilew` is the front
+   member's place and `z / 100` the camera's, and the difference is the shot —
+   exactly the authored data, used as it is. There is no fallback: a scene whose
+   camera could not be read would be a scene the port simply cannot stage. */
+/* The port's own staged camera distance: one facet apothem behind the front
+   cast. This is the shot a scene with NO readable camera gets, and the one a
+   bare-literal camera z falls back to when its reading is not usable. */
+static double stage_own_dist(void) {
+  int n = G.shape > 0 ? G.shape : 1;
+  double apo = xsec_R(n, G.k, G.tile) * scos(PI / (double)n);
+  if (!(apo > 0.05)) apo = 2.0;
+  return CAM_BACK_STAGE * apo;
+}
+/* The original's camera near/far planes, in world px. A bare-literal authored
+   z is only believed when the shot it implies lands inside this band; see the
+   base-0 note above. */
+#define STAGE_SHOT_NEAR 15.0
+#define STAGE_SHOT_FAR  3000.0
+static double stage_shot_dist(void) {
+  if (!g_stageAuthored) {
+    /* NO authored camera for this scene (the bake found no setPosition on its
+       camera): there is no shot to read, so the port's own staged camera
+       stands where `run3_stage_cam` puts it, one apothem off the wall. Every
+       scene that HAS one goes through the authored path below. */
+    return stage_own_dist();
+  }
+  double tw = level_tilew((int)G.lvl);
+  if (g_stageZb > 1.5) /* `startZ + z`: z is measured from the level's start */
+    return g_stageZ * STAGE_PX - g_stageFront * tw;
+  /* `endZ + z` and the bare literal both put the camera at `z` in the level's
+     own coordinate, ahead of the front cast by `front * tilew`. The endZ form
+     is the one that resolves exactly: the level's own length cancels, because
+     the end IS `R` rows in — Candy's `setPosition(0, 150, endZ - 800)` with the
+     front cast at row -6.9 is `-6.9 * tilew + 8` units.
+
+     The BARE LITERAL does not: its origin is the scene's own section chain
+     while the cast's rows are level-local, so read as a distance it lands
+     anywhere from -13000 to +6400 px across the baked scenes (215 of the 219
+     authored segments are this form). Believing it unconditionally staged
+     most scenes with their cast BEHIND the camera, which draws an empty
+     frame — the mid-gate scene `OfCourse` resolves to -9739 px that way.
+     So the bare form is believed only where it lands inside the original's
+     own near/far band, and otherwise the port keeps its own shot. The
+     authored PAN, orientation and gauge are unaffected: this decides the
+     distance only. */
+  double d = g_stageFront * tw - g_stageZ * STAGE_PX;
+  if (d >= STAGE_SHOT_NEAR && d <= STAGE_SHOT_FAR) return d;
+  return stage_own_dist();
+}
+
+void run3_stage_camera(double px, double py, double pz,
+                       double qx, double qy, double qz, double qw) {
+  g_stageX = px; g_stageY = py; g_stageZ = pz;
+  g_stageRot[0] = qx; g_stageRot[1] = qy; g_stageRot[2] = qz; g_stageRot[3] = qw;
+  double n = ssqrt(qx * qx + qy * qy + qz * qz + qw * qw);
+  if (n > 1e-6) {
+    g_stageRot[0] /= n; g_stageRot[1] /= n;
+    g_stageRot[2] /= n; g_stageRot[3] /= n;
+  } else {
+    g_stageRot[0] = g_stageRot[1] = g_stageRot[2] = 0.0; g_stageRot[3] = 1.0;
+  }
+  g_stageAuthored = 1;
+  if (G.state == S_CUT) {
+    G.rot = 0.0;               /* the level stays put; the camera turns */
+    G.rotT = 0.0;
+    cam_place();
+  }
+}
+/* the staged frame's authored camera, in engine units (render.c consumes):
+   the authored position turned INTO THE PORT'S OWN CROSS-SECTION FRAME,
+   straight in original pixels. z is in the SAME frame the renderer draws the
+   cast in — a camera-relative depth where the front cast row is 0
+   (run3_stage_row_z) — so the camera sits `d` units BEHIND the front cast,
+   minus how far the scene has dollied it forward ((z - z0)): moving the
+   authored z forward brings the camera closer, exactly as the original's
+   `camera.translate(0, 0, ...)` does.
+
+   THE SAME TURN APPLIES TO THE CAMERA, INVERSE. `stage_view_map` turns the
+   world offset by the gauge (`STAGE_GAUGE`) to lift the port's tube space
+   into the original's frame, so the authored camera POSITION — which is a
+   place in that same original frame — has to be turned by the INVERSE of the
+   gauge before it is subtracted, or the world turns under a camera that does
+   not. The rig's own pan offset (`STAGE_PAN_X/Y`, calibrated on ComingThrough)
+   comes off first, in the ORIGINAL's frame, so that scene lands on the axis
+   and every other scene keeps its pan relative to the same rig.
+
+   The gauge is `PI/2 + PI` (render.c): the cross-section quarter turn that
+   makes the port's ring index the original's side index, plus the half turn
+   the scenes are presented with. Its inverse is `R(-3*PI/2) = R(PI/2)`, i.e.
+   `(x, y) -> (-y, x)`, and BOTH the offset and the turn have to move together
+   with the gauge or the world turns under a camera that does not. */
+double run3_stage_pos_x(void) { return -(g_stageY - STAGE_PAN_Y) * STAGE_PX; }
+double run3_stage_pos_y(void) { return  (g_stageX - STAGE_PAN_X) * STAGE_PX; }
+double run3_stage_pos_z(void) { return -stage_shot_dist(); }
+/* the shot distance itself: render.c sizes the staged cast against it, so a
+   front cast member always reads at the same fraction of the screen */
+double run3_stage_dist(void) { return stage_shot_dist(); }
+/* A cast row as a depth in the same frame: row 1 (the bake's STAGE_NEAR_ROWS,
+   the scene's front member) is 0 and rows advance a level tile each, which is
+   how the renderer's own rows advance — so the cast spans the level's real
+   geometry instead of a rescaled copy of it. */
+double run3_stage_row_z(double zrow) {
+  return (zrow - STAGE_NEAR_ROWS) * level_tilew((int)G.lvl);
+}
+const double *run3_stage_quat(void) { return g_stageRot; }
+int run3_stage_has_camera(void) { return g_stageAuthored; }
 
 /* the side the roll is quantized to. gravSide only follows the wall on a
    touchdown, so the roll is FROZEN while airborne and re-quantized on landing */
@@ -1515,14 +1833,14 @@ static double runner_apothem(void) {
 /* the runner's vertical world offset this frame: the jump (or the fall out of
    the tunnel) plus the landing bob. The camera follows it one-for-one, so the
    runner holds their screen row and the tunnel does the moving. */
-#define LAND_BOB_AMP 0.030 /* world units of the touchdown dip */
+#define LAND_BOB_AMP 3.0 /* world pixels of the touchdown dip */
 double run3_runner_lift(void) {
   if (G.state == S_DEAD) {
     double dd = G.fallT;
     if (dd > VOID_TIME) dd = VOID_TIME;
-    return 0.02 - dd * 1.1;
+    return 2.0 - dd * 110.0;
   }
-  double lift = 0.02 + G.jump;
+  double lift = 2.0 + G.jump;
   if (G.landT > 0.0) {
     double p = G.landT / 0.25;
     if (p > 1.0) p = 1.0;
@@ -1541,9 +1859,43 @@ static void cam_place(void) {
   double c = scos(G.rot), s = ssin(G.rot);
   g_runRx = Px * c - Py * s;
   g_runRy = Px * s + Py * c;
-  g_camX = g_runRx;                        /* lateral pan: runner dead centre */
-  g_camY = g_runRy + g_camOff + run3_runner_lift();
+  if (G.state == S_CUT || G.state == S_GATE) {
+    /* STAGED SCENE. Two models, chosen per scene:
+
+       AUTHORED (the overhaul — run3_stage_camera): the scene set the camera's
+       position and rotation itself, in original pixels. The position converts
+       about the rest pose (2, 0) in original pixels, the bore slides by the
+       authored z (g_stageZ), and the quaternion is passed to render.c as-is.
+       The camera is expressed in the VIEW frame (x right, y up, z up the
+       bore), so no roll rotation is applied to it here — the renderer tilts
+       the bore by the quaternion instead. The level draws unrotated.
+
+       FALLBACK (scenes the bake found no camera setup in): the old normalised
+       (side, lift) pan on the axis, in the held frame's own rolled axes, with
+       the level rolled by the facet + authored offset as before. */
+    if (g_stageAuthored) {
+      g_camBack = 1.0;                 /* nominal depth 0 (the bore slides) */
+      g_camX = run3_stage_pos_x();
+      g_camY = run3_stage_pos_y();
+    } else {
+      g_camBack = CAM_BACK_STAGE * apo;
+      double ox = g_stageSide * apo, oy = -g_stageLift * apo; /* +y = up here */
+      g_camX = ox * c - oy * s;
+      g_camY = ox * s + oy * c;
+    }
+  } else {
+    g_camX = g_runRx;                      /* lateral pan: runner dead centre */
+    g_camY = g_runRy + g_camOff + run3_runner_lift();
+  }
+  /* the distance at which a cast sprite is cast_base_h() px tall — the SAME
+     world scale the runner has on the track (CAM_BACK * apo), so a character
+     reads against the tunnel in a cutscene exactly as it does in gameplay.
+     A staged frame moves the camera's PLACE, never the world's scale: sizing
+     the cast off the staged camera's nominal depth instead made every
+     cutscene character a speck (render.c's cast_depth_scale). */
+  g_castRef = (G.state == S_CUT || G.state == S_GATE) ? CAM_BACK * apo : g_camBack;
 }
+double run3_cast_ref(void) { return g_castRef; }
 double run3_cam_x(void) { return g_camX; }
 double run3_cam_y(void) { return g_camY; }
 double run3_cam_back(void) { return g_camBack; }
@@ -1579,6 +1931,12 @@ void run3_cutscene_hold(void) {
   if (G.rowEnd > 900000.0) return; /* never stage infinite mode */
   G.state = S_CUT;
   g_stageSide = 0; g_stageLift = 0;
+  stage_back_from_tail(); /* no next level past the tunnel's last checkpoint */
+  /* place the STAGED camera even before the host pushes its first keyframe
+     (a scene with no cast never calls run3_stage_cam): the held tunnel is
+     viewed from the cutscene camera, not the gameplay chase camera */
+  G.rot = G.rotT = cam_rot_target() + g_rotOff;
+  cam_place();
 }
 /* resume the sim exactly where hold() froze it (mid-tunnel cutscenes) */
 void run3_cutscene_resume(void) {
@@ -1599,10 +1957,14 @@ static void backdrop_at(int32_t tunIdx, int32_t lvl, int atEnd) {
   if (lvl >= (int)t->levels) lvl = (int)t->levels - 1;
   g_power = 1.0; /* staged scenes play with the lights on */
   open_level(lvl);
-  if (atEnd && G.rowEnd < 900000.0) G.prog = G.rowEnd - 0.001;
+  if (atEnd && G.rowEnd < 900000.0) {
+    G.prog = G.rowEnd - 0.001;
+    stage_back_from_tail(); /* no next level past the tunnel's last checkpoint */
+  }
   /* load the camera angle for the staged spot instead of easing in from the
-     level-start roll (open_level resets the view) */
-  G.rot = G.rotT = cam_rot_target();
+     level-start roll (open_level resets the view). A staged scene keeps the
+     level's authored roll offset, which gameplay drops. */
+  G.rot = G.rotT = cam_rot_target() + g_rotOff;
   G.state = S_CUT;
   g_stageSide = 0; g_stageLift = 0;
   cam_place();
@@ -1626,9 +1988,29 @@ static uint8_t map_locked[MAX_TUNNELS];
 static uint8_t map_cleared[MAX_TUNNELS];
 
 /* menu state */
-static int menu_char = 0;     /* selected character on menu */
+static int menu_char = 0;     /* selected character on menu (sprite-atlas id) */
 static int menu_hover = -1;   /* hover target: 0=play, 1=inf, 2=char area */
 static int menu_char_count = 17;
+
+/* The selection grid is drawn in the ORIGINAL game's character registry order
+   (character/§'O§.init()): Runner, Skater, Student, Angel, Lizard, Gentleman,
+   Duplicator, Skier, Bunny, Child, Pastafarian, Jack-o-Lantern, Climber,
+   Ghost, Ice Skater, Pirate, Ninja. The entries are THIS port's sprite-atlas
+   ids: the atlas order (levels/bake_assets.py CHARS) is only a storage
+   detail and must not decide the selection screen. Ids 6 (unused random slot)
+   and 7 (Zombie, no class) in the original registry are not playable. */
+static const int CHAR_MENU_ORDER[NCHAR] = {
+  0, 1, 7, 3, 5, 8, 12, 14, 10, 2, 9, 16, 11, 4, 15, 13, 6,
+};
+int run3_char_order(int pres) {
+  if (pres < 0 || pres >= NCHAR) return 0;
+  return CHAR_MENU_ORDER[pres];
+}
+int run3_char_pres(int atlas) {
+  int i;
+  for (i = 0; i < NCHAR; i++) if (CHAR_MENU_ORDER[i] == atlas) return i;
+  return (atlas >= 0 && atlas < NCHAR) ? atlas : 0;
+}
 
 static int map_scroll_x = 0;
 void run3_enter_map(void) {
@@ -1863,8 +2245,9 @@ int run3_menu_hover(int mx, int my) {
   if (mx > cx - 160 && mx < cx + 160 && my > 340 && my < 400) return 0;
   if (mx > cx - 160 && mx < cx + 160 && my > 420 && my < 480) return 1;
   // character grid: 80x80 boxes, 90px pitch, 9 per row, 2 rows
-  // row 0: y 520-600, row 1: y 620-700
-  for (int i = 0; i < menu_char_count; i++) {
+  // row 0: y 520-600, row 1: y 620-700. i is the PRESENTATION slot, so the
+  // host indexes story.js C[] (which is in the original registry order).
+  for (int i = 0; i < menu_char_count && i < NCHAR; i++) {
     int row = i / 9;
     int col = i % 9;
     int bx = 40 + col * 90;
@@ -1876,6 +2259,6 @@ int run3_menu_hover(int mx, int my) {
 void run3_menu_click(int mx, int my) {
   menu_hover = run3_menu_hover(mx, my);
   if (menu_hover >= 2) {
-    menu_char = menu_hover - 2;
+    menu_char = run3_char_order(menu_hover - 2);
   }
 }

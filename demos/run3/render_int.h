@@ -30,6 +30,9 @@ void blit_sprite(int dx, int dy, int dw, int dh,
                  const uint32_t *pix, int sw, int sh, double alpha);
 void blit_sprite_mirrored(int dx, int dy, int dw, int dh,
                           const uint32_t *pix, int sw, int sh, double alpha);
+void blit_sprite_rot(double fx, double fy, int dw, int dh, double ang,
+                     const uint32_t *pix, int sw, int sh, double alpha,
+                     int mirror, int centre);
 void fill_circle(int cx, int cy, int r, uint32_t c);
 void stroke_circle(int cx, int cy, int r, uint32_t c);
 void stroke_rect(int x, int y, int w, int h, uint32_t c);
@@ -40,6 +43,23 @@ void draw_line(int x0, int y0, int x1, int y1, uint32_t c);
    pitch/roll/origin as the tube, so everything outside shares the tunnel's
    own orientation instead of drifting on its own. */
 extern double cam_pitch, cam_back, cam_out, cam_x, cam_y, view_z, near_z;
+/* staged-scene camera (the original's model): the authored position in
+   engine units (about the rest pose), the authored bore slide, and the
+   authored orientation quaternion. Stage states draw the level unrotated and
+   let these carry the turn. */
+extern double stage_cam_z;
+extern double stage_quat[4];   /* x, y, z, w; identity = straight down bore */
+/* The roll the whole view is turned by: `G.rot` in gameplay, and the STAGED
+   frame's own screen roll in a cutscene (the authored camera carries the
+   turn, so the level's draw is unrotated and the stars, the neighbouring
+   tunnels and the wormhole have to be turned by this instead). */
+extern double view_roll;
+/* The staged frame's own view transform (render.c). Returns 1 for a staged
+   frame and fills in the screen place + depth of a world point; 0 for
+   gameplay, where the caller uses its own chase-camera model. The tube, the
+   cast, the props, the sky sphere and the space layers all go through it: in
+   the original they are children of the one scene, placed by Scene3D.project. */
+int stage_view_map(double x, double y, double z, double *sx, double *sy, double *dd);
 
 /* the baked art (assets_data.h) is only compiled into render.c, so the other
    renderer files reach it through this accessor */

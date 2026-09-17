@@ -57,7 +57,17 @@ void space_count_visible(void) {
    then the pitch, exactly as corner()/row_pt()/sky_project() do. d1 is the
    depth in front of the camera, so a caller can size something by it. */
 static int sproj(double wx, double wy, double wz, double *sx, double *sy, double *d1) {
-  double c = scos(G.rot), s = ssin(G.rot);
+  /* A staged frame draws the outside-the-tube layers through the SAME transform
+     as the tube. In the original they are children of the one scene and come
+     out of `Scene3D.project` with the walls, so a cutscene's authored camera
+     places them too — the port's chase-camera model below (its own roll, pitch
+     and origin) is only for gameplay. */
+  double sd;
+  if (stage_view_map(wx, wy, wz, sx, sy, &sd)) {
+    if (d1) *d1 = sd;
+    return sd > 0.5;
+  }
+  double c = scos(view_roll), s = ssin(view_roll);
   double xr = wx * c - wy * s - cam_x;
   double yr = wx * s + wy * c - cam_y;
   double cp = scos(cam_pitch), sp = ssin(cam_pitch);
@@ -120,8 +130,10 @@ static void draw_ghost(int tun, double ang, double wz, double off, uint32_t sky)
   if (n < 3) n = 3;
   if (n > MAXN) n = MAXN;
   if (k < 1) k = 1;
-  double tile = tt->baseTile;
-  if (tile < 0.05) tile = 0.3;
+  /* the branch's own levels' tile width (not its nominal `baseTile`, which is
+     the loader default for every tunnel now) */
+  double tile = run3_tunnel_tile(tun);
+  if (tile < 5.0) tile = 30.0;
   /* the tunnel's own circumradius: exactly the tube_R() the main renderer
      uses for the player's tube */
   double R = (double)k * tile / (2.0 * ssin(PI / (double)n));
@@ -189,7 +201,7 @@ static void draw_ghost(int tun, double ang, double wz, double off, uint32_t sky)
    the direction of a neighbouring tunnel, far outside the player's own tube,
    and is a shaded disc rather than a textured one. */
 static void draw_planet(double ang, double wz, double rw, uint32_t sky) {
-  double ox = scos(ang) * 22.0, oy = ssin(ang) * 22.0;
+  double ox = scos(ang) * 2200.0, oy = ssin(ang) * 2200.0;
   double csx, csy, cd;
   if (!sproj(ox, oy, wz, &csx, &csy, &cd)) return;
   double rad = rw * FOCAL / cd;

@@ -42,6 +42,12 @@ static double satan1(double z) {
   }
   return neg ? -a : a;
 }
+double sasin(double x) {
+  /* asin(x) = atan2(x, sqrt(1 - x^2)) — |x| <= 1 by the caller */
+  if (x > 1.0) x = 1.0;
+  if (x < -1.0) x = -1.0;
+  return satan2(x, ssqrt(1.0 - x * x));
+}
 double satan2(double y, double x) {
   if (x == 0.0 && y == 0.0) return 0.0;
   if (x == 0.0) return y > 0.0 ? PI / 2.0 : -PI / 2.0;

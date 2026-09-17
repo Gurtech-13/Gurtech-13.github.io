@@ -1573,8 +1573,9 @@ static const map_deco_t map_decorations[] = {
 /* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b.
  * Node coords = original first waypoints (uniform map transform).
  * Ids 30+ are custom extended tunnels (hand-placed, node = path start);
- * 33/34/35 are the 140-checkpoint main runs, 36-41 their branches. */
-#define MAP_TUNNEL_COUNT 42
+ * 33/34/35 are the 140-checkpoint main runs, 36-41 their branches,
+ * 42-45 the recovered original paths. */
+#define MAP_TUNNEL_COUNT 46
 
 typedef struct {
   int16_t x, y;
@@ -1625,6 +1626,10 @@ static const map_node_t map_nodes[MAP_TUNNEL_COUNT] = {
   { 5037, 543, 103, 232, 249, 1 }, /* 39 */
   { 5759, 641, 240, 171, 252, 1 }, /* 40 */
   { 5578, 608, 240, 171, 252, 1 }, /* 41 */
+  { 576, 543, 147, 197, 253, 0 }, /* 42 */
+  { 298, 485, 147, 197, 253, 0 }, /* 43 */
+  { 2052, -7, 192, 132, 252, 1 }, /* 44 */
+  { 2298, 67, 192, 132, 252, 1 }, /* 45 */
 };
 
 /* Path polylines: x0,y0,x1,y1,... per tunnel (screen coords). */
@@ -1670,6 +1675,10 @@ static const int16_t map_wp_38[] = {4447,502,4512,567,4562,633,4594,699};
 static const int16_t map_wp_39[] = {5037,543,5086,477,5136,420,5168,346};
 static const int16_t map_wp_40[] = {5759,641,5874,674,5988,690};
 static const int16_t map_wp_41[] = {5578,608,5578,526,5562,453,5537,379};
+static const int16_t map_wp_42[] = {576,543,691,592,806,625};
+static const int16_t map_wp_43[] = {298,485,199,526,101,559};
+static const int16_t map_wp_44[] = {2052,-7,2159,-39,2249,-15};
+static const int16_t map_wp_45[] = {2298,67,2364,34,2430,10};
 static const int16_t *map_wp[MAP_TUNNEL_COUNT] = {
   map_wp_0,
   map_wp_1,
@@ -1713,6 +1722,10 @@ static const int16_t *map_wp[MAP_TUNNEL_COUNT] = {
   map_wp_39,
   map_wp_40,
   map_wp_41,
+  map_wp_42,
+  map_wp_43,
+  map_wp_44,
+  map_wp_45,
 };
 static const uint8_t map_wp_n[MAP_TUNNEL_COUNT] = {
   8, /* 0 */
@@ -1757,6 +1770,10 @@ static const uint8_t map_wp_n[MAP_TUNNEL_COUNT] = {
   4, /* 39 */
   3, /* 40 */
   4, /* 41 */
+  3, /* 42 */
+  3, /* 43 */
+  3, /* 44 */
+  3, /* 45 */
 };
 
 /* Tunnel name strings */
@@ -1803,6 +1820,10 @@ static const char *map_tunnel_names[MAP_TUNNEL_COUNT] = {
   "Reef", /* 39 */
   "Wake", /* 40 */
   "Ember", /* 41 */
+  "Plan A", /* 42 */
+  "Plan C", /* 43 */
+  "WH P", /* 44 */
+  "Crossing", /* 45 */
 };
 
 #endif /* MAP_ASSETS_H */

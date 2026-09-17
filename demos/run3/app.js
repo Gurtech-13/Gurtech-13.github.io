@@ -57,8 +57,11 @@
       var actors = [];
       for (var k = 0; k < n; k++) {
         var near = (n === 1) || (k === (speak % n));
+        /* just in front of the staged camera: the original camera sits IN
+           the scene (on the tube axis, level with the cast), so anchoring
+           the cast rows down the tube made it read as "too far" */
         actors.push({ ch: cast[k], ring: 4.0 + k * (tot / 2),
-                      z: near ? 5.7 : 6.6 });
+                      z: near ? 0.9 : 2.2 });
       }
       segs.push({ f: i, cam: [speak === 0 ? -0.22 : 0.22, 0.04],
                   actors: actors, props: [] });
@@ -78,16 +81,62 @@
     }
     return idx;
   }
+  /* ===== STAGE TRACE =====
+     Prints what the cutscene staging hands the engine AND what the engine makes
+     of it, so a wrong-looking frame can be told from a wrong load:
+       start - scene, its (tun,lvl), the cast's front row, authored vs fallback
+       seg   - the dialogue keyframe: its cam array, the cast slots, and the
+               camera it asks for
+       push  - the ENGINE's own view: staged pos, shot distance, whether an
+               authored camera is in force, the camera place the renderer
+               actually uses, and the frame's gauge in radians
+               (PI/2 + PI = 4.7124 means the half-turn rollout is live).
+     `run3StageLog(false)` from the console silences it. */
+  var STAGE_LOG = true;
+  window.run3StageLog = function (v) { STAGE_LOG = !!v; };
+  function slog() {
+    if (!STAGE_LOG) return;
+    try { console.log.apply(console, arguments); } catch (eSL) {}
+  }
+  function fmtN(v, d) {
+    return (typeof v === "number" && isFinite(v)) ? v.toFixed(d == null ? 1 : d) : String(v);
+  }
+  function fmtAuth(t) {
+    if (!t) return "none";
+    return "(" + fmtN(t.x) + "," + fmtN(t.y) + "," + fmtN(t.z) + " zb" + (t.zb || 0) +
+           " q" + (t.q ? "[" + t.q.join(",") + "]" : "identity") + ")";
+  }
   function stageOpen(name, frame, lines) {
     stage = null;
     if (!exps || !exps.run3_stage_actor) return;
     var baked = TIMELINE[name] && TIMELINE[name].segs && TIMELINE[name].segs.length;
     var segs = timelineFor(name, lines);
     if (!segs) return;
+    var meta = TIMELINE[name] || {};
     stage = { segs: segs, cur: [], tgt: [], curP: [], tgtP: [],
               side: 0, lift: 0, tside: 0, tlift: 0,
+              auth: null, tauth: null,
               /* synthesised scenes still take the authored camera runs */
               cams: baked ? null : (CAMSHOT[name] || null) };
+    /* the scene's front cast row: the anchor the bake measures the cast's own
+       z from, which the engine needs to resolve the camera's authored z
+       against the level (see run3_stage_shot) */
+    stage.fr = meta.fr || 0;
+    /* WHICH CAMERA MODEL this scene uses. The bake records it ONCE per scene
+       (`ca`: the scene had a setPosition camera), NOT per segment — every
+       segment of an authored scene carries the same model. Reading it off a
+       segment finds nothing in a baked timeline (segments are {f,cam,actors,
+       props}), which silently dropped every authored scene onto the legacy
+       side/lift path: the camera went to a corner instead of the bore axis
+       and the frame's gauge stayed 0, so the half-turn presentation never
+       applied. Synthesised scenes keep using CAMSHOT (stage.cams). */
+    stage.authored = baked ? !!meta.ca : false;
+    var stg = STAGE[name] || {};
+    slog("[stage] start " + name + " tun=" + (stg.tun != null ? stg.tun : "?") +
+         " lvl=" + (stg.end ? "end" : (stg.lvl != null ? stg.lvl : "?")) +
+         " frame=" + (frame || 0) + " frontRow=" + fmtN(stage.fr) +
+         " segs=" + segs.length + " camModel=" + (meta.ca ? "authored" : "fallback") +
+         " timeline=" + (baked ? "baked" : "synthesised"));
     stageGoto(segIndex(segs, frame || 0), true);
     stageShot(frame || 0);
     /* a few scenes only place their cast a few frames in (the tunnel opens
@@ -110,7 +159,16 @@
       if (stage.cams[i][0] <= fr) cur = stage.cams[i];
       else break;
     }
-    if (cur) { stage.tside = cur[1] || 0; stage.tlift = cur[2] || 0; }
+    if (!cur) return;
+    if (cur.length >= 5) {
+      /* AUTHORED run [frame, x_px, y_px, z_px, rot, zb]: the whole camera. */
+      stage.tauth = { x: cur[1] || 0, y: cur[2] || 0, z: cur[3] || 0,
+                      zb: (typeof cur[5] === "number" ? cur[5] : 0),
+                      q: cur[4] || null };
+    } else {
+      /* legacy normalised [frame, side, lift]: a fallback scene */
+      stage.tside = cur[1] || 0; stage.tlift = cur[2] || 0;
+    }
   }
   /* move to the keyframe covering dialogue frame i; slots that exist in both
      keyframes ease across, new ones start on their target so a growing cast
@@ -138,10 +196,34 @@
     stage.curP = [];
     for (var m = 0; m < pr.length; m++) {
       var q = prevP[m];
-      stage.curP.push(q ? { kind: pr[m].kind, ring: q.ring, z: q.z, size: q.size || 2, inset: q.inset || 0 }
-                        : { kind: pr[m].kind, ring: pr[m].ring, z: pr[m].z, size: pr[m].size || 2, inset: pr[m].inset || 0 });
+      /* prop `size` is a width in character heights (see render.c); 1.6 is a
+         map-sized panel, the fallback for a segment that omits it */
+      stage.curP.push(q ? { kind: pr[m].kind, ring: q.ring, z: q.z, size: q.size || 1.6, inset: q.inset || 0 }
+                        : { kind: pr[m].kind, ring: pr[m].ring, z: pr[m].z, size: pr[m].size || 1.6, inset: pr[m].inset || 0 });
     }
-    if (s.cam) { stage.tside = s.cam[0] || 0; stage.tlift = s.cam[1] || 0; }
+    if (s.cam) {
+      /* an AUTHORED scene's cam is [x_px, y_px]: hold the current authored
+         state, move the pan (the original eases the same way). A legacy
+         normalised cam keeps the old behaviour. The timeline's `ca` flag
+         says which model this scene uses (a baked authored scene has no
+         CAMSHOT polling of its own — stage.cams is null there). */
+      if (stage.authored || s.ca || stage.cams) {
+        stage.tauth = stage.tauth || { x: 0, y: 0, z: 0, q: null };
+        stage.tauth.x = s.cam[0] || 0;
+        stage.tauth.y = s.cam[1] || 0;
+        /* the baked timeline carries the camera's authored z per segment (the
+           dolly); a synthesised scene takes it from CAMSHOT in stageShot */
+        if (s.cam.length > 2) stage.tauth.z = s.cam[2] || 0;
+        if (s.cam.length > 3) stage.tauth.zb = s.cam[3] || 0;
+      } else {
+        stage.tside = s.cam[0] || 0; stage.tlift = s.cam[1] || 0;
+      }
+    }
+    slog("[stage] seg f=" + (typeof s.f === "number" ? s.f : "-") +
+         " cam=" + JSON.stringify(s.cam) +
+         " model=" + ((stage.authored || s.ca || stage.cams) ? "authored" : "fallback") +
+         " cast=" + JSON.stringify(act.map(function (c) { return [c.ch, c.ring, c.z]; })) +
+         " -> target " + fmtAuth(stage.tauth));
   }
   function stagePush() {
     if (!stage) return;
@@ -157,12 +239,47 @@
         var q = stage.curP[p];
         try {
           var kd = q ? (q.kind in KIND_ID ? KIND_ID[q.kind] : 1) : 0;
-          if (q) exps.run3_stage_prop(p, kd, q.ring, q.z, q.size || 2, q.inset || 0, 1);
+          if (q) exps.run3_stage_prop(p, kd, q.ring, q.z, q.size || 1.6, q.inset || 0, 1);
           else exps.run3_stage_prop(p, 0, 4, 6, 2, 0, 0);
         } catch (e2) {}
       }
     }
-    try { if (exps.run3_stage_cam) exps.run3_stage_cam(stage.side, stage.lift); } catch (e3) {}
+    /* the camera: an AUTHORED scene hands the whole position+quaternion to
+       the engine (which converts px->units and rebases z); a FALLBACK scene
+       gets the normalised pan as before. Passing one resets the other in the
+       engine, so the two models can never bleed across scenes. */
+    if (stage.auth) {
+      var a = stage.auth, q = a.q || [0, 0, 0, 1];
+      try {
+        if (exps.run3_stage_shot) exps.run3_stage_shot(a.z, a.zb || 0, stage.fr || 0);
+      } catch (e7) {}
+      try { if (exps.run3_stage_camera) exps.run3_stage_camera(a.x, a.y, a.z, q[0], q[1], q[2], q[3]); } catch (e4) {}
+    } else {
+      try { if (exps.run3_stage_cam) exps.run3_stage_cam(stage.side, stage.lift); } catch (e3) {}
+    }
+    if (STAGE_LOG && exps) stage._n = (stage._n || 0) + 1;
+  }
+  /* WHAT THE ENGINE RESOLVED, logged AFTER the frame is rendered.
+
+     Reported from stagePush instead (i.e. before render_frame) this was a trap:
+     the gauge and the camera place are written DURING the render, so the log
+     showed the PREVIOUS frame's values — a freshly opened scene always printed
+     `gauge=0.0000 camPlace=(0,0)`, which reads exactly like "the flip is off and
+     the camera is not on the axis" even when both are live. Measured directly
+     on a staged frame the same build reports gauge 4.712389 and engPos (0,0,-d),
+     so the logging, not the engine, was lying. */
+  function stageEngineLog() {
+    if (!STAGE_LOG || !exps || !stage) return;
+    if (!(stage._n === 1 || stage._n % 30 === 0)) return;
+    var E = exps, pv = "?", gv = "?";
+    try { pv = "(" + fmtN(E.run3_stage_pos_x()) + "," + fmtN(E.run3_stage_pos_y()) + "," + fmtN(E.run3_stage_pos_z()) + ")"; } catch (eP) {}
+    try { if (E.run3_stage_gauge) gv = fmtN(E.run3_stage_gauge(), 4); } catch (eG) {}
+    slog("[stage] push#" + stage._n + " auth=" + fmtAuth(stage.auth) +
+         " engPos=" + pv +
+         " dist=" + (E.run3_stage_dist ? fmtN(E.run3_stage_dist()) : "?") +
+         " hasCam=" + (E.run3_stage_has_camera ? E.run3_stage_has_camera() : "?") +
+         " camPlace=(" + fmtN(E.run3_cam_x()) + "," + fmtN(E.run3_cam_y()) + ")" +
+         " gauge=" + gv + (gv === "4.7124" ? " [half-turn rollout live]" : ""));
   }
   /* eased toward the current keyframe; called once per rendered frame */
   function stageTick() {
@@ -184,10 +301,37 @@
     }
     stage.side += (stage.tside - stage.side) * f;
     stage.lift += (stage.tlift - stage.lift) * f;
+    /* the AUTHORED camera eases its pan (the scenes move position every
+       frame); the quaternion SNAPS to the target frame's — the original sets
+       an exact orientation per camera key, and slerping between two turns
+       through angles the scene never authored produces invented poses */
+    if (stage.tauth) {
+      stage.auth = stage.auth || { x: 0, y: 0, z: 0, zb: 0, q: null };
+      stage.auth.zb = stage.tauth.zb || 0;
+      stage.auth.x += (stage.tauth.x - stage.auth.x) * f;
+      stage.auth.y += (stage.tauth.y - stage.auth.y) * f;
+      stage.auth.z += (stage.tauth.z - stage.auth.z) * f;
+      var tq = stage.tauth.q, cq = stage.auth.q;
+      if (tq && cq && tq.length === 4 && cq.length === 4) {
+        /* shortest-path nudge toward the target quaternion, then normalise */
+        var dot = cq[0]*tq[0] + cq[1]*tq[1] + cq[2]*tq[2] + cq[3]*tq[3];
+        var s2 = dot < 0 ? -f : f;
+        for (var k4 = 0; k4 < 4; k4++) cq[k4] += tq[k4] * s2;
+        var n4 = Math.sqrt(cq[0]*cq[0] + cq[1]*cq[1] + cq[2]*cq[2] + cq[3]*cq[3]);
+        if (n4 > 1e-9) for (var k5 = 0; k5 < 4; k5++) cq[k5] = cq[k5] / n4;
+      } else if (tq) {
+        stage.auth.q = [tq[0], tq[1], tq[2], tq[3]];
+      }
+    }
     stagePush();
   }
   function stageClose() {
+    slog("[stage] end");
     stage = null;
+    /* forget the authored camera: the next scene must not inherit it */
+    try { if (exps && exps.run3_stage_camera) exps.run3_stage_camera(0, 0, 0, 0, 0, 0, 1); } catch (e5) {}
+    try { if (exps && exps.run3_stage_shot) exps.run3_stage_shot(0, 0, 0); } catch (e7) {}
+    try { if (exps && exps.run3_stage_cam) exps.run3_stage_cam(0, 0); } catch (e6) {}
     for (var i = 0; i < NACT; i++) { try { exps.run3_stage_actor(i, 0, 4, 6, 0); } catch (e) {} }
     for (var p = 0; p < NPROP; p++) { try { exps.run3_stage_prop(p, 0, 4, 6, 2, 0, 0); } catch (e2) {} }
     try { if (exps.run3_stage_cam) exps.run3_stage_cam(0, 0); } catch (e3) {}
@@ -214,11 +358,12 @@
   var LS_KEY = "run3tribute-v3";
   var save;
   function loadSave() {
-    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, cuts: o.cuts||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0, unlockedExtra: o.unlockedExtra||[], ach: o.ach||{}, achProg: o.achProg||{dislodged:0} }; } } catch(e) {}
-    return { cleared:[], best:{}, renames:{}, cuts:{}, char:0, musicVol:0.5, powercells:0, unlockedExtra:[], ach:{}, achProg:{dislodged:0} };
+    try { var r = localStorage.getItem(LS_KEY); if (r) { var o = JSON.parse(r); return { cleared: o.cleared||[], best: o.best||{}, renames: o.renames||{}, cuts: o.cuts||{}, char: o.char|0, musicVol: typeof o.musicVol==="number"?o.musicVol:0.5, powercells: o.powercells|0, charUnlocked: o.charUnlocked||[], unlockedExtra: o.unlockedExtra||[], ach: o.ach||{}, achProg: o.achProg||{dislodged:0} }; } } catch(e) {}
+    return { cleared:[], best:{}, renames:{}, cuts:{}, char:0, musicVol:0.5, powercells:0, charUnlocked:[], unlockedExtra:[], ach:{}, achProg:{dislodged:0} };
   }
   function persist() { try { localStorage.setItem(LS_KEY, JSON.stringify(save)); } catch(e) {} }
   save = loadSave();
+  if (!save.charUnlocked) save.charUnlocked = [];
   if (!save.unlockedExtra) save.unlockedExtra = [];
   if (!save.ach) save.ach = {};
   if (!save.achProg) save.achProg = { dislodged: 0 };
@@ -237,21 +382,89 @@
       try { exps.run3_map_sync_state(i, lk, cl); } catch(e) {}
     }
   }
-  function charLocked(cid) {
-    /* the Skater joins in Coming Through (end of Primary 10), not by count */
-    if (cid === 1) return !cutSeen(midKey(0, 9));
-    var need = CHARS[cid] ? CHARS[cid].need : 999;
-    return save.cleared.length < need;
+  /* ===== CHARACTER UNLOCKS =====
+     story.js C[] is the ORIGINAL game's character registry order, and C[i].sprite
+     is this port's sprite-atlas id. The engine, save.char, the char-lock table
+     and the cutscene casts all speak ATLAS ids, so the predicates below take an
+     atlas id and go through CHAR_BY_SPRITE.
+
+     Unlocking follows the original (CharacterDef.§<!,§ + §4H§): a progress
+     condition, or the power-cell price §1V§ (the original's own "...Or..."
+     hints). Only the progress conditions this port can evaluate are modelled
+     (the Skater's level-10 scene, the Lizard's 40 levels, the Child's low-power
+     area, the Bunny's 8 achievements); every other registry condition depends
+     on the original's explore level-group tables (§>K§), which this port does
+     not carry, so those characters are purchase-only here. */
+  var CHAR_BY_SPRITE = {};
+  (function () {
+    for (var i = 0; i < CHARS.length; i++) CHAR_BY_SPRITE[CHARS[i].sprite] = CHARS[i];
+  })();
+  function charBySprite(cid) { return CHAR_BY_SPRITE[cid] || CHARS[0]; }
+  /* levels finished in Explore Mode = sum of each tunnel's best checkpoint */
+  function exploreLevels() {
+    var n = 0, k;
+    for (k in save.best) n += (save.best[k] | 0);
+    return n;
   }
-  function charLockText(cid) {
-    if (cid === 1) return "The Skater joins in Coming Through \u2014 clear Primary level 10.";
-    var need = CHARS[cid] ? CHARS[cid].need : 999;
-    return "Clear " + need + " tunnels to unlock. ("+save.cleared.length+"/"+need+")";
+  function charProgressOk(ch) {
+    var u = ch.unlock;
+    if (u === "free") return true;
+    if (!u) return false;
+    if (u.cut) return cutSeen(midKey(u.cut[0], u.cut[1]));
+    if (u.levels) return exploreLevels() >= u.levels;
+    if (u.tunnel != null) return cleared(u.tunnel);
+    if (u.ach) return achCount() >= u.ach;
+    return false;
+  }
+  function charBought(cid) {
+    return !!(save.charUnlocked && save.charUnlocked.indexOf(cid) >= 0);
+  }
+  function charLocked(cid) {
+    var ch = charBySprite(cid);
+    return !charBought(cid) && !charProgressOk(ch);
+  }
+  function charUnlockReq(cid) {
+    var ch = charBySprite(cid), u = ch.unlock, out = [];
+    if (u && u !== "free" && !charProgressOk(ch)) {
+      if (u.cut) out.push("Finish Primary level 10 in Explore Mode.");
+      else if (u.levels) out.push("Finish " + u.levels + " levels in Explore Mode. (" + exploreLevels() + "/" + u.levels + ")");
+      else if (u.tunnel != null) out.push("Complete the low-power area (the Dark tunnel).");
+      else if (u.ach) out.push("Earn " + u.ach + " achievements. (" + achCount() + "/" + u.ach + ")");
+    }
+    if (ch.price > 0) out.push((out.length ? "Or buy for " : "Buy for ") + ch.price + " power cells. (you have " + (save.powercells | 0) + ")");
+    return out.length ? out.join(" ") : "Not unlockable here.";
   }
   function syncCharsToWasm() {
     if (!exps || !exps.run3_char_set_locked) return;
     for (var i = 0; i < CHARS.length; i++) {
-      try { exps.run3_char_set_locked(i, charLocked(i) ? 1 : 0); } catch(e) {}
+      var cid = CHARS[i].sprite;
+      try { exps.run3_char_set_locked(cid, charLocked(cid) ? 1 : 0); } catch(e) {}
+    }
+  }
+  /* buy a character with power cells, then select it */
+  function buyChar(cid) {
+    var ch = charBySprite(cid);
+    if (!charLocked(cid)) return false;
+    if (!(ch.price > 0)) { toast("Not for sale \u2014 earn it in Explore Mode."); return false; }
+    var have = save.powercells | 0;
+    if (have < ch.price) { toast("Not enough power cells: " + have + "/" + ch.price); return false; }
+    save.powercells = have - ch.price;
+    save.charUnlocked = save.charUnlocked || [];
+    if (save.charUnlocked.indexOf(cid) < 0) save.charUnlocked.push(cid);
+    persist(); syncCharsToWasm();
+    toast(ch.name + " unlocked!");
+    exps.run3_menu_select_char(cid);
+    save.char = cid; persist();
+    return true;
+  }
+  function showLockedChar(cid) {
+    var ch = charBySprite(cid);
+    var body = (ch.desc ? ch.desc + " " : "") + "Locked. " + charUnlockReq(cid);
+    if (ch.price > 0 && (save.powercells | 0) >= ch.price) {
+      showCard(ch.name + " \u2014 Locked", body, "Locked", "Close", function(){}, null,
+               "Buy \u2014 " + ch.price + " cells", function(){ buyChar(cid); });
+    } else {
+      showCard(ch.name + " \u2014 Locked", body, "Locked", "Close", function(){}, null);
     }
   }
   function syncBestToWasm() {
@@ -294,11 +507,17 @@
   }
 
   /* ===== STORY CARD ===== */
-  function showCard(title,text,who,btn,cb,img) {
+  function showCard(title,text,who,btn,cb,img,alt,altCb) {
     document.getElementById("cardtitle").textContent=title;
     document.getElementById("cardtext").textContent=text;
     document.getElementById("cardwho").textContent=who||"";
     document.getElementById("cardbtn").textContent=btn||"Continue";
+    /* optional second action (used by the character purchase card) */
+    var b2=document.getElementById("cardbtn2");
+    if(b2){
+      if(alt){b2.textContent=alt;b2.style.display="";b2.onclick=function(){document.getElementById("card").classList.remove("on");if(altCb)altCb();};}
+      else {b2.style.display="none";b2.onclick=null;}
+    }
     var ci=document.getElementById("cardimg");
     if(img){ci.src="assets/cutscenes/"+img;ci.style.display="block";ci.onerror=function(){ci.style.display="none";};}
     else ci.style.display="none";
@@ -327,16 +546,18 @@
     for (var i = 0; i < n; i++) mem[i] = s.charCodeAt(i) & 0xff;
     mem[n] = 0;
   }
-  function cutShow(title, text, y, small, step, total) {
+  /* x/y are the line's authored bubble centre in dialog units; the engine
+     draws the bubble there (the DOM copy of it is display:none) */
+  function cutShow(title, text, x, y, small, step, total) {
     try {
       if (!exps || !exps.run3_cut_show) return;
       cutWriteStr(exps.run3_cut_title_buf(), title || "");
       cutWriteStr(exps.run3_cut_text_buf(), text || "");
-      exps.run3_cut_show(y, small, -1, step, total, 1);
+      exps.run3_cut_show(x, y, small, -1, step, total, 1);
     } catch (e) {}
   }
   function cutShowOff() {
-    try { if (exps && exps.run3_cut_show) exps.run3_cut_show(0, 0, -1, 0, 0, 0); } catch (e) {}
+    try { if (exps && exps.run3_cut_show) exps.run3_cut_show(0, 120, 0, -1, 0, 0, 0); } catch (e) {}
   }
   function showCutscene(name, cb) {
     var lines = cutLines(name);
@@ -383,7 +604,8 @@
       prog.textContent = (i < lines.length) ? (i + "/" + lines.length) : cutTitle(name);
       place(L);
       /* the engine draws the visible scene; the DOM above is inert */
-      cutShow(cutTitle(name), L.m, typeof L.y === "number" ? L.y : 120,
+      cutShow(cutTitle(name), L.m, typeof L.x === "number" ? L.x : 0,
+              typeof L.y === "number" ? L.y : 120,
               L.small ? 1 : 0, i, lines.length);
       /* the cast walks to this line's keyframe (custom scenes key on the
          line index, baked ones on the authored dialogue frame) */
@@ -447,6 +669,7 @@
     }
     if (st===8) { /* S_CUT: staged cutscene backdrop — render, never step */
       try { exps.render_frame(); } catch(e) {}
+      stageEngineLog();
       blit(); acc=0; return;
     }
 
@@ -457,6 +680,7 @@
     while(acc>=STEP){exps.run3_set_input(steer);exps.run3_step(STEP);acc-=STEP;}
     exps.run3_set_input(steer);
     try { exps.render_frame(); } catch(e) {}
+    stageEngineLog();
     blit();
     observe();
     /* low-power tunnels duck the music with the lights */
@@ -657,6 +881,13 @@
       if(t===0) award(1);
       if(t===12) award(2);
       if(save.cleared.length>=4) award(3);
+      /* bank the power cells collected during the run into the wallet (the
+         original spends these on characters; g_powercells only resets once a
+         session, so the delta since the level started is this run's haul) */
+      try {
+        var runCells = exps.run3_powercells() | 0;
+        if (runCells > cellsRun0) { save.powercells = (save.powercells|0) + (runCells - cellsRun0); cellsRun0 = runCells; }
+      } catch(e4) {}
       persist();
       syncAllToWasm();
       var showEnd=function(){
@@ -792,13 +1023,12 @@
         infDeaths=0;
         try { cellsRun0 = exps.run3_powercells() | 0; } catch (e) {}
       } else if(hv>=2) {
-        /* character select */
-        var cid = hv-2;
-        if (charLocked(cid)) {
-          var ch = CHARS[cid];
-          showCard(ch.name + " — Locked", charLockText(cid), "Locked", "Close", function(){});
-          return;
-        }
+        /* character select: hv-2 is the slot in story.js C[] (the ORIGINAL
+           registry order); the engine and save.char speak sprite-atlas ids */
+        var chSel = CHARS[hv-2];
+        if (!chSel) return;
+        var cid = chSel.sprite;
+        if (charLocked(cid)) { showLockedChar(cid); return; }
         exps.run3_menu_select_char(cid);
         save.char=cid; persist();
       }
@@ -993,11 +1223,13 @@
     document.getElementById("achMenu").classList.remove("on");
   });
 
-  /* version label (top-right) + gallery hotkey fallback */
-  try {
-    var verEl = document.getElementById("ver");
-    if (verEl && window.GAME_VERSION) verEl.textContent = "v" + window.GAME_VERSION;
-  } catch (e0) {}
+  /* version label (top-right) + gallery hotkey fallback.
+     The label is painted from the ENGINE's own build string, read back out of
+     the wasm once it is loaded (see the WASM LOAD section) - neither this file
+     nor index.html carries a version number, so what the label shows is
+     exactly which build the browser is running. */
+  var verEl = document.getElementById("ver");
+  if (verEl) verEl.textContent = "v\u2026";
   window.addEventListener("keydown", function (e) {
     if (!e || e.code !== "KeyG") return;
     var cv = document.getElementById("cutview");
@@ -1007,12 +1239,36 @@
 
   /* ===== WASM LOAD ===== */
   document.getElementById("status").textContent="Loading run3.wasm\u2026";
-  /* version the engine URL too: the 30 MB wasm is otherwise cached forever
-     and a page refresh would keep running an old build */
-  fetch("run3.wasm?v=" + (window.GAME_VERSION || "0"),{credentials:"same-origin"})
-    .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return WebAssembly.instantiateStreaming(r,{});})
+  /* The 30 MB engine is fetched with cache REVALIDATION rather than with a
+     version query: the browser revalidates against the server and reuses its
+     copy only when the file is byte-identical, so a rebuilt wasm can never be
+     served stale and a refresh can never keep running an old build - without
+     index.html or the scripts having to know the version to bust the URL. */
+  fetch("run3.wasm",{credentials:"same-origin",cache:"no-store"})
+    .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r;})
+    .then(function(r){
+      /* instantiateStreaming only accepts `application/wasm`. A plain static
+         server (python -m http.server and some preview hosts) sends the file as
+         application/octet-stream, which makes the streaming call throw - so
+         fall back to instantiating the bytes directly. */
+      try {
+        return WebAssembly.instantiateStreaming(r.clone(),{})["catch"](function(){
+          return r.arrayBuffer().then(function(b){return WebAssembly.instantiate(b,{});});
+        });
+      } catch(eSt) {
+        return r.arrayBuffer().then(function(b){return WebAssembly.instantiate(b,{});});
+      }
+    })
     .then(function(res){
       exps=res.instance.exports;
+      /* the engine's own build string: the ONE place a version is defined */
+      try {
+        var vp=exps.run3_version(), vl=exps.run3_version_len();
+        var vb=new Uint8Array(exps.memory.buffer,vp,vl), vs="";
+        for (var vi=0;vi<vl;vi++) vs+=String.fromCharCode(vb[vi]);
+        window.GAME_VERSION=vs;
+        if (verEl) verEl.textContent="v"+vs;
+      } catch (eVer) {}
       // update W/H from WASM (framebuffer now 1280x720, covers whole page)
       try { W=exps.run3_width(); H=exps.run3_height(); cv.width=W; cv.height=H; } catch(e) { W=1280; H=720; }
       ctx=cv.getContext("2d");
@@ -1023,6 +1279,8 @@
       exps.run3_init((Date.now()^(Math.random()*0xffffffff))>>>0);
       exps.run3_set_char(save.char);
       exps.run3_set_char_count(CHARS.length);
+      /* the grid highlight follows the saved character (menu_char is an atlas id) */
+      try { exps.run3_menu_select_char(save.char); } catch(e) {}
       exps.run3_enter_menu();
       syncAllToWasm();
       document.getElementById("status").textContent=T.length+" tunnels, "+save.cleared.length+"/"+T.length+" mapped — scroll to pan, click to play";

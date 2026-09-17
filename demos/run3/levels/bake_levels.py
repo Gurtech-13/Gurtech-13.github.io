@@ -32,8 +32,10 @@ EXT = os.path.join(HERE, "ext_levels.txt")
 OUT = os.path.join(HERE, "levels_baked.h")
 
 # Tunnel id -> (source, key). 'orig' keys index orig_levels.bin paths,
-# 'ext' keys index ext_levels.txt paths. Order is tunnel id order, so the
-# baked tables line up with TUNNELS[] in levels.c.
+# 'ext' keys index ext_levels.txt paths. A key may be a TUPLE of paths, which
+# are concatenated in that order (the SWF splits a run across two paths,
+# e.g. homePlanA + homePlanAPart2 - same tunnel, continued). Order is tunnel
+# id order, so the baked tables line up with TUNNELS[] in levels.c.
 TUNNELS = [
     (0, "orig", "primary"), (1, "orig", "home0"), (2, "orig", "home1"),
     (3, "orig", "home2"), (4, "orig", "home3"), (5, "orig", "sidePathA"),
@@ -54,6 +56,16 @@ TUNNELS = [
     (34, "ext", "shore"), (38, "ext", "shoal"), (39, "ext", "reef"),
     # Far Drift
     (35, "ext", "drift"), (40, "ext", "wake"), (41, "ext", "ember"),
+    # Recovered original paths that are not on the explore map: the home
+    # planet's two plan tunnels (each split across a "Part2" path in the SWF,
+    # which is the same tunnel continued) and the P wormhole with its
+    # crossing. All four are real, full-content levels (60-95% void, varied
+    # cross-sections, per-level tileWidths), just never reachable from the
+    # decompiled map data.
+    (42, "orig", ("homePlanA", "homePlanAPart2")),
+    (43, "orig", ("homePlanC", "homePlanCPart2")),
+    (44, "orig", "wormholeP"),
+    (45, "orig", "wormholeCrossing"),
 ]
 
 
@@ -96,6 +108,18 @@ def solid_layer(suffix):
 def crumble_layer(suffix):
     """Tiles that shake and fall after the runner steps on them."""
     return "~crumbling" in suffix.lower()
+
+
+def glow_layer(suffix):
+    """Tiles that GLOW. They are ordinary solid tiles you run on, but they are
+    the light source: the Low-Power Tunnel finishes on a strip of them, and they
+    must stay lit when the tunnel's power is out."""
+    return "~glow" in suffix.lower()
+
+
+def pad_to(lst, n):
+    if len(lst) < n:
+        lst += [0] * (n - len(lst))
 
 
 # levelData music -> small enum (0 = tunnel default). The host maps these to
@@ -214,7 +238,7 @@ def parse_orig():
             L = levels[lid]
             n, k = L["n"], L["k"]
             chunk = n * k
-            solids, crumbs = [], []
+            solids, crumbs, glows = [], [], []
             for pos, suf in L["terr"]:
                 if not solid_layer(suf):
                     continue
@@ -230,6 +254,11 @@ def parse_orig():
                     for i, ch in enumerate(b):
                         if ch == "1":
                             crumbs[i] = 1
+                if glow_layer(suf):
+                    pad_to(glows, len(b))
+                    for i, ch in enumerate(b):
+                        if ch == "1":
+                            glows[i] = 1
             if 1 in solids:
                 last = len(solids) - 1 - solids[::-1].index(1)
                 solids = solids[: last + 1]
@@ -242,7 +271,10 @@ def parse_orig():
             while len(crumbs) < len(solids):
                 crumbs.append(0)
             crumbs = crumbs[: len(solids)]
-            entries.append((n, k, rows, L["spawn"] % chunk, solids, crumbs, L["ex"]))
+            pad_to(glows, len(solids))
+            glows = [1 if glows[i] and solids[i] else 0 for i in range(len(solids))]
+            entries.append((n, k, rows, L["spawn"] % chunk, solids, crumbs,
+                            glows, L["ex"]))
         out[pname] = entries
     return out
 
@@ -279,7 +311,8 @@ def parse_ext():
                     crumbs.append(0)
                 else:
                     raise ValueError("bad tile char %r in %s" % (ch, cur_name))
-        entry = (n, k, len(cur_rows), cur_spawn % (n * k), solids, crumbs, dict(BASE_EX))
+        entry = (n, k, len(cur_rows), cur_spawn % (n * k), solids, crumbs, [],
+                 dict(BASE_EX))
         if cur_name == "infinite":
             inf.append(entry)
         else:
@@ -321,23 +354,31 @@ def main():
 
     bitstream = []   # 1 = solid, row-major per level
     crumblist = []   # parallel, 1 = crumbles when stepped on
+    glowlist = []    # parallel, 1 = a glowing (self-lit) surface
     baked = []       # (tun, n, k, rows, spawn, bitoff, ex)
     print("tunnel counts/layouts for levels.c sync:")
     for tun, src, key in TUNNELS:
-        entries = orig.get(key, []) if src == "orig" else ext.get(key, [])
-        for (n, k, rows, spawn, solids, crumbs, ex) in entries:
+        table = orig if src == "orig" else ext
+        keys = key if isinstance(key, (tuple, list)) else (key,)
+        entries = []
+        for kk in keys:
+            entries += table.get(kk, [])
+        for (n, k, rows, spawn, solids, crumbs, glows, ex) in entries:
             bitoff = len(bitstream)
             assert len(solids) == rows * n * k, (tun, key, rows, n, k, len(solids))
             bitstream += solids
             crumblist += crumbs
+            glowlist += glows + [0] * (len(solids) - len(glows))
             baked.append((tun, n, k, rows, spawn, bitoff, ex))
+        label = "+".join(keys)
         if entries:
             lay = Counter(e[0] * 100 + e[1] for e in entries)
             (nk, _), = lay.most_common(1)
-            print("  tun %2d %-14s count=%3d n=%d k=%d" % (tun, key, len(entries), nk // 100, nk % 100))
+            print("  tun %2d %-14s count=%3d n=%d k=%d" % (tun, label, len(entries), nk // 100, nk % 100))
         else:
-            print("  tun %2d %-14s count=  0  (!! no data)" % (tun, key))
+            print("  tun %2d %-14s count=  0  (!! no data)" % (tun, label))
     assert len(bitstream) == len(crumblist), "crumb/solid layout drift"
+    assert len(bitstream) == len(glowlist), "glow/solid layout drift"
 
     def pack(bits):
         out = bytearray((len(bits) + 7) // 8)
@@ -349,12 +390,13 @@ def main():
     packed = pack(bitstream)
     nbytes = len(packed)
     cpacked = pack(crumblist)
-    print("levels: %d, tiles: %d, crumbling tiles: %d"
-          % (len(baked), len(bitstream), sum(crumblist)))
+    gpacked = pack(glowlist)
+    print("levels: %d, tiles: %d, crumbling tiles: %d, glowing tiles: %d"
+          % (len(baked), len(bitstream), sum(crumblist), sum(glowlist)))
 
     # ---- infinite-mode segments (flat bitmaps, played in authored order) ----
     inf_bits, inf_crumbs, inf_rows, inf_bit = [], [], [], []
-    for (n, k, rows, spawn, solids, crumbs, ex) in inf:
+    for (n, k, rows, spawn, solids, crumbs, _glows, ex) in inf:
         inf_bit.append(len(inf_bits))
         inf_rows.append(rows)
         inf_bits += solids
@@ -392,6 +434,13 @@ def main():
         f.write("static const uint8_t BAKED_CRUMB[%d] = {\n" % nbytes)
         for i in range(0, nbytes, 16):
             f.write("  " + ", ".join("0x%02X" % b for b in cpacked[i:i + 16]) + ",\n")
+        f.write("};\n\n")
+        f.write("/* BAKED_GLOW: same layout as BAKED_BITS, 1 = the tile glows\n")
+        f.write(" * (self-lit: it stays bright when a low-power tunnel's light\n")
+        f.write(" * level is 0). */\n")
+        f.write("static const uint8_t BAKED_GLOW[%d] = {\n" % nbytes)
+        for i in range(0, nbytes, 16):
+            f.write("  " + ", ".join("0x%02X" % b for b in gpacked[i:i + 16]) + ",\n")
         f.write("};\n\n")
         f.write("static const baked_level_t BAKED_LEVELS[BAKED_NLEVELS] = {\n")
         for (tun, n, k, rows, spawn, bitoff, _ex) in baked:

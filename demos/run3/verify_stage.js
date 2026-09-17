@@ -71,7 +71,11 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   }
   console.log(`stage diff pixels=${diff} bbox x=[${left},${right}] y=[${top},${bot}]`);
   if (diff === 0) throw new Error("hold frame identical: runner still on stage?");
-  if (left < W / 2 - 120 || right > W / 2 + 120) throw new Error("stage diff outside runner area");
+  /* entering S_CUT now also switches to the staged camera (on the axis,
+     straight down the bore) instead of holding the chase camera, so the diff
+     is the WHOLE frame, not just the runner's sprite. 6i pins that camera. */
+  if (!(left < W / 2 && right > W / 2))
+    throw new Error("staged frame did not change across the view");
 
   e.run3_cutscene_backdrop(13, 2);
   if (e.run3_state() !== 8 || e.run3_tun() !== 13 || e.run3_lvl() !== 2) {
@@ -265,19 +269,44 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     }
   }
   if (!CAMSHOT.ComingThrough) throw new Error("ComingThrough has no stage framing");
-  // Continuous (-1..1) framing: the host eases the staged camera, so runs
-  // must carry real numbers, and every run must stay in range.
+  // Authored framing in ORIGINAL PIXELS: a run is
+  // [frame, x, y, z, rot, zb] - x/y is the camera position the scene set, z is
+  // its place along the bore and zb says what z is measured from (0 a bare
+  // literal, 1 the level's own endZ, 2 its startZ), rot the authored camera
+  // quaternion [x,y,z,w] (null when the frame sets none). The values are raw
+  // (the scenes write up to +-488 px of pan), so the SHAPE is checkable here
+  // and run3_stage_shot/run3_stage_pos_z do the resolving.
+  const ZBASES = new Set([0, 1, 2]);
   for (const name of Object.keys(CAMSHOT)) {
     for (const r of CAMSHOT[name]) {
-      if (r.length !== 3) throw new Error("bad framing run in " + name + ": " + JSON.stringify(r));
+      if (r.length !== 6) throw new Error("bad framing run in " + name + ": " + JSON.stringify(r));
       for (const v of [r[1], r[2]]) {
-        if (typeof v !== "number" || !(v >= -1 && v <= 1))
+        if (typeof v !== "number" || !isFinite(v) || Math.abs(v) > 4000)
           throw new Error("framing out of range in " + name + ": " + JSON.stringify(r));
       }
+      if (typeof r[3] !== "number") throw new Error("framing run without depth in " + name);
+      if (!ZBASES.has(r[5])) throw new Error("bad camera z base in " + name + ": " + JSON.stringify(r));
+      if (r[4] !== null && (!Array.isArray(r[4]) || r[4].length !== 4))
+        throw new Error("bad camera quaternion in " + name + ": " + JSON.stringify(r[4]));
     }
   }
+  // Candy is the scene whose camera is written in the decompiler's push/pop
+  // form (`setPosition(0, 150, endZ - 800)` + setFromEuler). The bake used to
+  // miss it entirely, which left the port's fallback camera in place and the
+  // angle visibly wrong; it must be recovered, with its z measured from the
+  // level's own end (the cutsene fires there) and a real quaternion.
+  const candy = CAMSHOT.Candy;
+  if (!candy || !candy.length) throw new Error("Candy's authored camera was not extracted");
+  const cy = candy[0];
+  if (cy[5] !== 1 || Math.abs(cy[3] + 800) > 1 || cy[2] !== 150)
+    throw new Error("Candy camera wrong: " + JSON.stringify(cy));
+  if (!cy[4] || cy[4].length !== 4)
+    throw new Error("Candy camera lost its authored rotation: " + JSON.stringify(cy[4]));
+  // ComingThrough frame 0 is the scene's own setup: x stays at the camera's
+  // rest pose (2), y is its first raised pan (106) and z is that level's
+  // authored place along the bore (4129 px)
   const c0 = CAMSHOT.ComingThrough[0];
-  if (Math.abs(c0[1]) > 0.2 || c0[2] < 0.4)
+  if (Math.abs(c0[1] - 2) > 1 || c0[2] < 50 || c0[3] < 1000)
     throw new Error("ComingThrough framing wrong: " + JSON.stringify(c0));
   // every BAKED scene with dialogue carries a timeline, and its segments keep
   // the continuous framing the player eases (custom scenes synthesise one;
@@ -287,17 +316,34 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     if (!CUT[name] || !CUT[name].length) continue;
     const tl = TL[name];
     if (!tl || !tl.segs || !tl.segs.length) throw new Error("no timeline for voiced scene " + name);
+    // a segment's cam is [x_px, y_px, z_px] for an authored scene (the pan
+    // and the bore slide, in original pixels) and [0,0,0] for one the bake
+    // found no camera in — the fallback path takes a normalised side/lift
     for (const s of tl.segs) {
-      if (!s.cam || typeof s.cam[0] !== "number" || !(s.cam[0] >= -1 && s.cam[0] <= 1) ||
-          typeof s.cam[1] !== "number" || !(s.cam[1] >= -1 && s.cam[1] <= 1))
-        throw new Error("bad timeline cam in " + name + ": " + JSON.stringify(s.cam));
+      if (!s.cam || s.cam.length < 2) throw new Error("bad timeline cam in " + name + ": " + JSON.stringify(s.cam));
+      for (const v of s.cam) {
+        if (typeof v !== "number" || !isFinite(v) || Math.abs(v) > 100000)
+          throw new Error("bad timeline cam in " + name + ": " + JSON.stringify(s.cam));
+      }
+      if (tl.ca && s.cam.length < 4)
+        throw new Error("authored scene " + name + " lost its bore z/base: " + JSON.stringify(s.cam));
       if (!Array.isArray(s.actors)) throw new Error("bad timeline actors in " + name);
     }
     // the scene must place its cast at some point (later keyframes hold it)
     if (!tl.segs.some((s) => s.actors.length))
       throw new Error("timeline never places a cast in " + name);
   }
-  console.log(`stage framing OK (${Object.keys(CAMSHOT).length} scenes, continuous camera)`);
+  // cast distance: the original camera sits IN the scene, level with the
+  // characters, so a scene's cast must be anchored just in front of the staged
+  // camera. Anchoring it rows down the tube drew it at a fraction of the
+  // runner's sprite size — the camera read as "too far".
+  let nearZ = Infinity;
+  for (const name of Object.keys(TL))
+    for (const s of TL[name].segs || [])
+      for (const a of s.actors || []) if (a.z < nearZ) nearZ = a.z;
+  if (!(nearZ <= 2.0))
+    throw new Error(`cutscene cast is anchored ${nearZ} rows ahead — camera too far from the scene`);
+  console.log(`stage framing OK (${Object.keys(CAMSHOT).length} scenes, continuous camera; cast anchored from ${nearZ} rows)`);
 
   // 3b. props: the ComingThrough map runs its decoded fall — off the wall
   //     (inset), down onto the runner's floor where it parks on one spot —
@@ -643,20 +689,84 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     throw new Error(`the tube covered the space scene in only ${spaceCovered}/6 levels \u2014 space drawn over the wall`);
   console.log(`space layer OK (${spaceOk}/6 levels painted, ${spaceSurv}/6 visible, ${spaceCovered}/6 occluded by the tube)`);
 
-  // the cutscene DIALOGUE is drawn by the engine now, full-window: write a
-  // line into its buffers and prove it reaches the frame (the DOM keeps only
-  // the click target, so its text is not on screen any more)
+  // 6g. A MISSING TILE IS OPEN, NOT A BLACK TILE. A hole (an authored gap or a
+  //     crumble tile that already fell) has no collision, so it must not paint
+  //     a surface either: the wall row further along, the stars and the space
+  //     scene behind it all stay on screen. Hole-rich LIT levels are rendered
+  //     and their near-black pixels counted — painting an opaque dark quad per
+  //     hole used to put tens of thousands of them in a frame like these.
+  const nearBlack = (px) => {
+    let n = 0;
+    for (let i = 0; i < px.length; i++) {
+      const c = px[i];
+      if (((c >> 16) & 0xff) < 9 && ((c >> 8) & 0xff) < 11 && (c & 0xff) < 21) n++;
+    }
+    return n;
+  };
+  let holeLevels = 0, holeBlackMax = 0;
+  for (const [tun, lvl] of [[0, 0], [9, 4], [40, 3]]) {
+    e.run3_init(7);
+    e.run3_seek(tun, lvl);
+    for (let i = 0; i < 30; i++) e.run3_step(1 / 60);
+    if (e.run3_theme() === 5) throw new Error(`hole check ${tun}/${lvl} is a low-power tunnel`);
+    /* gaps inside the rows drawn ahead, over every side and lane */
+    const row = Math.round(e.run3_rowf()), sides = e.run3_sides(), lanes = e.run3_lanes();
+    let holes = 0;
+    for (let r = 0; r < 28; r++)
+      for (let s = 0; s < sides; s++)
+        for (let l = 0; l < lanes; l++) if (!e.run3_tile(s, row + r, l)) holes++;
+    e.render_frame();
+    const black = nearBlack(new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H));
+    if (holes > 40) holeLevels++;
+    if (black > holeBlackMax) holeBlackMax = black;
+  }
+  if (holeLevels < 3)
+    throw new Error(`only ${holeLevels}/3 levels had gaps in the rows ahead`);
+  if (holeBlackMax > 3000)
+    throw new Error(`missing tiles painted ${holeBlackMax} near-black px \u2014 holes are not open`);
+  console.log(`open tiles OK (${holeLevels}/3 hole-rich lit levels, worst ${holeBlackMax} near-black px)`);
+
+  // 6h. THE CUTSCENE DIALOGUE IS A BUBBLE AT THE LINE'S OWN POSITION. The
+  //     engine draws it (the DOM copy is display:none), and each line carries
+  //     the authored dialog-unit x/y of the speaker: a line from the left wall
+  //     must paint on the left half of the frame and one from the right wall on
+  //     the right half. A full-width band would paint both halves equally.
   e.run3_init(9);
   e.run3_cutscene_backdrop(0, 9);
-  const before = shot();
   const put = (ptr, s) => {
     const m = new Uint8Array(e.memory.buffer, ptr, s.length + 1);
     for (let i = 0; i < s.length; i++) m[i] = s.charCodeAt(i) & 0xff;
     m[s.length] = 0;
   };
-  put(e.run3_cut_title_buf(), "Coming Through");
-  put(e.run3_cut_text_buf(), "The map was blank all along - the stars were the only guide.");
-  e.run3_cut_show(120, 0, -1, 1, 3, 1);
+  const shotWith = (x, y, text) => {
+    /* same scene with the overlay off, so the diff is exactly the bubble */
+    e.run3_cut_show(0, 120, 0, -1, 0, 0, 0);
+    e.render_frame();
+    const base = shot();
+    put(e.run3_cut_title_buf(), "Coming Through");
+    put(e.run3_cut_text_buf(), text);
+    e.run3_cut_show(x, y, 0, -1, 1, 3, 1);
+    e.render_frame();
+    const out = shot();
+    let left = 0, right = 0;
+    for (let yy = 0; yy < H; yy++)
+      for (let xx = 0; xx < W; xx++)
+        if (base[yy * W + xx] !== out[yy * W + xx]) (xx < W / 2 ? left++ : right++);
+    return { left, right, chars: e.run3_cut_chars(), px: out };
+  };
+  const LINE = "The map was blank all along - the stars were the only guide.";
+  const fromLeft = shotWith(-380, -160, LINE);
+  const fromRight = shotWith(380, -160, LINE);
+  if (fromLeft.chars < 40 || fromRight.chars < 40)
+    throw new Error(`cutscene bubble drew ${fromLeft.chars}/${fromRight.chars} characters`);
+  if (fromLeft.left < 4000 || fromLeft.left < fromLeft.right * 2)
+    throw new Error(`left-spoken line painted L=${fromLeft.left} R=${fromLeft.right}`);
+  if (fromRight.right < 4000 || fromRight.right < fromRight.left * 2)
+    throw new Error(`right-spoken line painted L=${fromRight.right} R=${fromRight.left}`);
+  console.log(`cutscene bubbles OK (x=-380 -> ${fromLeft.left}L/${fromLeft.right}R, ` +
+              `x=+380 -> ${fromRight.left}L/${fromRight.right}R px)`);
+  const before = shot();
+  e.run3_cut_show(0, 120, 0, -1, 1, 3, 1);
   e.render_frame();
   const cutChars = e.run3_cut_chars();
   const afterCut = shot();
@@ -668,18 +778,491 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     throw new Error(`cutscene overlay drew only ${cutChars} characters`);
   if (cutLit < 4000)
     throw new Error(`cutscene dialogue band only changed ${cutLit} px`);
-  e.run3_cut_show(0, 0, -1, 0, 0, 0);
+  e.run3_cut_show(0, 120, 0, -1, 0, 0, 0);
   console.log(`cutscene overlay OK (engine drew ${cutChars} chars, ${cutLit} px in the dialogue band)`);
 
+  // 6i. THE STAGED CAMERA IS A FREE POSITION ON THE TUNNEL AXIS, LOOKING
+  //     STRAIGHT DOWN THE BORE. The original's cutscene camera is an
+  //     unparented Transform whose rest position is on the axis (x=2, y=0),
+  //     and each scene frame moves it to an authored (x, y) in world axes — so
+  //     the port must place it there, NOT on the gameplay chase camera's spot
+  //     (a facet apothem up the runner's wall) and NOT pitched down to pin the
+  //     runner. The authored side/lift move the camera through the held
+  //     tunnel: the tunnel's own roll must not change and the runner's screen
+  //     spot must shift the other way, full scale for a full authored unit.
   e.run3_init(9);
   e.run3_cutscene_backdrop(0, 9);
   if (e.run3_state() !== 8) throw new Error("cutscene backdrop did not enter S_CUT");
-  e.run3_stage_cam(1, 0);
-  const camR = e.run3_rot();
-  e.run3_stage_cam(-1, 0);
-  const camL = e.run3_rot();
-  if (Math.abs((camR - camL) + 0.56) > 1e-6)
-    throw new Error(`staged camera side dropped (span ${(camR - camL).toFixed(3)}, want -0.56)`);
-  console.log("staged camera angle OK (S_CUT applies the authored side pan)");
+  const SP = e.run3_scratch();
+  const padFrame = (side, lift) => {
+    e.run3_stage_cam(side, lift);
+    e.render_frame();
+    /* read the pitch the frame actually rendered with: run3_runner_screen
+       re-derives the chase pitch for its own projection */
+    const pitch = e.run3_cam_pitch();
+    e.run3_runner_screen(SP, SP + 8);
+    const f = new Float64Array(e.memory.buffer, SP, 32);
+    return { px: shot(), x: f[0], y: f[1], roll: e.run3_rot(),
+             camx: e.run3_cam_x(), camy: e.run3_cam_y(), pitch: pitch };
+  };
+  {
+    /* zero authored offset -> the camera is exactly on the axis (a chase
+       camera bolted to the runner would sit ~0.35 apothem below it), and its
+       view has no pitch (the chase camera pitched ~-0.22 rad) */
+    const mid = padFrame(0, 0);
+    if (Math.abs(mid.camx) > 1e-9 || Math.abs(mid.camy) > 1e-9)
+      throw new Error(`staged camera is not on the axis (${mid.camx.toFixed(3)}, ${mid.camy.toFixed(3)})`);
+    if (Math.abs(mid.pitch) > 1e-9)
+      throw new Error(`staged camera pitched the held tunnel (${mid.pitch.toFixed(3)} rad)`);
+    if (Math.abs(mid.camy - e.run3_runner_world_y()) < 0.5)
+      throw new Error("staged camera still rides the runner's wall (camera y == runner wall y)");
+  }
+  const countDiff = (a, b) => {
+    let n = 0;
+    for (let i = 0; i < W * H; i++) if (a[i] !== b[i]) n++;
+    return n;
+  };
+  const camMid = padFrame(0, 0);
+  const camLeft = padFrame(-1, 0);
+  const camRight = padFrame(1, 0);
+  const camUp = padFrame(0, 1);
+  const camDown = padFrame(0, -1);
+  for (const [name, f] of [["side +1", camRight], ["side -1", camLeft],
+                           ["lift +1", camUp], ["lift -1", camDown]])
+    if (Math.abs(f.roll - camMid.roll) > 1e-9)
+      throw new Error(`staged ${name} rolled the held tunnel (${camMid.roll.toFixed(3)} -> ${f.roll.toFixed(3)})`);
+  /* The authored offsets are a POSITION in the level's own world axes, and
+     the port emulates the camera roll by rotating the level — so the offset
+     must be rolled by the held frame's G.rot, and the authored `lift` (whose
+     +y runs along GRAVITY, i.e. toward the floor side) must be negated first,
+     because the port's tube space has the runner's floor at -y. Pin the whole
+     model, not just a direction: apo = cam_back (CAM_BACK_STAGE = 1.0). */
+  const apo = e.run3_cam_back();
+  const rc = Math.cos(camMid.roll), rs = Math.sin(camMid.roll);
+  for (const [side, lift, f, name] of [[-1, 0, camLeft, "side -1"],
+                                       [1, 0, camRight, "side +1"],
+                                       [0, 1, camUp, "lift +1"],
+                                       [0, -1, camDown, "lift -1"]]) {
+    const ox = side * apo, oy = -lift * apo;
+    const ex = ox * rc - oy * rs, ey = ox * rs + oy * rc;
+    /* the port's own ssin/scos are approximations, so compare RELATIVE to the
+       magnitude (the check must not get tighter just because the world unit
+       changed) */
+    const tol = 1e-6 * (1 + Math.abs(ex) + Math.abs(ey));
+    if (Math.abs(f.camx - ex) > tol || Math.abs(f.camy - ey) > tol)
+      throw new Error(`staged ${name} camera is not the authored world offset ` +
+        `(got ${f.camx.toFixed(6)},${f.camy.toFixed(6)}, want ${ex.toFixed(6)},${ey.toFixed(6)})`);
+  }
+  if (Math.abs(apo) < 0.2)
+    throw new Error(`staged pan is not full scale (apothem ${apo.toFixed(3)})`);
+  if (!((camRight.x - camMid.x) * (camLeft.x - camMid.x) < 0 &&
+        Math.abs(camRight.x - camMid.x) > 40))
+    throw new Error(`staged side pan does not move the tunnel (x ${camLeft.x.toFixed(1)} / ${camMid.x.toFixed(1)} / ${camRight.x.toFixed(1)})`);
+  if (!((camUp.y - camMid.y) * (camDown.y - camMid.y) < 0 &&
+        Math.abs(camUp.y - camMid.y) > 40))
+    throw new Error(`staged lift pan does not move the tunnel (y ${camUp.y.toFixed(1)} / ${camMid.y.toFixed(1)} / ${camDown.y.toFixed(1)})`);
+  const panL = countDiff(camMid.px, camLeft.px), panR = countDiff(camMid.px, camRight.px);
+  if (panL < 40000 || panR < 40000)
+    throw new Error(`staged pan is barely visible (L=${panL} R=${panR} px)`);
+  console.log(`staged camera OK (axis base, pitch ${camMid.pitch.toFixed(3)}; roll held at ` +
+              `${camMid.roll.toFixed(3)}; x ` +
+              `${camLeft.x.toFixed(0)}/${camMid.x.toFixed(0)}/${camRight.x.toFixed(0)}, y ` +
+              `${camUp.y.toFixed(0)}/${camMid.y.toFixed(0)}/${camDown.y.toFixed(0)})`);
+  e.run3_stage_cam(0, 0);
+
+  // 6i1. THE STAGED CAST IS THE RUNNER'S OWN SIZE, SEEN FROM ONE TUBE RADIUS.
+  //      A cutscene is not a different world scale: the camera's PLACE is
+  //      authored, so a character must read against the tunnel exactly as the
+  //      runner does on the track. Casting it at the staged camera's nominal
+  //      depth instead (cam_back = 1.0 apothem) shrank every cutscene character
+  //      to a speck, and taking the authored position.z as the camera-to-cast
+  //      distance did the same — the z is an absolute section-chain coordinate
+  //      while the cast's rows are level-local. The shot distance is one
+  //      apothem, which is what the original's own character size implies (a
+  //      sprite is drawn at its natural 25 px on a 600 px stage at dd = R).
+  if (typeof e.run3_cast_ref !== "function" || typeof e.run3_stage_shot !== "function")
+    throw new Error("staged cast scale/dolly exports missing");
+  e.run3_init(3);
+  e.run3_seek(0, 9);
+  e.run3_cutscene_backdrop(0, 9);
+  const shotApo = e.run3_cam_back(); /* fallback staging uses CAM_BACK_STAGE=1.0 */
+  if (typeof e.run3_stage_dist !== "function")
+    throw new Error("run3_stage_dist export missing");
+  const snapPx = () => new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice();
+  /* stage one cast member at zrow, with the authored camera expressed in the
+     level's own coordinates (zb 1 = `endZ + z`, the form Candy uses) */
+  const castBox = (zb, z, frontRow, zrow, ring) => {
+    e.run3_stage_shot(z, zb, frontRow);
+    e.run3_stage_camera(2, 0, z, 0, 0, 0, 1);
+    e.run3_stage_actor(0, 0, ring === undefined ? 4 : ring, zrow, 1);
+    e.render_frame();
+    const on = snapPx();
+    e.run3_stage_actor(0, 0, ring === undefined ? 4 : ring, zrow, 0);
+    e.render_frame();
+    const off = snapPx();
+    let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1, n = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (on[i] !== off[i]) { n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    return { n, w: x1 - x0 + 1, h: y1 - y0 + 1, cx: (x0 + x1) / 2,
+             cy: (y0 + y1) / 2, by: y1,
+             depth: e.run3_stage_pos_z(), dist: e.run3_stage_dist() };
+  };
+  /* The AUTHORED frame carries the cross-section quarter turn. The port's own
+     frame puts side s's midpoint at `-PI/2 + TAU*s/n` while the original's
+     layout angle origin is the +x axis (`GridLayout3D` places side s by
+     rotating the identity orientation by `TAU*s/n`), so under an identity
+     authored camera side 0 must sit to the RIGHT of the bore axis.
+
+     Which way the quarter turn then goes is fixed by the original's own screen
+     map, and it is a DOWNWARD turn. `Scene3D.project` applies
+     `perspectiveFieldOfViewLH(fovY, width/height, 15, 3000)` with
+     `appendScale(1,-1,1)` on top, and `StageActor.getBounds` converts NDC with
+     `((ndc.x+1)/2*W, (1-ndc.y)/2*H)`. Expanded (see render.c's proj):
+
+       sx = W/2 + vx*FOCAL/vz      sy = H/2 + vy*FOCAL/vz
+
+     so the original's view +y runs DOWN the screen. Side 4's midpoint is a
+     quarter turn from side 0's, i.e. along the original's +y, so under the
+     quarter turn alone it would land BELOW the axis. Reading it as "above"
+     (the port's own +y-up screen) is a vertical mirror of the frame, and a
+     mirror reverses every rotation - which is what made a scene that rolled
+     its camera about the bore come out rolling the other way. Gameplay cannot
+     see this gauge (turning the world and the camera by the same constant is
+     the same picture), which is why only the authored path needs it.
+
+     On top of that quarter turn the frame is rolled a HALF TURN about the
+     bore, so the pair comes out 180 degrees from the description above: side 0
+     to the LEFT, side 4 quarter-turned UP. Both are the same rotation, so the
+     two radii stay equal - the assertion below is what tells a rollout apart
+     from a mirror. */
+  const b0 = castBox(1, -800, 0, 1.0, 0.5);      /* side 0's midpoint */
+  const b4 = castBox(1, -800, 0, 1.0, 4.5);      /* side 4, a quarter turn on */
+  const b8 = castBox(1, -800, 0, 1.0, 8.5);      /* side 8, opposite side 0 */
+  const b12 = castBox(1, -800, 0, 1.0, 12.5);    /* side 12, opposite side 4 */
+  {
+    if (b0.n === 0 || b4.n === 0 || b8.n === 0 || b12.n === 0)
+      throw new Error("the quarter-turn probe drew nothing");
+    /* A staged sprite is TILTED with the level (its up is the actor's own,
+       `StageActor.updateBillboard`), so its drawn box sits a constant offset
+       from the ring point it is anchored to - the same offset for every member
+       of a scene. The midpoint of two OPPOSITE sides cancels it and recovers
+       the ring point itself, which is the geometry under test. */
+    const ringPt = (a, b) => ({ x: (a.cx - b.cx) / 2, y: (a.cy - b.cy) / 2 });
+    const r0 = ringPt(b0, b8), r4 = ringPt(b4, b12);
+    const R = Math.hypot(r0.x, r0.y);
+    if (typeof b0.cy !== "number") throw new Error("castBox must report the box centre");
+    /* STAGE_GAUGE is that quarter turn PLUS the half turn the scenes are
+       presented with, so the quarter turn shows up as an exact 180-degree
+       rotation of the pair: side 0 sits half a turn from the +x axis (to the
+       LEFT) and side 4 a quarter turn ABOVE it. The two radii still have to
+       match, which is what proves the frame was ROTATED and not mirrored. */
+    if (!(r0.x < -0.5 * R) || !(Math.abs(r0.y) < 0.25 * R))
+      throw new Error(`side 0 is not half a turn from the +x axis (${r0.x.toFixed(0)},${r0.y.toFixed(0)}); the staged view is not a clean 180-degree rollout`);
+    if (!(r4.y < -0.5 * R) || !(Math.abs(r4.x) < 0.25 * R))
+      throw new Error(`side 4 is not a quarter turn ABOVE the axis (${r4.x.toFixed(0)},${r4.y.toFixed(0)}); the staged view lost its quarter turn or came out mirrored`);
+    if (Math.abs(Math.hypot(r4.x, r4.y) - R) > 0.15 * R)
+      throw new Error(`the two sides are not the same radius (${R.toFixed(0)} vs ${Math.hypot(r4.x, r4.y).toFixed(0)})`);
+    console.log(`staged cross-section OK (side 0 at (${r0.x.toFixed(0)},${r0.y.toFixed(0)}), ` +
+                `a quarter turn UP to side 4 at (${r4.x.toFixed(0)},${r4.y.toFixed(0)}); ` +
+                `a clean 180-degree rollout, both radii ${R.toFixed(0)}px)`);
+  }
+  if (!(e.run3_cast_ref() > shotApo))
+    throw new Error(`cast scale reference ${e.run3_cast_ref().toFixed(2)} is not the runner's own plane (${shotApo.toFixed(2)})`);
+  /* the endZ form resolves EXACTLY: `endZ - 800` with the front cast on row 0
+     is 800 world pixels ahead of it (the level's own length cancels). The
+     engine's unit IS the original's world pixel, so this is the authored
+     number verbatim. */
+  const candyShot = castBox(1, -800, 0, 1.0);
+  if (!(Math.abs(candyShot.dist - 800.0) < 1e-6))
+    throw new Error(`endZ camera resolved to ${candyShot.dist.toFixed(3)} units, not 800`);
+  /* THE CAST'S OWN SIZE, taken from the original rather than invented: a
+     staged actor is an ordinary spritesheet whose quad the original builds at
+     `frame.w * 0.45681063122923593` world px (`StageActor`'s own constant), and
+     a world px IS the engine's unit (render.c's stage_sprite_h). So the drawn
+     height is FOCAL * (frame.h * 0.45681063122923593) / shot, with the
+     frame being the ANIMATION FRAME the art is showing — the baked art's
+     frames are 58..92 px tall, which bounds the expectation. Nothing rescales
+     a cutscene character: its place is authored, its size is the game's. */
+  const FOCAL = H * 0.5 / 0.7265425280053609;   /* H / (2 tan(FOVY/2)) */
+  const SPRITE_SCALE = 0.45681063122923593, PX_UNITS = 1.0;
+  const castH = (fh, dist) => FOCAL * fh * SPRITE_SCALE * PX_UNITS / dist;
+  if (candyShot.n === 0) throw new Error("staged cast drew nothing at the authored camera");
+  const lo = castH(58, candyShot.dist), hi = castH(92, candyShot.dist);
+  if (!(candyShot.h >= 0.8 * lo && candyShot.h <= 1.25 * hi))
+    throw new Error(`staged cast is ${candyShot.h}px; the original's own frame size ` +
+                    `puts it in ${lo.toFixed(0)}..${hi.toFixed(0)}px at ${candyShot.dist} units`);
+  /* the perspective is the camera's own: a member further down the cast is
+     smaller, and the falloff is the shot depth's own */
+  const farCast = castBox(1, -800, 0, 2.0);
+  if (!(farCast.h < candyShot.h && farCast.h > 0.55 * candyShot.h))
+    throw new Error(`cast depth scale wrong (${candyShot.h} -> ${farCast.h} px one row apart)`);
+  /* the authored z is the DOLLY: +80 px brings the camera 0.8 units closer,
+     which is what the source's own `translate(0, 0, 80)` does, and the cast
+     grows with it because its size IS the perspective — nothing holds it */
+  const pushed = castBox(1, -720, 0, 1.0);
+  if (!(Math.abs(pushed.dist - (candyShot.dist - 80.0)) < 1e-6))
+    throw new Error(`authored dolly moved the camera to ${pushed.dist.toFixed(2)}, not ${(candyShot.dist - 80.0).toFixed(2)}`);
+  /* the SAME member from the dollied camera: the two shots differ only in the
+     camera's depth (8.0 vs 7.2 units), so the sprite sizes differ by exactly
+     that ratio — the perspective IS the cast's size, nothing pins it */
+  const wantScale = candyShot.dist / pushed.dist;
+  if (!(Math.abs(pushed.h / candyShot.h / wantScale - 1) < 0.12))
+    throw new Error(`the authored dolly did not scale the cast with the shot ` +
+                    `(${candyShot.h}px at ${candyShot.dist}u -> ${pushed.h}px at ${pushed.dist}u, ` +
+                    `want ${wantScale.toFixed(2)}x)`);
+  /* A SHORT AUTHORED SHOT IS USED AS IT IS. The port does not back the camera
+     off the wall and does not re-place the cast: `z = -100` px with the front
+     cast on row 0 is a one-unit shot, and one unit of depth leaves the wall
+     (a tube radius off the axis) outside the 72-degree field of view, so the
+     cast really does land past the frame's edge — exactly what the original
+     would draw. A floor here (about 1.4 apothems, R / tan(fov/2)) was the
+     port's own invention, and it is gone. */
+  const wall = castBox(1, -100, 0, 1.0, 4.5);
+  if (!(Math.abs(wall.dist - 100.0) < 1e-6))
+    throw new Error(`a short authored shot was not used as it is ` +
+                    `(${wall.dist.toFixed(2)} units, not 100.00)`);
+  console.log(`staged cast OK (${candyShot.h.toFixed(0)}px front cast from the original's own ` +
+              `frame size at ${candyShot.dist.toFixed(1)}px, ${pushed.h.toFixed(0)}px at the 80px dolly, ` +
+              `short shots used as ${wall.dist.toFixed(1)}px)`);
+  e.run3_stage_actor(0, 0, 4, 1.0, 0);
+  e.run3_stage_cam(0, 0);
+
+  // 6i1b. THE AUTHORED ROTATION IS APPLIED EXACTLY: the whole frame turns
+  //       ABOUT the bore, it does not tilt ACROSS it. The baked quaternions
+  //       mix a roll about the bore with a small tilt of it, and the bake
+  //       builds them as Rx*Ry*Rz (bake_cutscenes.euler_quat), so reading the
+  //       Euler components back by NAME and applying each about a different
+  //       axis (x as the view roll's axis, y about x, z about y) turned a
+  //       scene's roll into a tilt of the tunnel — exactly the "tilt along
+  //       the tunnel axis" bug. The staged view now applies R^-1 as one
+  //       quaternion turn (the original's own rotateVector), so:
+  //         * a pure roll psi moves every projected point exactly like a
+  //           rotation of psi about the bore's own screen point (CX, CY), and
+  //         * it carries the CAST with it: the original's billboards take
+  //           their up axis from the actor, never from the camera
+  //           (StageActor.updateBillboard), so a rolled frame tilts them.
+  e.run3_init(3);
+  e.run3_seek(0, 9);
+  e.run3_cutscene_backdrop(0, 9);
+  const rollQ = (deg) => {
+    const a = deg * Math.PI / 180;
+    return [0, 0, Math.sin(a / 2), Math.cos(a / 2)];
+  };
+  /* one cast member alone, so its pixels are all that changes */
+  const measure = (deg, ring) => {
+    e.run3_stage_shot(-800, 1, 0);
+    e.run3_stage_camera(2, 0, -800, ...rollQ(deg));
+    e.run3_stage_actor(0, 0, ring, 1.0, 1);
+    e.render_frame();
+    const on = snapPx();
+    e.run3_stage_actor(0, 0, ring, 1.0, 0);
+    e.render_frame();
+    const off = snapPx();
+    let sx = 0, sy = 0, n = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (on[i] !== off[i]) {
+        sx += x; sy += y; n++;
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    return { n, cx: sx / Math.max(1, n), cy: sy / Math.max(1, n), x0, y0, x1, y1 };
+  };
+  /* a staged frame's screen centre is EXACTLY (W/2, H/2): the original's
+     `StageActor.getBounds` maps NDC with `((x+1)/2*W, (1-y)/2*H)`, so the bore's
+     vanishing point sits at the bitmap's centre. The gameplay (CX, CY) nudge has
+     no counterpart in the original and must not be used here. */
+  const BORE_X = W / 2, BORE_Y = H / 2;
+  let rollWorst = 0, rollWorstAt = "";
+  for (const ring of [12, 4, 0.5]) {
+    const base = measure(0, ring);
+    if (!base.n) throw new Error(`the roll probe drew nothing on ring ${ring}`);
+    /* with no roll the sprite's feet anchor is (bbox centre x, bbox bottom),
+       which pins its centroid in sprite-local pixels */
+    const ax0 = (base.x0 + base.x1) / 2, ay0 = base.y1;
+    const lcx = base.cx - ax0, lcy = base.cy - ay0;
+    for (const deg of [15, 30, 45, 90]) {
+      const m = measure(deg, ring);
+      if (!m.n) throw new Error(`a ${deg}deg authored roll drew nothing on ring ${ring}`);
+      /* THE ORIGINAL'S SCREEN Y IS DOWN. `StageActor.getBounds` turns NDC into
+         pixels with `((x + 1) / 2 * W, (1 - y) / 2 * H)` and the projection
+         carries `appendScale(1, -1, 1)`, so an authored roll of +psi about the
+         bore appears as a rotation of -psi in pixel coordinates. Everything
+         below is therefore written with R(-psi) (the sign of the sine term
+         flipped against the old, mirrored view). */
+      const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+      /* undo the sprite's own rotation to recover where it stands */
+      const ax = m.cx - (c * lcx + s * lcy);
+      const ay = m.cy - (-s * lcx + c * lcy);
+      /* the world turns about the bore by -deg (pixel coords) */
+      const ex = BORE_X + (ax0 - BORE_X) * c + (ay0 - BORE_Y) * s;
+      const ey = BORE_Y - (ax0 - BORE_X) * s + (ay0 - BORE_Y) * c;
+      const off = Math.hypot(ax - ex, ay - ey);
+      if (off > rollWorst) { rollWorst = off; rollWorstAt = `ring ${ring} at ${deg}deg`; }
+    }
+  }
+  /* the tolerance is the pixel quantisation of a ROTATED sprite's centroid
+     (a fraction of a pixel, measured off a 175px sprite); a view that tilted
+     the tunnel instead of rolling it misses by tens of pixels */
+  if (!(rollWorst < 4.0))
+    throw new Error(`a pure authored roll did not turn the cast about the bore: ` +
+                    `${rollWorstAt} is ${rollWorst.toFixed(2)}px off the rotated place ` +
+                    `(the view is tilting the tunnel instead of rolling it)`);
+  /* …and the whole frame turns with it, not just the cast: with a pure roll
+     every pixel must be the identity frame's pixel, rotated about the bore */
+  const fullFrame = (deg) => {
+    e.run3_init(3);
+    e.run3_seek(0, 9);
+    e.run3_cutscene_backdrop(0, 9);
+    e.run3_stage_shot(-800, 1, 0);
+    e.run3_stage_camera(2, 0, -800, ...rollQ(deg));
+    [0.5, 4, 8, 12].forEach((r, i) => e.run3_stage_actor(i, 0, r, 1.0, 1));
+    e.render_frame();
+    return snapPx();
+  };
+  const ident = fullFrame(0);
+  const nearPx = (p, q) =>
+    Math.abs(((p >> 16) & 255) - ((q >> 16) & 255)) <= 24 &&
+    Math.abs(((p >> 8) & 255) - ((q >> 8) & 255)) <= 24 &&
+    Math.abs((p & 255) - (q & 255)) <= 24;
+  let rigid = 0, rigidN = 0;
+  for (const deg of [30, 90]) {
+    const moved = fullFrame(deg);
+    const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    let n = 0, bad = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (moved[i] === ident[i]) continue;      /* the roll did not touch it */
+      const rx = x - BORE_X, ry = y - BORE_Y;
+      const sx = Math.round(BORE_X + rx * c - ry * s);
+      const sy = Math.round(BORE_Y + rx * s + ry * c);
+      /* a frame corner rotates past the bitmap, where there is no identity
+         pixel to compare against — skip those rather than calling them bad */
+      if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;
+      n++;
+      if (!nearPx(moved[i], ident[sy * W + sx])) bad++;
+    }
+    rigidN += n; rigid += bad;
+  }
+  if (!(rigidN > 20000) || rigid > 0.10 * rigidN)
+    throw new Error(`a pure authored roll is not a rigid turn of the frame: ` +
+                    `${rigid} of ${rigidN} moved pixels differ from the rotated likeness`);
+  console.log(`staged roll OK (cast follows the bore to ${rollWorst.toFixed(2)}px at 15/30/45/90deg, ` +
+              `${(100 * rigid / rigidN).toFixed(1)}% of the frame's moved pixels off a rigid turn)`);
+  [0, 1, 2, 3].forEach((i) => e.run3_stage_actor(i, 0, 4, 6, 0));
+  e.run3_stage_cam(0, 0);
+
+  // 6i2. LAST CHECKPOINT OF A TUNNEL. A scene staged as its checkpoint is
+  //      completed sits the camera on the level's finish row. Whether that is
+  //      looking at real tunnel or at the solid fill depends on the level's
+  //      AUTHORED length: a level carrying a result-win trigger runs on past
+  //      its finish (the Low-Power Tunnel's glowing wedge narrows right to the
+  //      end; home 1's corridor runs on), so the rows ahead are its own and no
+  //      back-off is wanted. Only when the finish IS the authored end - and
+  //      the tunnel has no next level whose bitmap is drawn ahead - is there
+  //      nothing to look at, and the camera must back off the tail.
+  const stageEnd = (tun, lvl) => {
+    e.run3_init(3);
+    e.run3_seek(tun, lvl);
+    const rowStart = e.run3_rowf();
+    const finish = rowStart + e.run3_level_rows();
+    const authored = rowStart + e.run3_level_authored_rows();
+    return { finish, authored };
+  };
+  const BACKOFF = 16;
+  let backedOff = 0, onReal = 0, onNext = 0;
+  for (const tun of [2, 1, 0]) {
+    /* the tunnel's last level is the one with nothing after it, and a last
+       level whose finish IS its authored end is the only blank-wall case */
+    const lvl = e.run3_levels_in(tun) - 1;
+    const isLast = true;
+    const { finish, authored } = stageEnd(tun, lvl);
+    e.run3_cutscene_backdrop_end(tun, lvl);
+    const row = e.run3_rowf();
+    const rowsAhead = authored - finish;
+    if (rowsAhead > 1) {
+      /* the finish sits inside the level's own terrain: its rows are the view */
+      if (!(row > finish - 2))
+        throw new Error(`finish row of ${tun}/${lvl} runs on for ` +
+                        `${rowsAhead.toFixed(0)} rows but the scene backed off to ` +
+                        `${row.toFixed(1)} of ${finish}`);
+      onReal++;
+    } else if (!isLast) {
+      onNext++;
+    } else {
+      if (!(row <= finish - BACKOFF + 2))
+        throw new Error(`last-checkpoint scene at ${tun}/${lvl} staged at ` +
+                        `${row.toFixed(1)} of tail ${finish} with only ` +
+                        `${rowsAhead.toFixed(0)} rows of its own ahead ` +
+                        `(should back off ${BACKOFF})`);
+      backedOff++;
+    }
+  }
+  /* a mid checkpoint stages on its finish: the next level's bitmap is ahead */
+  {
+    const { finish } = stageEnd(1, 5);
+    e.run3_cutscene_backdrop_end(1, 5);
+    if (!(e.run3_rowf() > finish - 2))
+      throw new Error("checkpoint with a next level did not stage on its tail");
+    onNext++;
+  }
+  if (!backedOff)
+    throw new Error("no staged scene exercised the tail back-off");
+  console.log(`last-checkpoint staging OK (${onReal} ran on their own authored rows, ` +
+              `${onNext} had a next level drawn ahead, ${backedOff} backed off the tail)`);
+
+  // 6j. GLOWING TILES STAY LIT IN THE DARK. The Low-Power Tunnel finishes on a
+  //     strip of glowing tiles (a `~glow` terrain layer baked next to the
+  //     crumbling one). They are ordinary solid tiles whose surface IS the
+  //     tunnel's light, so they must stay lit with the power at 0. The
+  //     original's own recipe for their colour is the level tint interpolated
+  //     20% toward 0xDDDDDD (`"glow" -> Color.interpolate(colour, 14540253,
+  //     0.2)` in the tile table) — a LIGHT, near-neutral tile, not the gold
+  //     panel the port used to draw, so count lit-and-neutral pixels.
+  const bright = (px) => {
+    let n = 0;
+    for (let i = 0; i < px.length; i++) {
+      const c = px[i], r = (c >> 16) & 0xff, g = (c >> 8) & 0xff, b = c & 0xff;
+      const lo = Math.min(r, g, b);
+      if (lo >= 45 && Math.abs(r - b) < 90) n++;
+    }
+    return n;
+  };
+  const glowScan = (lvl) => {
+    e.run3_init(7);
+    e.run3_seek(13, lvl);
+    const base = e.run3_row(), sides = e.run3_sides(), lanes = e.run3_lanes();
+    let n = 0, solid = 0;
+    for (let r = 0; r < 150; r++)
+      for (let s = 0; s < sides; s++)
+        for (let l = 0; l < lanes; l++)
+          if (e.run3_tile_glow(s, base + r, l)) { n++; if (e.run3_tile(s, base + r, l)) solid++; }
+    return { n, solid };
+  };
+  const tail = glowScan(24); /* the Low-Power Tunnel's last level (part 25) */
+  if (tail.n < 8) throw new Error(`the last low-power level lost its glow strip (${tail.n} tiles)`);
+  if (tail.solid !== tail.n) throw new Error(`glow tiles are not solid (${tail.solid}/${tail.n})`);
+  /* level 5 of the same (dark) tunnel has its glow strip in view from the
+     level head, so the lit surface can be counted straight off a frame */
+  const gLit = glowScan(5), gNone = glowScan(17);
+  if (gLit.n < 40) throw new Error(`expected a glow strip in low-power lvl 5, got ${gLit.n}`);
+  e.run3_init(7);
+  e.run3_cutscene_backdrop(13, 5);
+  if (e.run3_power() > 0.2) throw new Error("the glow check needs the tunnel dark");
+  e.render_frame();
+  const litPx = bright(shot());
+  e.run3_init(7);
+  e.run3_cutscene_backdrop(13, 17);
+  e.render_frame();
+  const nonePx = bright(shot());
+  if (gNone.n !== 0) throw new Error(`level 17 should have no glow tiles, got ${gNone.n}`);
+  if (litPx < 1000 || litPx < nonePx + 1000)
+    throw new Error(`glow strip did not light the dark tunnel (${litPx} bright px vs ${nonePx} without)`);
+  console.log(`glowing tiles OK (last level ${tail.n} solid glow tiles; lvl 5 lights ` +
+              `${litPx} bright px at power ${e.run3_power().toFixed(2)}, a no-glow level paints ${nonePx})`);
+  e.run3_set_input(0);
   console.log("ALL STAGE CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", (err && err.message) || err); process.exit(1); });

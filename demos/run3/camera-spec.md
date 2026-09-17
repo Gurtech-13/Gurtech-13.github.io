@@ -314,10 +314,27 @@ New / updated suites (all must stay green alongside the existing nine:
 
 ## 8. Regression risks / notes
 
-- **`verify_stage` staged-camera test** (roll spans 0.56 rad; 41k px change per
-  pan) depends on `cam_rot_target()` + `g_stageSide·0.28`. The staged path must
-  keep the authored side offset *on top of* the facet roll so this stays
-  meaningful.
+- **Staged camera sign**: the authored cutscene `y` runs along **gravity**
+  (the floor side: the level starts with the floor at +y), and the port's tube
+  space has the runner's floor at **-y** (`corner()` puts side 0 below the
+  axis) — so the staged `lift` is negated before the offset is rolled by the
+  held frame's `G.rot`. Without the negation the camera sat on the wrong side
+  of the axis in every scene: the cast fell off the bottom of the frame and
+  only the distant sprites, bunched near the screen centre, were left.
+- **`verify_stage` staged-camera test**: the authored per-frame cutscene camera
+  is a *position* (the original's camera is an unparented `Point3D` at rest on
+  the tunnel axis), so a staged scene places it on the **axis plus the authored
+  offset** at one facet apothem per unit — never on the gameplay chase camera's
+  spot (a facet apothem up the runner's wall) and never with the chase pitch.
+  The offset is rolled by `G.rot`, so `side`/`lift` are pinned against the
+  rolled model rather than a fixed screen direction.
+  The held tunnel keeps its own facet roll and is viewed straight down the bore
+  (`cam_pitch = 0`); the runner's screen spot shifts the other way. The staged
+  distance is `CAM_BACK_STAGE` (closer than the chase camera) and a scene that
+  fires on a tunnel's FINAL checkpoint backs the camera off the level tail
+  (`STAGE_TAIL_BACK`), since no next level is drawn past it. A final level whose
+  authored `result-win` row sits before the end of its terrain keeps its own
+  rows past the finish, so that back-off is skipped there.
 - **Hint dots and gravity shading** read the roll; re-verify after the change.
 - **Framing retune**: keying off the apothem instead of the runner's running
   distance is a small visual change; `CAM_BACK`/`CAM_OUT` may need a retune.
@@ -340,8 +357,245 @@ New / updated suites (all must stay green alongside the existing nine:
    camera only follows jump / death / landing, per R5.
 4. **`BAKED_ROT`** — dropped from gameplay entirely (`cam_rot_target()` no
    longer adds it) so the steps are exactly `360/n`; kept for `S_CUT` staging,
-   where `run3_stage_cam` re-adds it to the held-frame roll.
+   where `run3_stage_cam` re-adds it to the held-frame roll.Also settled while implementing: the *level-load* snap is `open_level()`
+setting `G.rot` to the new facet (which makes the corridor section of a
+seam blend glideless when the runner crosses it at speed).
 
-Also settled while implementing: the *level-load* snap is `open_level()`
-setting `G.rot` to the new facet (which makes the corridor section of a seam
-blend glideless when the runner crosses it at speed).
+## 10. Staged cutscene camera — authored position + quaternion
+
+A cutscene in the original sets its camera itself, per frame:
+
+```as
+Point3D = tunnel.<cam>.<position>;  _loc1_.x/y/z = <x>, <y>, <z>;
+var _loc2_ = tunnel.<cam>.<rotation>;      // a quaternion
+_loc2_.x = a*sin(A); ... .w = cos(A);      // a turn of 2A about (a, b, c)
+```
+
+and the renderer projects with a fixed **vertical** fov of 72°
+(`Context3DUtils.init(render, 1.2566370614359172, 15, 3000, ...)`), so only the
+horizontal extent follows the window. `run3.h` therefore derives `FOCAL` from
+the stage height instead of hard-coding it, and the port stages an authored
+scene the same way the original does:
+
+| | model |
+|---|---|
+| **world scale** | 1 unit per original pixel (`STAGE_PX = 1.0`, §11 — the engine's unit IS the original's world pixel); a level's tile is its own `tileWidth` in world px, so a cast row advances `tilew` px and a camera `z` of 4129 is 4129 px down the bore |
+| **pan** | the authored `x`/`y` minus the camera rig's own offset `(2, 106)` (`STAGE_PAN_X`/`STAGE_PAN_Y`, calibrated on ComingThrough), turned into the port's cross-section frame by the inverse of `STAGE_GAUGE` and used as the camera's place |
+| **orientation** | the authored quaternion, consumed as ONE turn: the view applies the original's own `QuaternionUtils.rotateVector(conj(q), p - camPos)`, no Euler decomposition |
+| **place** | the authored `z`, resolved against the level (see below), used AS IT IS |
+| **cast size** | the original's own spritesheet size: a frame is `frame.h * 0.45681063122923593` world px, so the sprite is `FOCAL * that / shot` tall — pure perspective |
+
+**The original writes the camera in two forms, and the bake reads both.**
+
+```as
+// A) field writes (the common one)
+Point3D = tunnel.<cam>.<position>;  _loc1_.x/y/z = <x>, <y>, <z>;
+// B) the decompiler's push/pop form (Candy)
+§§push(tunnel.<cam>); §§push(0); §§push(150); §§push(<z>);
+§§push(§§pop() - 800); §§pop().<setPosition>(§§pop(),§§pop(),§§pop());
+QuaternionUtils.setFromEuler(<x>, <y>, <z>, tunnel.<cam>.<rotation>);
+```
+
+Form B was missed entirely before, so Candy and friends fell to the fallback
+path — where the port rolls the whole LEVEL by the held frame's facet roll and
+comes out with the wrong angle. Candy's real camera is
+`setPosition(0, 150, endZ - 800)` with a small Euler tilt and **no level roll**.
+
+**The `z` has a base** (`STAGE_CAMSHOT` runs are `[frame, x, y, z, rot, zb]`),
+and only the level-relative one resolves:
+
+| zb | what `z` is | the port |
+|---|---|---|
+| 1 | `endZ + z` — the level's own end, where a cutscene fires | `D = front*tw - z*STAGE_PX` (the level's length cancels) |
+| 0 | a bare literal, in the SCENE's section chain | `front*tw - z*STAGE_PX` **only if it lands in 15..3000 px**, else the port's own shot |
+| 2 | `startZ + z` | `D = z*STAGE_PX - front*tw` |
+
+(`STAGE_PX = 1.0` in run3.c: the engine's unit IS the original's world pixel,
+so the authored number is used verbatim. Earlier revisions of this table wrote
+`z/100`.)
+
+**Only the level-relative form (`zb` 1 and 2) resolves exactly.** For those the
+cast's rows (`placeAt`) and the camera's `z` are the same coordinate — the
+level's own row chain — so the difference IS the shot, and the port uses it as
+it is.
+
+The bare literal is different: its origin is the scene's OWN section chain while
+the cast's rows are level-local, so as a distance it lands anywhere from -12948
+to +6375 px across the baked scenes. Believing it unconditionally staged most
+scenes with the cast BEHIND the camera, drawing an empty frame (`OfCourse`
+resolves to -9739 px that way). 215 of the 219 authored segments are this form
+and only 68 of them land in band, so the port keeps its own shot
+(`stage_own_dist`, `CAM_BACK_STAGE` apothems) for the rest. This decides the
+DISTANCE only — the authored pan, quaternion and gauge are unaffected.
+
+The scenes the original gives NO camera at all (`STAGE_TIMELINE[name].ca ===
+false`) keep the port's own staged camera (`run3_stage_cam`, `CAM_BACK_STAGE`
+apothems), the same model the out-of-band bare literals above fall back to.
+`ca` lives on the TIMELINE, not on its segments — reading it off a segment is
+the bug that made every authored scene take this path (notes.txt §7b).
+
+**Cast size is the original's own spritesheet size.** `StageActor` builds its
+spritesheet quad at `(spriteSourceSize.x, spriteSourceSize.y, frame.w, frame.h)
+* 0.45681063122923593` world px — its own constant, in the same world pixels the
+level's own geometry is in. Nothing in a cutscene rescales the cast: its PLACE
+is authored, its size is the game's, so its screen height is simply what the
+authored camera's perspective makes of it (`FOCAL * frame.h * 0.4568 / 100 /
+D`). A close shot really does draw a big character and a distant one a small
+one, and the frame that is on screen is the animation's own cropped frame.
+
+**A shot is never backed off the wall.** A cast member is drawn around its own
+ring point, on the wall a tube radius off the axis, so a shot nearer than
+`R / tan(fov/2)` (about 1.4 apothems) projects that point past the frame's edge.
+The port uses the authored distance anyway — putting a floor there was the
+port's own invention, and a scene shot from inside the wall looks exactly like
+what the original would draw.
+
+**The staged view is the original's own transform**, `R^-1 * (p - camPos)`:
+the camera's position is subtracted **in world axes first** (its authored x/y
+pan and its z are a place in the tunnel, not a screen offset — the two only
+coincide while the rotation is identity), and only then is the offset turned
+into the view basis. Subtracting the pan afterwards put a rolled camera's pan
+in the wrong direction.
+
+**`R^-1` is one quaternion turn, never an Euler chain.** The authored
+quaternions mix a roll about the bore with a small tilt of it, and
+`bake_cutscenes.euler_quat` builds them as `Rx*Ry*Rz`, so their x/y/z Euler
+components are the angles about x/y/z *in that order*. Decomposing them and
+applying each about a different axis (the x component as the view roll's axis,
+the y about x, the z about y) turns a scene's **roll about the bore into a tilt
+across it** — the tunnel leans instead of the frame turning. The renderer
+applies the conjugate as the single rotation matrix the original's own
+`QuaternionUtils.rotateVector` uses, so every component of the authored
+orientation lands where the original puts it.
+
+**`STAGE_GAUGE` = a quarter turn about the bore, plus a half turn.** The port's cross-section frame puts side
+0's midpoint at `-PI/2` (§4.1, `m_s = -PI/2 + TAU*s/n`); the original indexes
+its sides by the angle of the point turned into the LEVEL's own frame —
+`TunnelLayout3D.getIndexNearest` takes `atan2(y, x)` (mirrored: `atan2(y, -x)`)
+and rounds it by `TAU/n` — so side `s` sits at `TAU*s/n`: the `+x` axis, a
+quarter turn the other way. Gameplay cannot see the difference (turning the
+world by a constant and the camera by the same constant is the same picture,
+which is why the roll only ever pinned the *steps*), but a staged frame is
+viewed through the *authored* camera, whose position and rotation are absolute
+in the original's frame — so the port turns its world offsets by `+PI/2` about
+the bore. It moves the cast and the props around the tube but not the tube,
+which is why the places read correctly while the shot did not. It applies to
+**authored** scenes only: a fallback scene is shot in the port's own frame (the
+level already rolled to the runner's facet), so it takes no gauge.
+
+On top of that quarter turn the frame is rolled a **half turn** about the bore —
+a genuine 180° rotation of the picture, not a mirror — so `STAGE_GAUGE` is
+`PI/2 + PI` and the camera's pan converts as the matching inverse `(x, y) ->
+(-y, x)`. The two must move together: turning the world without turning the
+camera's own place leaves the camera where the scene never put it.
+
+**The camera's pan carries the rig's own offset.** A scene's authored `x`/`y` is
+a place in the original's cross-section, and the original's camera rig sits at
+`(2, 106)` in it — ComingThrough's frame 0 sets exactly that. Subtracting the
+offset (`run3.c`'s `STAGE_PAN_X`/`STAGE_PAN_Y`) before the gauge turn puts
+ComingThrough's camera ON the bore axis, so that frame's centre pixel is the
+tunnel axis at every depth, while every other scene keeps its authored pan
+relative to the same rig. The shot distance is never clamped: a negative
+distance just means the camera is on the far side.
+
+**The cast and the props turn with the frame.** The original's billboards do
+not take their up axis from the camera: a `StageActor` sets its up to
+`(0,-1,0)` turned by the actor's own rotation and hands that to the billboard
+(`StageActor.updateBillboard`), so a rolled camera tilts the sprite on screen
+along with the level. The port draws its sprites axis-aligned in screen space
+(which is exactly right in gameplay, whose level is rolled to put the runner's
+facet at the bottom), so a staged frame carries the tilt by hand: each actor
+and prop is blitted rotated by the frame's own roll, measured at its own depth.
+An identity camera gives exactly 0, so scenes that were already right keep the
+pixel they had.
+
+**The sky and the space layers go through the same transform.** In the original
+they are ordinary children of the one scene, placed by `Scene3D.project` like
+the walls, so a cutscene's authored camera places them too. The port's
+chase-camera model (`cam_pitch`/`view_roll`/`cam_back`, gameplay only) is
+bypassed in a staged frame: `stage_view_map` is the one transform, and the tube,
+the cast, the props, the star sphere, the ghost tunnels and the wormhole all
+come through it.
+
+**The screen map is the original's own, and its y runs DOWN.** `Scene3D.project`
+applies `perspectiveFieldOfViewLH(fovY, width/height, 15, 3000)` with
+`appendScale(1,-1,1)` on top, and `StageActor.getBounds` converts NDC with
+`((ndc.x+1)/2*W, (1-ndc.y)/2*H)` — expanding those gives
+`sx = W/2 + vx*FOCAL/vz` and `sy = H/2 + vy*FOCAL/vz`. Subtracting `vy` here
+(the port's own gameplay sign) mirrored the whole shot, and a mirror reverses
+every rotation: a scene that rolled its camera about the bore came out rolling
+the other way — the tilt-along-the-tunnel-axis error. The frame's centre is
+`(W/2, H/2)` exactly; the gameplay `(CX, CY)` nudge has no counterpart in the
+original.
+
+`verify_stage.js` §6i/§6i1/§6i1b pin all of this: the axis base and authored pan
+of the fallback path, Candy's recovered push-form camera (`endZ - 800`, zb 1, a
+real quaternion), the endZ shot resolving to 800.0 px exactly, the cast's size
+coming from the original's own frame size (and scaling with the shot), a short
+authored shot used as it is, the cross-section quarter turn plus the half-turn
+rollout (side 0 half a turn off the `+x` axis with side 4 a quarter turn UP,
+both radii equal — equal radii are what tell a rollout from a mirror), and the
+roll: a
+pure authored roll must move the cast exactly like a rotation about the bore's
+own screen point (15/30/45/90°, `< 2 px`) and must leave the whole frame the
+identity frame's rigidly-turned likeness.
+
+## 11. World units — the original's own (1 unit = 1 world pixel)
+
+**The engine used to have its own unit (1 unit = 100 original world pixels), and
+that was wrong.** The original is authored in pixels everywhere: a level's
+`tileWidth` is a pixel count, the scene cameras are positioned in pixels, and a
+spritesheet frame is drawn at `frame.w * 0.45681063122923593` of those pixels.
+Carrying a rescaled unit meant every piece of authored data had to be converted
+on the way in, and two of those conversions had been mis-set:
+
+* `level_tilew()` divided `BAKED_TILEW` by 100 — i.e. it treated the stored
+  value as centi-units. The stored value is the original's own `tileWidth`
+  **verbatim** (bake_levels.py copies `ex["tilew"]` straight from the level's
+  `tileWidth-...` section parameter), so the division threw away the scale.
+* levels with no `tileWidth` in their data fell back to a hand-set per-tunnel
+  `baseTile` (1.00 = "100px"). The original's loader defaults that parameter to
+  **75** — `TunnelSection`: `parseInt(getParam(param2, "tileWidth"), 75)`. 858
+  of the 1005 baked levels carry no explicit `tileWidth`, so most of the game
+  was running 33 % bigger tiles than the original, which is why a character
+  (whose size IS fixed in pixels by the spritesheet) read too small against the
+  tunnel.
+
+**The unit is now the world pixel.** Everything length-valued was multiplied by
+100 once, so the rendered result is unchanged except where a bug was fixed:
+
+| constant | before | now |
+|---|---|---|
+| `DCAM`, `VIEW`, `NEARZ` | 5.0 / 34.0 / -4.55 | 500.0 / 3400.0 / -455.0 |
+| `GRAV`, `JUMPV` | 10.0 / 5.6 | 1000.0 / 560.0 |
+| `LAND_BOB_AMP`, the lift's `0.02`, the void drift's `1.1` | 0.030 / 0.02 / 1.1 | 3.0 / 2.0 / 110.0 |
+| `VIEWPLANE_EPS` | 0.25 | 25.0 |
+| `STAGE_PX`, `STAGE_PX_UNITS` | 0.01 | 1.0 (no conversion left) |
+| `level_tilew`, `level_xsec`, `G.tile` | `BAKED_TILEW/100` | `BAKED_TILEW` verbatim |
+| the fallback tile | `t->baseTile` | `DEFAULT_TILEW` = 75 (the loader's default) |
+| the sky sphere | `0.01 * st->x` | `st->x` (the bake is already the radius in px) |
+| `draw_ghost`'s planet offset | 22.0 | 2200.0 |
+
+`g_jump`/`G.jv` are lengths/velocities too, so their sentinel thresholds and the
+two animation terms that read them as a phase were rescaled with them
+(`G.jump = 0.1` to leave the ground, the 0.5/20.0 airborne tests, `ssin(jump *
+0.03)`, `jh = G.jump / 100`).
+
+**The character's screen size now comes from the original, in both places.**
+`draw_runner` had a port-invented "~24 px tall at 360p", i.e. 48 px at 720p,
+which is about two thirds of the character's real size. It now uses the same
+`stage_sprite_h` the cutscene cast uses — the original's own spritesheet scale
+through the frame's real projection, `FOCAL * frame.h * 0.45681063122923593 /
+depth`. On Primary that is 91.7 px at 720p (12.7 % of the screen), and the
+character-to-tile ratio is the original's `0.4568 * frame.h / tileWidth`. The
+contact shadow and the dead-runner tile are sized from the character instead of
+from `H/360`, so they stay in proportion.
+
+**Verification.** A pure unit change must not move a single screen pixel, so the
+whole `verify_*.js` battery is the regression net: all 11 suites pass. Two
+assertions in `verify_stage.js` were unit-dependent and were restated in pixels
+(the endZ shot is 800 px, the authored dolly is 80 px, a one-unit shot is 100 px,
+`PX_UNITS` is 1.0); the pan check's absolute `1e-6` tolerance became relative,
+because the port's own `ssin`/`scos` are approximations (~1.5e-7) and an
+absolute tolerance on a value that is now 100x larger was measuring the
+trig approximation rather than the camera.

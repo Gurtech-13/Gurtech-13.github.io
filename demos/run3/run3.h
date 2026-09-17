@@ -11,10 +11,39 @@
 #define H 720
 #define CX 640
 #define CY 358            /* screen y of the tunnel axis (vanishing point) — H/2 -2 */
-#define FOCAL 460.0       /* doubled for 2x res to keep FOV */
-#define DCAM 5.0          /* camera distance behind the runner plane (z=0) */
-#define VIEW 34.0
-#define NEARZ -4.55
+
+/* Field of view, straight from the original. `Main.as` sets the renderer up
+ * with
+ *
+ *   Context3DUtils.init(render, 1.2566370614359172, 15, 3000, true, true);
+ *
+ * and Context3DUtils builds
+ *
+ *   perspectiveMatrix.perspectiveFieldOfViewRH(fovY, surface.width /
+ *                                             surface.height, near, far);
+ *
+ * so the FOV is VERTICAL and fixed at 1.2566370614359172 rad = 72 degrees, and
+ * the ASPECT comes from the window - the original only ever widens the
+ * horizontal extent, it never changes the vertical one. `LevelView` re-reads
+ * `stage.stageWidth / stage.stageHeight` on Event.RESIZE for exactly that.
+ *
+ * The focal length is therefore derived, never written down: the old fixed 460
+ * was a 76.2-degree vertical FOV, which made every cutscene's cast and tunnel
+ * ~7.7% smaller than the original's. */
+#define FOVY 1.2566370614359172        /* radians, = 72 degrees */
+#define TAN_HALF_FOV 0.7265425280053609 /* tan(FOVY / 2) */
+#define FOCAL ((double)H * 0.5 / TAN_HALF_FOV) /* 495.497 at H = 720 */
+/* ---- WORLD UNITS: the original game's own, i.e. WORLD PIXELS ----
+ * The original is authored in pixels: a level's `tileWidth` is a pixel count
+ * (default 75, from the loader's `parseInt(param2, "tileWidth", 75)`), the
+ * scene cameras are positioned in pixels, and a spritesheet frame is
+ * `frame.w * 0.45681063122923593` of those pixels. The port therefore uses
+ * exactly that unit — 1 engine unit = 1 original world pixel. Nothing is
+ * rescaled on the way in: the authored z of 11298 in Obvious is 11298 units
+ * down the bore, against the original's own 15..3000 near/far. */
+#define DCAM 500.0        /* camera distance behind the runner plane (z=0) */
+#define VIEW 3400.0
+#define NEARZ -455.0
 
 #define MAXN 32
 #define MAXK 8
@@ -24,9 +53,10 @@
 #define TAU 6.283185307179586
 #define PI 3.141592653589793
 
-/* movement — doubled player speed, gravity slowed a bit (not full fix) */
-#define GRAV 10.0
-#define JUMPV 5.6
+/* movement — doubled player speed, gravity slowed a bit (not full fix).
+   These are the original's pixel units too: gravity in px/s^2, jump in px/s. */
+#define GRAV 1000.0
+#define JUMPV 560.0
 #define LATSPD 6.0         /* nerfed strafing (was 8.4) */
 #define STEER_EASE 9.5    /* keep snappy */
 #define FLIGHT 0.84
@@ -116,6 +146,7 @@ double ssin(double x);
 double scos(double x);
 double ssqrt(double x);
 double satan2(double y, double x);
+double sasin(double x);
 uint32_t h32(uint32_t x);
 
 /* renderer (render.c) */
@@ -123,6 +154,12 @@ void render_init_stars(uint32_t seed);
 void render_frame(void);
 uint32_t run3_sky(void); /* background colour of the last frame (tests) */
 int32_t run3_sky_visible(void); /* star pixels the tube did not cover (tests) */
+/* the frame's projection, for the verifier: project a world point with the
+   camera in force and read the screen position / depth back out */
+void run3_stage_project(double x, double y, double z);
+double run3_probe_x(void);
+double run3_probe_y(void);
+double run3_probe_d(void);
 int32_t run3_space_visible(void); /* pixels the outside-the-tube layers wrote */
 int32_t run3_space_survived(void); /* of those, how many the tube left showing */
 
@@ -205,8 +242,13 @@ void run3_map_set_best(int tun, int best);        /* furthest cleared count (unl
 int  run3_map_best(int tun);                      /* furthest cleared count */
 void run3_menu_click(int mx, int my); /* menu click: 0=play, 1=inf, etc */
 int  run3_menu_hover(int mx, int my); /* menu hover result */
-void run3_menu_select_char(int c);    /* select character on menu */
-int  run3_menu_char(void);            /* currently selected char */
+void run3_menu_select_char(int c);    /* select character on menu (atlas id) */
+int  run3_menu_char(void);            /* currently selected char (atlas id) */
+/* The selection screen shows the characters in the ORIGINAL game's registry
+   order, not in this port's sprite-atlas order (see CHAR_MENU_ORDER in
+   run3.c). These map between the two id spaces. */
+int  run3_char_order(int pres);       /* presentation slot -> sprite-atlas id */
+int  run3_char_pres(int atlas);       /* sprite-atlas id -> presentation slot */
 void run3_char_set_locked(int id, int locked);
 int  run3_char_is_locked(int id);
 
@@ -227,14 +269,17 @@ void run3_cutscene_backdrop(int32_t tunIdx, int32_t lvl); /* seek level head + h
 void run3_cutscene_backdrop_end(int32_t tunIdx, int32_t lvl); /* seek level tail + hold */
 void run3_cutscene_hold(void);                            /* freeze current frame */
 void run3_cutscene_resume(void);                          /* unfreeze, keep going */
-void run3_stage_cam(double side, double lift);                  /* staged camera angle */
+void run3_stage_cam(double side, double lift);         /* staged camera POSITION,
+                                                          tile-axis units -1..1 */
 /* cutscene dialogue: the ENGINE composes and draws it full-window. The host
    writes NUL-terminated UTF-8 into these buffers, then sets the typewriter /
    step state. There is no DOM dialog card on screen. */
 char *run3_cut_title_buf(void);                                 /* 96 bytes */
 char *run3_cut_text_buf(void);                                  /* 512 bytes */
-void  run3_cut_show(double y, int small, int shown, int step, int total, int on);
+void  run3_cut_show(double x, double y, int small, int shown, int step, int total, int on);
+                                                               /* x/y = bubble centre */
 int32_t run3_cut_chars(void);                                   /* chars drawn (test) */
+double run3_cam_pitch(void);                                  /* view pitch (rad) */
 double run3_stage_liftf(void);                                /* (renderer use) */
 double run3_stage_sidef(void);                                /* (renderer use) */
 double run3_rot(void);                                        /* live view roll (test seam) */
@@ -256,6 +301,22 @@ double run3_cam_x(void);                                      /* lateral pan */
 double run3_cam_y(void);                                      /* vertical (follows the jump) */
 double run3_cam_back(void);                                   /* distance behind the runner plane */
 double run3_cam_off(void);                                    /* runner's distance below the camera */
+/* the staged scene camera, the original's model: the host hands the AUTHORED
+   position (original pixels) and rotation quaternion straight through —
+   engine units ARE original pixels — and the renderer orients the whole frame
+   from the quaternion. */
+void   run3_stage_camera(double px, double py, double pz,
+                         double qx, double qy, double qz, double qw);
+double run3_stage_pos_x(void);   /* authored (x,y) turned into the port frame */
+double run3_stage_pos_y(void);   /* = (y, -x) of the authored position */
+double run3_stage_pos_z(void);   /* authored z as ABSOLUTE world depth (startZ + z), in world px */
+double run3_stage_row_z(double zrow); /* a staged row as a camera-relative depth */
+void   run3_stage_shot(double zpx, double zb, double frontRow); /* authored camera z + base */
+double run3_stage_dist(void); /* the staged frame's shot distance (engine units) */
+double run3_cast_ref(void); /* distance at which a cast sprite is cast_base_h() px */
+double run3_tunnel_tile(int tun); /* a tunnel's own levels' tile width, in world px */
+const double *run3_stage_quat(void); /* [x, y, z, w], normalised */
+int    run3_stage_has_camera(void);  /* the scene set its own camera */
 /* where the runner lands on screen through the real projection (render.c) */
 void   run3_runner_screen(double *sx, double *sy);
 #define NSTAGE_ACT 8
@@ -304,6 +365,7 @@ typedef struct {
 int run3_row_cross(int rowAbs, rowcross_t *out);          /* one row's shape */
 int run3_missmask(int side, int rowAbs);                  /* holes + fallen */
 int run3_tile_tex(int side, int rowAbs, int lane);         /* 0 / TEX_CRUMBLING */
+int run3_tile_glow(int side, int rowAbs, int lane);        /* 1 = self-lit surface */
 double run3_shake(int side, int rowAbs, int lane);        /* shake secs left */
 int32_t run3_dislodged(void);                             /* crumbled tile count */
 int32_t run3_is_inf(void);                                /* endless mode flag */
