@@ -5,9 +5,9 @@ package §%!Q§
    import §!!X§.§`Q§;
    import §!D§.§0!M§;
    import §!D§.§1!&§;
-   import §!]§.§4N§;
-   import §!]§.§9u§;
-   import §!]§.Path;
+   import map.Map;
+   import map.§9u§;
+   import map.Path;
    import §%!Z§.§&!S§;
    import §%!Z§.§'§;
    import §%!Z§.§^U§;
@@ -2259,7 +2259,7 @@ package §%!Q§
                   break;
                }
                addr0996:
-               §[!<§.§@!A§().§4X§(§4N§.§@!A§());
+               §[!<§.§@!A§().§4X§(Map.§@!A§());
                break loop9;
             }
             §§goto(addr011a);
@@ -3512,7 +3512,7 @@ package §%!Q§
                {
                   break;
                }
-               §#!@§ = §4N§.§@!A§().§;O§(pathName);
+               §#!@§ = Map.§@!A§().§;O§(pathName);
                if(_loc3_)
                {
                   break;
@@ -3548,7 +3548,7 @@ package §%!Q§
                      break loop0;
                   }
                }
-               §#!@§ = §4N§.§@!A§().§;O§(pathName);
+               §#!@§ = Map.§@!A§().§;O§(pathName);
                if(!_loc3_)
                {
                   if(§#!@§ == null)

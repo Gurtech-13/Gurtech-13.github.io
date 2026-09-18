@@ -7,7 +7,10 @@
  */
 #include "render_int.h"
 
-uint32_t fb[W * H];
+/* Sized for the LARGEST viewport, not the current one: the view width changes
+   with the window (run3_resize), and only the first W*H entries are used, rows
+   at stride W, so the host reads a contiguous W*H region from the start. */
+uint32_t fb[MAXW * MAXH];
 uint32_t g_sky = 0; /* background colour of the last rendered frame */
 
 uint32_t *run3_buffer(void) { return fb; }
@@ -46,6 +49,51 @@ void fill_quad(double x0, double y0, double x1, double y1,
       int x0i = (int)lo + 1, x1i = (int)hi;
       if (x0i < 0) x0i = 0; if (x1i >= W) x1i = W - 1;
       if (x0i <= x1i) for (int x = x0i; x <= x1i; x++) fb[(uint32_t)y * W + (uint32_t)x] = c;
+    }
+  }
+}
+
+/* simple polygon, even-odd scanline filled. Unlike fill_quad this takes any
+   number of edges and may be concave, which is what the speech engine's
+   sampled bezier outlines are (a bubble's rim, a tapered band, a tail). */
+void fill_poly(const double *xs, const double *ys, int n, uint32_t c) {
+  if (n < 3) return;
+  double ymin = ys[0], ymax = ys[0];
+  for (int i = 1; i < n; i++) {
+    if (ys[i] < ymin) ymin = ys[i];
+    if (ys[i] > ymax) ymax = ys[i];
+  }
+  int y0 = (int)ymin, y1 = (int)ymax + 1;
+  if (y0 < 0) y0 = 0;
+  if (y1 > H - 1) y1 = H - 1;
+  if (y0 > y1) return;
+  for (int y = y0; y <= y1; y++) {
+    double yc = (double)y + 0.5;
+    /* even-odd: fill between successive crossings, so a concave outline does
+       not smear across its own notches */
+    double cross[64];
+    int nc = 0;
+    for (int e = 0; e < n && nc < 64; e++) {
+      double ya = ys[e], yb = ys[(e + 1) % n];
+      if ((ya <= yc && yb > yc) || (yb <= yc && ya > yc)) {
+        double xa = xs[e], xb = xs[(e + 1) % n];
+        cross[nc++] = xa + (yc - ya) * (xb - xa) / (yb - ya);
+      }
+    }
+    if (nc < 2) continue;
+    for (int a = 1; a < nc; a++) {
+      double v = cross[a];
+      int b = a - 1;
+      while (b >= 0 && cross[b] > v) { cross[b + 1] = cross[b]; b--; }
+      cross[b + 1] = v;
+    }
+    for (int a = 0; a + 1 < nc; a += 2) {
+      int s0 = (int)cross[a] + 1, s1 = (int)cross[a + 1];
+      if (s0 < 0) s0 = 0;
+      if (s1 >= W) s1 = W - 1;
+      if (s0 > s1) continue;
+      uint32_t *row = fb + (uint32_t)y * W;
+      for (int x = s0; x <= s1; x++) row[x] = c;
     }
   }
 }

@@ -1,7 +1,7 @@
 package §"!L§
 {
    import § 0§.§-!N§;
-   import §!]§.§4N§;
+   import map.Map;
    import §%!Q§.§ !>§;
    import §%!Q§.§ !N§;
    import §%!Q§.§>K§;
@@ -250,7 +250,7 @@ package §"!L§
                                  }
                                  §§goto(addr020a);
                               }
-                              §@C§.§4g§(§4N§.§%`§());
+                              §@C§.§4g§(Map.§%`§());
                               return;
                            }
                            addr020a:

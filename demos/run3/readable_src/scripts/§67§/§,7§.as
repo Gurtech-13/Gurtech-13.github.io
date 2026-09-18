@@ -2,7 +2,7 @@ package §67§
 {
    import §!!$§.§ 6§;
    import §!!$§.§?y§;
-   import §!]§.§4N§;
+   import map.Map;
    import §"!L§.§%z§;
    import §%!Q§.§&r§;
    import §%!Z§.§&!S§;

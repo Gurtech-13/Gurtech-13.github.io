@@ -1,7 +1,7 @@
 package §%G§
 {
    import §!!$§.§ 6§;
-   import §!]§.§4N§;
+   import map.Map;
    import §%!Q§.§ !>§;
    import §%!Q§.§ !N§;
    import §%!Q§.§+#§;

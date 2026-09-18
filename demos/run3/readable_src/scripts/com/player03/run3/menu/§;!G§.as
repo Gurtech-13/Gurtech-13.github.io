@@ -2,14 +2,14 @@ package com.player03.run3.menu
 {
    import §!!$§.§ 6§;
    import §!!$§.§?y§;
-   import §!]§.§&! §;
-   import §!]§.§&x§;
-   import §!]§.§+U§;
-   import §!]§.§4N§;
-   import §!]§.§6!X§;
-   import §!]§.§7f§;
-   import §!]§.§@2§;
-   import §!]§.Path;
+   import map.§&! §;
+   import map.§&x§;
+   import map.§+U§;
+   import map.Map;
+   import map.§6!X§;
+   import map.§7f§;
+   import map.§@2§;
+   import map.Path;
    import §"!L§.§%z§;
    import §"!L§.§@C§;
    import §"!M§.§!!P§;
@@ -584,7 +584,7 @@ package com.player03.run3.menu
          _loc5_ = new §?y§(§]O§);
          §&d§.§1$§().add(_loc2_,§^`§.§ !P§(§2u§.TOP),_loc5_);
          addChild(§'!J§);
-         _e = §4N§.§%`§();
+         _e = Map.§%`§();
          §-!"§ = new §+"§(function(param1:* = undefined):void
          {
             §@C§.§4g§(_e,param1);

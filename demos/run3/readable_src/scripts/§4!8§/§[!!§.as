@@ -3,7 +3,7 @@ package §4!8§
    import § 0§.§>!0§;
    import §!!$§.§ 6§;
    import §!D§.§0!M§;
-   import §!]§.§4N§;
+   import map.Map;
    import §"!L§.§%z§;
    import §%!Q§.§ !>§;
    import §%!Q§.§ !N§;
@@ -1100,7 +1100,7 @@ package §4!8§
                                                 §§pop().levelCount = §§pop();
                                                 continue;
                                              }
-                                             §4N§.§@!A§().§9G§ = true;
+                                             Map.§@!A§().§9G§ = true;
                                              if(_loc9_)
                                              {
                                                 break loop14;
@@ -1187,7 +1187,7 @@ package §4!8§
                         break;
                      }
                   }
-                  §4N§.§@!A§().§4O§(_loc4_,Reflect.field(param1.mapPaths,_loc4_));
+                  Map.§@!A§().§4O§(_loc4_,Reflect.field(param1.mapPaths,_loc4_));
                   break;
                }
                §§goto(addr0298);
@@ -1539,7 +1539,7 @@ package §4!8§
             }
             if(!_loc6_)
             {
-               §4N§.§@!A§().§9G§ = true;
+               Map.§@!A§().§9G§ = true;
             }
          }
       }

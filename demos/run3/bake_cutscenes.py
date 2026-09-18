@@ -360,52 +360,390 @@ def euler_quat(x, y, z):
             round(c1 * c2 * c3 - s1 * s2 * s3, 5)]
 
 
+# ---------------------------------------------------------------------------
+# THE DIALOGUE ENGINE'S OWN ARGUMENTS
+#
+# The cutscene speech engine is one class (`Speech`), reachable from every
+# scene as `dialog`, and it carries three kinds of element:
+#
+#   dialog.<bubble>(text, x, y, size, width, connection, tail, ...)
+#   dialog.<label>(text, x, y, size, width, colour)
+#
+# and the decompiler writes the calls two ways: directly, and through the
+# compiled push/pop stack machine (`push(dialog); push(text); ...;
+# pop().<m>(pop(), ...)`).  Measured against the original's own build:
+#
+#   * x/y, width and the absolute size form are in the 2014 build's design
+#     space (ScaledAssets built with 3000x2000, origin at the stage centre),
+#     which is the space render.c lays out in. The v1.13 build halves that
+#     space to 1200x800 and its bubble call sites carry the /2.5; its label
+#     method divides internally instead, so a label's call site is already in
+#     the 2014 space. See _CUT_DESIGN_RATIO.
+#   * size is a MULTIPLIER of the engine's default when negative
+#     (`scale(0.65)` in the SWC, `-0.65` here => 0.65 x the default) and an
+#     absolute size when positive (the 2014 space again).  The 2014 build's
+#     cutscene base sets the default to 100, its v1.13 counterpart to 40.
+#   * width is the text field's wrap width in the same design units.
+#   * connection is the index of ANOTHER bubble in the same frame to draw a
+#     band to, counted from the end when negative (`-1` = the previous one).
+#   * tail is a transform: the engine asks it for the speaker's projected
+#     screen rectangle and draws a tapered tail from the bubble to it.
+#
+# So the bake keeps the arguments in the engine's own terms: `s` is the size
+# as a fraction of the default, `w` the wrap width in design px, `c` the
+# connection index, `t` the speaker's character id, `k` the element kind
+# (1 bubble, 2 label).  x/y are passed through untouched.
+_OB = chr(0xA7)
+# The scene base class' dialog default. runIII's base (cutscene/§--_-__-__--§)
+# sets `dialog.<field> = 100`; the v1.13 build's base (scenes/§+Z§) sets 40 =
+# 100 / 2.5, so `s` (a fraction of the default) is the same number in both and
+# render.c's CUT_DESIGN_SIZE is the 2014's 100. See _CUT_DESIGN_RATIO below.
+_CUT_DEFAULT_SIZE = 40.0
+# The v1.13 build expresses the whole UI in the 2014 build's design space
+# divided by 2.5: ScaledAssets is built with (1200, 800) where runIII builds it
+# with (3000, 2000), the cutscene base's default dialog size is 40 where
+# runIII's is 100, and the speech band's constants are 60 / 4.8 / 0.435 where
+# runIII's are 150 / 12 / 0.435. Bubble call sites carry that /2.5 as well, so
+# the bake multiplies them back to the 2014's own numbers.
+_CUT_DESIGN_RATIO = 2.5
+_CUT_KIND_BUBBLE = 1
+_CUT_KIND_LABEL = 2
+
+
+def _balanced(d, start):
+    """Index just past the ')' matching d[start] == '(' (string aware)."""
+    i, depth, q = start + 1, 1, False
+    while i < len(d) and depth:
+        c = d[i]
+        if q:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                q = False
+        else:
+            if c == '"':
+                q = True
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+        i += 1
+    return i - 1
+
+
+def _split_args(s):
+    """Top-level comma split, ignoring commas inside strings/brackets."""
+    out, depth, cur, q = [], 0, "", False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        i += 1
+        if q:
+            cur += ch
+            if ch == "\\" and i < len(s):
+                cur += s[i]
+                i += 1
+                continue
+            if ch == '"':
+                q = False
+            continue
+        if ch == '"':
+            q = True
+            cur += ch
+            continue
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur.strip())
+            cur = ""
+            continue
+        cur += ch
+    out.append(cur.strip())
+    return out
+
+
+def _num(e):
+    """A numeric literal, or None."""
+    e = e.strip()
+    m = re.fullmatch(r"[-+]?\d+(?:\.\d+)?", e)
+    if not m:
+        return None
+    v = float(e)
+    return int(v) if v == int(v) else v
+
+
+def cut_eval(e, loc, var2char):
+    """Evaluate one speech-engine argument.
+
+    Returns (kind, value, extra) where kind is "num", "ratio", "tail",
+    "conn" or None.
+    """
+    e = (e or "").strip()
+    if not e or e in ("null", "undefined"):
+        return (None, None, None)
+    if e in loc:
+        return loc[e]
+    m = _num(e)
+    if m is not None:
+        return ("num", m, None)
+    # `<Speech>.scale(k)` -> k x the default
+    m = re.fullmatch(r"\S+\.scale\(\s*([-\d.]+)\s*\)", e)
+    if m:
+        return ("ratio", -float(m.group(1)) if float(m.group(1)) < 0
+                else float(m.group(1)), None)
+    # `<Speech>.width(k)` -> the wrap width, design px
+    m = re.fullmatch(r"\S+\.width\(\s*([-\d.]+)\s*\)", e)
+    if m:
+        return ("num", float(m.group(1)), None)
+    # the label entry point's own dialog->px conversion, folded at the call:
+    #   int(Math.round(<dialog units> / 2.5))
+    m = re.fullmatch(r"int\(Math\.round\(\s*([-\d.]+)\s*/\s*2\.5\s*\)\)", e)
+    if m:
+        return ("num", float(m.group(1)) / 2.5, None)
+    m = re.fullmatch(r"([-\d.]+)\s*/\s*2\.5", e)
+    if m:
+        return ("num", float(m.group(1)) / 2.5, None)
+    # the tail: `new <Rect>(<actorVar>.<screenRect>())`
+    m = re.fullmatch(r"new\s+[^\(]+\((\S+?)\.\S+\(\)\)", e)
+    if m:
+        v = m.group(1)
+        cid = var2char.get(v)
+        if cid is None:
+            cid = CHARIDS.get(v.lower())
+        return ("tail", v, cid)
+    # a bare `actorVar.rect()` (the readable 2014-era direct call)
+    m = re.fullmatch(r"(\S+?)\.\S+\(\)", e)
+    if m and m.group(1) not in ("Math", "Number") and "(" not in m.group(1):
+        v = m.group(1)
+        cid = var2char.get(v)
+        if cid is None:
+            cid = CHARIDS.get(v.lower())
+        if cid is not None:
+            return ("tail", v, cid)
+    # the 2014-era readable size form: `<field> * 0.65`
+    m = re.fullmatch(r"\S+\s*\*\s*([\d.]+)", e)
+    if m:
+        return ("ratio", float(m.group(1)), None)
+    return (None, None, None)
+
+
+def _locals(seg, var2char):
+    """Per-function `_locN_ = <expr>` table for the speech-engine arguments."""
+    loc = {}
+    for m in re.finditer(
+            r"(?:var\s+)?(" + re.escape(_OB) + r"[^\s:;=]*|\w+)\s*(?::[^=;]*)?="
+            r"\s*([^;\r\n]+);", seg):
+        k, v, ex = cut_eval(m.group(2), loc, var2char)
+        if k is not None:
+            loc[m.group(1)] = (k, v, ex)
+    return loc
+
+
+def extract_dialogue(d, var2char):
+    """Every dialogue call in the scene, per frame, in the engine's terms.
+
+    Both decompiler forms are handled: the direct call, and the push/pop
+    sequence the compiler emits for the same call (whose arguments may be
+    literals, per-function locals, or values pushed onto the stack).
+    """
+    headers = [(m.start(), int(m.group(1)))
+               for m in re.finditer(r"function\s+frame(\d+)", d)]
+    regions = []
+    # everything before the first frame function (the constructor, which is
+    # where a scene with no named frame methods keeps them) belongs to frame 0
+    regions.append((0, 0, headers[0][0] if headers else len(d)))
+    for i, (hpos, hnum) in enumerate(headers):
+        end = headers[i + 1][0] if i + 1 < len(headers) else len(d)
+        regions.append((hnum, hpos, end))
+
+    def region_of(pos):
+        best = regions[0]
+        for r in regions:
+            if r[1] <= pos:
+                best = r
+            else:
+                break
+        return best
+
+    # bubble / label method names, learned from the call sites themselves:
+    # a call whose first argument is a string and which passes a colour as
+    # its 6th argument is the label entry point.
+    sites = []  # (pos, frame, text, out_args, method name); the text is
+    # inline in the direct form and joined from the pushes before the call in
+    # the push/pop form
+    locs = {}
+    for (fnum, fstart, fend) in regions:
+        locs[fstart] = _locals(d[fstart:fend], var2char)
+    for (fnum, fstart, fend) in regions:
+        seg = d[fstart:fend]
+        loc = locs[fstart]
+        found = []
+        # `dialog.<method>(...)`; the method name is obfuscated and may
+        # contain spaces (`§ q§` is the label entry point)
+        for m in re.finditer(r"dialog\.([^\(]{1,12})\(", seg):
+            end = _balanced(seg, m.end() - 1)
+            args = _split_args(seg[m.end():end])
+            if not args or not args[0].startswith('"'):
+                continue
+            found.append((m.start(), m.end() - 1, args, None, False, m.group(1)))
+        for m in re.finditer(re.escape(_OB) + _OB +
+                             r"pop\(\)\.([^\(]{1,12})\(" + re.escape(_OB) + _OB +
+                             r"pop\(\),\s*", seg):
+            end = _balanced(seg, m.end() - 1)
+            args = _split_args(seg[m.end():end])
+            found.append((m.start(), m.end() - 1, args, m.start(), True, m.group(1)))
+        found.sort()
+        prev_end = 0
+        for (pos, open_pos, args, push_at, is_push, name) in found:
+            if is_push:
+                # the pushed sequence starts at the last `push(dialog)`
+                anchor = seg.rfind("push(dialog", prev_end, push_at)
+                if anchor < 0:
+                    anchor = prev_end
+                seq = seg[anchor:pos]
+                strings, values = [], []
+                for pm in re.finditer(re.escape(_OB) + _OB + r"push\(([^;]*)\)\s*;", seq):
+                    ex = pm.group(1).strip()
+                    # `push(dialog)` names the receiver, it is not an argument
+                    if ex == "dialog":
+                        continue
+                    if ex.startswith('"'):
+                        strings.append(unesc(ex[1:-1]))
+                        continue
+                    # `push(pop())` re-pushes the head: not a value
+                    if re.fullmatch(re.escape(_OB) + _OB + r"pop\(\)", ex):
+                        continue
+                    # `push(pop() + "...")`: another piece of the text
+                    ms = re.match(r"^" + re.escape(_OB) + _OB +
+                                  r"pop\(\)\s*\+\s*\"((?:[^\"\\]|\\.)*)\"$", ex)
+                    if ms:
+                        strings.append(unesc(ms.group(1)))
+                        continue
+                    for piece in re.findall(r'\"((?:[^\"\\]|\\.)*)\"', ex):
+                        strings.append(unesc(piece))
+                    values.append(cut_eval(ex, loc, var2char))
+                # the call's own arguments: `pop()` slots take the pushed
+                # values in order, the rest are literals/locals
+                out_args = []
+                vi = 0
+                for a in args:
+                    if re.fullmatch(re.escape(_OB) + _OB + r"pop\(\)", a.strip()):
+                        out_args.append(values[vi] if vi < len(values)
+                                        else (None, None, None))
+                        vi += 1
+                    else:
+                        out_args.append(cut_eval(a, loc, var2char))
+                text = "".join(strings)
+            else:
+                text = unesc(args[0][1:-1])
+                out_args = [cut_eval(a, loc, var2char) for a in args[1:]]
+            prev_end = open_pos
+            sites.append((fstart + pos, fnum, text, out_args, name))
+    # a call site is reported by whichever region it sits in (a constructor
+    # holding a scene's frames keeps its own locals table)
+    sites = [(pos, region_of(pos)[0], text, out_args, name)
+             for (pos, fnum, text, out_args, name) in sites]
+    sites.sort()
+
+    # WHICH ENTRY POINT IS WHICH.  The two methods are obfuscated but stable
+    # for the whole build, and they are told apart by their longest call: the
+    # bubble takes the connection and the tail (7-8 arguments after the text)
+    # and the label takes the colour instead (3-5).
+    width = {}
+    for (pos, fnum, text, out_args, name) in sites:
+        width[name] = max(width.get(name, 0), len(out_args))
+    kind_of = {n: (_CUT_KIND_BUBBLE if w >= 7 else _CUT_KIND_LABEL)
+               for n, w in width.items()}
+
+    msgs = []
+    for (pos, fnum, text, args, name) in sites:
+        if not text.strip():
+            continue
+        vals = list(args) + [(None, None, None)] * 7
+        def take(i):
+            return vals[i] if i < len(vals) else (None, None, None)
+        x = take(0)[1]
+        y = take(1)[1]
+        sk, sv, _ = take(2)
+        wk, wv, _ = take(3)
+        # the 5th argument is the connection on a bubble and the text colour
+        # on a label: reading the colour as a connection index is what put
+        # `410`/`900` bands across the frame.
+        kind = kind_of.get(name, _CUT_KIND_BUBBLE)
+        ck, cv, _ = take(4) if kind == _CUT_KIND_BUBBLE else (None, None, None)
+        tk, tv, tcid = take(5)
+        m = {"frame": fnum, "pos": pos,
+             "text": " ".join(text.split()),
+             "x": x, "y": y, "kind": kind}
+        def isnum(v):
+            return isinstance(v, (int, float))
+        ratio = 1.0
+        if sk == "ratio" and isnum(sv) and sv > 0:
+            ratio = sv
+        elif sk == "num" and isnum(sv):
+            # a negative literal at the size position is the engine's
+            # "multiplier of the default" form (`-1` = the default,
+            # `-0.65` = 65% of it); a positive one is an absolute pixel size.
+            ratio = (-sv if sv < 0 else sv / _CUT_DEFAULT_SIZE)
+        if abs(ratio - 1.0) > 0.001:
+            m["s"] = round(ratio, 4)
+        if wk == "num" and isnum(wv) and wv > 0:
+            m["w"] = int(round(wv))
+        if ck == "num" and isnum(cv):
+            m["c"] = int(cv)
+        if tk == "tail" and tcid is not None:
+            m["t"] = int(tcid)
+        # a real line always carries the place it is spoken from; anything
+        # else is another method that happens to be called on `dialog`
+        if (not isinstance(x, (int, float))) or (not isinstance(y, (int, float))):
+            continue
+        msgs.append(m)
+    msgs.sort(key=lambda m: (m["frame"], m["pos"]))
+    return msgs, headers
+
+
 def extract(z, cname):
     cands = [n for n in z.namelist() if n.endswith("/" + cname + ".as")]
     if not cands:
         return None
     cands.sort(key=lambda x: (x.startswith("scripts"), len(x)))
     d = z.read(cands[0]).decode("utf-8", errors="replace")
-    hits = []  # (pos, text, [x, y])
-    for m in re.finditer(r'dialog\.[^\(]{1,12}\(\s*"((?:[^"\\]|\\.)*)"\s*,([^;]{0,120})', d):
-        nums = re.findall(r"(?<![\w.])(-?\d+)(?![\w.])", m.group(2)[:60])
-        hits.append((m.start(), unesc(m.group(1)), nums[:2]))
-    for m in re.finditer(r'push\(dialog\)\s*;\s*(?:(?!push\(dialog\)).){0,600}?'
-                          r'push\("((?:[^"\\]|\\.)*)"\)', d, re.DOTALL):
-        fwd = d[m.end():m.end() + 400]
-        nums = re.findall(r"push\(\s*(-?\d+)\s*\)", fwd[:200])
-        hits.append((m.start(), unesc(m.group(1)), nums[:2]))
-    hits.sort()
-    ded = []
-    for pos, txt, nums in hits:
-        if ded and abs(pos - ded[-1][0]) < 50:
-            continue
-        ded.append((pos, txt, nums))
-    headers = [(m.start(), int(m.group(1)))
-               for m in re.finditer(r"function\s+frame(\d+)", d)]
+    stage = extract_staging(z, cname) or {}
+    var2char = dict(stage.get("vars") or {})
+    # the readable 2014-era actors keep their own names (gentleman, child, ...)
+    # and are what the tails are asked for, so seed them first
+    for v, cid in CHARIDS.items():
+        var2char.setdefault(v, cid)
+    msgs0, headers = extract_dialogue(d, var2char)
     msgs = []
-    for pos, txt, nums in ded:
-        frame = 0
-        fstart = 0
-        for hpos, hnum in headers:
-            if hpos <= pos:
-                frame, fstart = hnum, hpos
-            else:
-                break
-        back = d[fstart:pos]
-        sc = None
-        msc = list(re.finditer(r"scale\(\s*([0-9.]+)\s*\)", back[-500:]))
-        if msc:
-            try:
-                sc = float(msc[-1].group(1))
-            except ValueError:
-                sc = None
-        x = int(nums[0]) if len(nums) > 0 else None
-        y = int(nums[1]) if len(nums) > 1 else None
-        msgs.append({"frame": frame, "pos": pos,
-                     "scale": sc, "text": " ".join(txt.split()),
-                     "x": x, "y": y})
-    msgs.sort(key=lambda m: (m["frame"], m["pos"]))
+    for m in msgs0:
+        # Bubbles and labels reach this decompiler at DIFFERENT scales, and the
+        # difference is in the v1.13 build itself:
+        #   label  the method divides its own arguments (`x / 2.5` in
+        #          §'§.§ q§), so its call sites are still written in the 2014
+        #          build's 3000x2000 design space — read them as they are.
+        #   bubble the call sites carry the /2.5 themselves (runIII's Teapot
+        #          says (-900,-900) where v1.13 says (-360,-360)), so they are
+        #          in the 1200x800 space and have to be brought back up.
+        # Every number this bake emits is therefore in the 2014 space, which is
+        # the space render.c lays out in.
+        x, y = m["x"], m["y"]
+        w = m.get("w")
+        if m["kind"] == _CUT_KIND_BUBBLE:
+            if isinstance(x, (int, float)):
+                x = x * _CUT_DESIGN_RATIO
+            if isinstance(y, (int, float)):
+                y = y * _CUT_DESIGN_RATIO
+            if isinstance(w, (int, float)):
+                w = w * _CUT_DESIGN_RATIO
+        msgs.append({"text": m["text"], "x": x, "y": y,
+                     "frame": m["frame"], "pos": m["pos"],
+                     "kind": m["kind"],
+                     "s": m.get("s", 1.0),
+                     "w": w, "c": m.get("c"), "t": m.get("t")})
     # stage cameras: tunnel-camera Point3D setups per frame function.
     # Each frame sets BOTH the camera's position and its rotation:
     #   Point3D = tunnel.<cam>.<position>; _loc1_.x/.y/.z = <x>, <y>, <z>;
@@ -549,9 +887,20 @@ def extract(z, cname):
             m["y"] = ly
         else:
             ly = m["y"]
-        out.append({"m": m["text"],
-                    "small": bool(m["scale"] is not None and m["scale"] < 0.999),
-                    "x": m["x"], "y": m["y"], "f": m["frame"]})
+        line = {"m": m["text"], "x": m["x"], "y": m["y"], "f": m["frame"]}
+        if m.get("kind") == _CUT_KIND_LABEL:
+            line["k"] = _CUT_KIND_LABEL
+        if abs(m.get("s", 1.0) - 1.0) > 0.001:
+            line["s"] = m["s"]
+            # kept for older readers: this line is drawn smaller than the rest
+            line["small"] = m["s"] < 0.999
+        if m.get("w") is not None:
+            line["w"] = m["w"]
+        if m.get("c") is not None:
+            line["c"] = m["c"]
+        if m.get("t") is not None:
+            line["t"] = m["t"]
+        out.append(line)
     return {"file": cands[0], "messages": out, "cams": cams}
 
 
@@ -587,8 +936,9 @@ def main():
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("/* cutscenes.js - original Run 3 cutscene dialogue.\n")
         f.write(" * Generated by bake_cutscenes.py from the decompiled SWF. Do not edit.\n")
-        f.write(" * x/y: original on-screen bubble position (dialog units, /2.5 = px\n")
-        f.write(" * on the 800x600 stage, center origin). small: tiny overlay text.\n")
+        f.write(" * x/y: original on-screen bubble position, in the 2014 build's\n")
+        f.write(" * 3000x2000 design space, origin at the stage centre.\n")
+        f.write(" * small: tiny overlay text.\n")
         f.write(" */\n\"use strict\";\n(function (global) {\n")
         f.write("  var CUT = %s;\n\n" % json.dumps(cut, ensure_ascii=False))
         tun_cut = [path_cut.get(p, {"start": None, "end": None}) for p in TUN_PATH]

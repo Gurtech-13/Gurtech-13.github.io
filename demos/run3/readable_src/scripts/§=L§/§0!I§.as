@@ -1,8 +1,8 @@
 package §=L§
 {
    import §!!$§.§?y§;
-   import §!]§.§4N§;
-   import §!]§.Path;
+   import map.Map;
+   import map.Path;
    import §#3§.§1M§;
    import §%!Q§.§ !>§;
    import §%!Q§.§6!a§;

@@ -29,14 +29,15 @@ fi
   -Wl,--export=run3_roll_step -Wl,--export=run3_roll_is_facet -Wl,--export=run3_jump -Wl,--export=run3_scratch \
   -Wl,--export=run3_tile -Wl,--export=run3_solid -Wl,--export=run3_tile_tex -Wl,--export=run3_tile_glow -Wl,--export=run3_tile_hit \
   -Wl,--export=run3_version -Wl,--export=run3_version_len -Wl,--export=run3_stage_gauge \
-  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_sky -Wl,--export=run3_sky_visible -Wl,--export=run3_stage_project -Wl,--export=run3_probe_x -Wl,--export=run3_probe_y -Wl,--export=run3_probe_d -Wl,--export=run3_space_visible -Wl,--export=run3_space_survived -Wl,--export=run3_space_planet \
+  -Wl,--export=run3_buffer -Wl,--export=run3_width -Wl,--export=run3_height -Wl,--export=run3_resize -Wl,--export=run3_base_w -Wl,--export=run3_base_h -Wl,--export=run3_base_x0 -Wl,--export=run3_base_y0 -Wl,--export=run3_sky -Wl,--export=run3_sky_visible -Wl,--export=run3_stage_project -Wl,--export=run3_probe_x -Wl,--export=run3_probe_y -Wl,--export=run3_probe_d -Wl,--export=run3_space_visible -Wl,--export=run3_space_survived -Wl,--export=run3_space_planet \
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
   -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_backdrop_end -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
   -Wl,--export=run3_cutscene_resume -Wl,--export=run3_level_color0 -Wl,--export=run3_level_color1 -Wl,--export=run3_level_music -Wl,--export=run3_stage_cam -Wl,--export=run3_dislodged -Wl,--export=run3_is_inf \
   -Wl,--export=run3_stage_liftf -Wl,--export=run3_stage_sidef \
   -Wl,--export=run3_stage_camera -Wl,--export=run3_stage_pos_x -Wl,--export=run3_stage_pos_y -Wl,--export=run3_stage_pos_z -Wl,--export=run3_stage_row_z -Wl,--export=run3_stage_shot -Wl,--export=run3_stage_dist -Wl,--export=run3_cast_ref -Wl,--export=run3_stage_quat -Wl,--export=run3_stage_has_camera \
-  -Wl,--export=run3_cut_title_buf -Wl,--export=run3_cut_text_buf -Wl,--export=run3_cut_show -Wl,--export=run3_cut_chars \
+  -Wl,--export=run3_cut_title_buf -Wl,--export=run3_cut_text_buf -Wl,--export=run3_cut_show \
+  -Wl,--export=run3_cut_item -Wl,--export=run3_cut_frame -Wl,--export=run3_cut_chars \
   -Wl,--export=run3_stage_actor -Wl,--export=run3_stage_prop \
   -Wl,--export=run3_mid_arm -Wl,--export=run3_mid_clear -Wl,--export=run3_gate_resume \
   -Wl,--export=run3_hint_toggle -Wl,--export=run3_hint_on -Wl,--export=run3_hint_count -Wl,--export=run3_hint_row -Wl,--export=run3_hint_ring -Wl,--export=run3_hint_env \

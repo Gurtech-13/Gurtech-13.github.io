@@ -1,7 +1,7 @@
 package scenes
 {
    import §!!$§.§ 6§;
-   import §!]§.§4N§;
+   import map.Map;
    import §%!Q§.§ !>§;
    import §%!Q§.§ !N§;
    import §%!Q§.§>K§;
@@ -191,7 +191,7 @@ package scenes
                   {
                      break loop0;
                   }
-                  §[!<§.§@!A§().§4X§(§4N§.§@!A§());
+                  §[!<§.§@!A§().§4X§(Map.§@!A§());
                   if(_loc4_)
                   {
                      break loop0;

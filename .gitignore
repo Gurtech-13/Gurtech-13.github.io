@@ -12,3 +12,7 @@ Run3.swf_Decompiler.com.zip
 # Python bytecode caches from the demos' bake scripts
 __pycache__/
 *.pyc
+
+# Local Run 3 SWF builds pulled for decompiling (30 MB of binaries) + the
+# FFDec export of them (scratch, regenerate with ffdec -export script)
+demos/run3/swf_orig/

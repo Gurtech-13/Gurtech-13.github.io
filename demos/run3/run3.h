@@ -6,11 +6,33 @@
 
 #include <stdint.h>
 
-/* screen / projection constants — 1280x720 (2x) covers whole page at higher res */
-#define W 1280
-#define H 720
-#define CX 640
-#define CY 358            /* screen y of the tunnel axis (vanishing point) — H/2 -2 */
+/* ==================== THE VIEWPORT AND ITS 4:3 BASE ====================
+ * The render target follows the WINDOW (run3_resize), and the composition lives
+ * in a 4:3 BASE box CENTRED on both axes that takes up HALF the frame in x and
+ * y (a quarter of its area): it is the largest 4:3 rectangle that fits in
+ * half-width by half-height, so the main viewport is half the screen and every
+ * pixel outside it is PERIPHERY showing additional world. 4:3 because that is
+ * the original's own stage (800x600, which the authored dialogue coordinates
+ * are in).
+ *
+ * Never stretched: FOCAL is derived from the BASE height, so the base box
+ * always presents the same framing at the same scale, and a wider window simply
+ * reveals more tunnel to the sides instead of magnifying the 4:3 picture. On a
+ * taller-than-4:3 window the base is width-limited instead and the periphery is
+ * the extra height (more world above and below) — one rule at every aspect.
+ *
+ * Everything anchored to the frame's composition — the projection centre, the
+ * gameplay lower third the chase camera tilts the runner onto, the cutscene
+ * bubble — is measured from the BASE box, never from the raw window.
+ */
+#define MAXW 2560         /* framebuffer capacity: the widest viewport supported */
+#define MAXH 1440
+extern int W, H;          /* the viewport (framebuffer) this frame, in pixels */
+extern int BASE_W, BASE_H;/* the centred 4:3 base: half the frame on both axes */
+extern int BASE_X0, BASE_Y0; /* that box's top-left corner in the frame */
+extern int CX, CY;        /* the BASE box's centre: the projection centre and
+                             the tunnel axis' vanishing point. Centred on both
+                             axes, so this IS the frame centre too. */
 
 /* Field of view, straight from the original. `Main.as` sets the renderer up
  * with
@@ -32,7 +54,10 @@
  * ~7.7% smaller than the original's. */
 #define FOVY 1.2566370614359172        /* radians, = 72 degrees */
 #define TAN_HALF_FOV 0.7265425280053609 /* tan(FOVY / 2) */
-#define FOCAL ((double)H * 0.5 / TAN_HALF_FOV) /* 495.497 at H = 720 */
+/* Derived from the BASE box, not the window: the vertical FOV spans the base
+   height, which is what keeps the 4:3 composition identical at every aspect.
+   At a 720-tall base this is 495.497, the value the port has always used. */
+extern double FOCAL;
 /* ---- WORLD UNITS: the original game's own, i.e. WORLD PIXELS ----
  * The original is authored in pixels: a level's `tileWidth` is a pixel count
  * (default 75, from the loader's `parseInt(param2, "tileWidth", 75)`), the
@@ -271,13 +296,42 @@ void run3_cutscene_hold(void);                            /* freeze current fram
 void run3_cutscene_resume(void);                          /* unfreeze, keep going */
 void run3_stage_cam(double side, double lift);         /* staged camera POSITION,
                                                           tile-axis units -1..1 */
-/* cutscene dialogue: the ENGINE composes and draws it full-window. The host
-   writes NUL-terminated UTF-8 into these buffers, then sets the typewriter /
-   step state. There is no DOM dialog card on screen. */
+/* ==================== THE CUTSCENE SPEECH ENGINE ====================
+ * The host hands over ONE FRAME's speech elements and the engine lays the frame
+ * out and draws it — a bubble is a panel with its line in it, a label is bare
+ * centred text, a connection is a band between two bubbles and a tail is the
+ * arrow that points at whoever is speaking. Everything is in the original's own
+ * terms (its `Speech` class, reachable from a scene as `dialog`):
+ *
+ *   kind   1 bubble, 2 label
+ *   x, y   design units in the 2014 build's 3000 x 2000 space, offset from its
+ *          centre. Both kinds carry them in that one space: the v1.13 build the
+ *          bake reads instead halves the box to 1200 x 800, and copies the
+ *          /2.5 into its bubble call sites while its label method divides
+ *          internally - bake_cutscenes.py converts both back.
+ *   size   the font as a fraction of the engine's default (the 2014 build's
+ *          cutscene base sets that to 100 design units, its v1.13 counterpart
+ *          to 40), so 1.0 is a normal line, 0.65 smaller.
+ *   width  the wrap width in the same design units; <= 0 means "as wide as the
+ *          text needs" (the original auto-sizes the field and clamps it to the
+ *          stage).
+ *   conn   the index of ANOTHER element of this frame to draw a band to, or -1.
+ *   tail   the staged cast SLOT the line is spoken from, or -1. The engine asks
+ *          that slot for its projected screen place and draws the arrow to it.
+ *
+ * The host writes each element's NUL-terminated text, sets its attributes, then
+ * commits the frame; the engine draws the panels, the bands and the arrows.
+ * There is no DOM dialog card on screen.
+ */
+#define RUN3_CUT_MAX 10      /* speech elements in one frame */
+#define RUN3_CUT_TEXT 300    /* bytes per element's text */
 char *run3_cut_title_buf(void);                                 /* 96 bytes */
-char *run3_cut_text_buf(void);                                  /* 512 bytes */
+char *run3_cut_text_buf(int32_t i);                             /* element i */
+void  run3_cut_item(int32_t i, int32_t kind, double x, double y, double size,
+                    double width, int32_t conn, int32_t tail);
+void  run3_cut_frame(int32_t n, int32_t step, int32_t total, int32_t on);
+/* one bubble, for callers that were here before the frame API existed */
 void  run3_cut_show(double x, double y, int small, int shown, int step, int total, int on);
-                                                               /* x/y = bubble centre */
 int32_t run3_cut_chars(void);                                   /* chars drawn (test) */
 double run3_cam_pitch(void);                                  /* view pitch (rad) */
 double run3_stage_liftf(void);                                /* (renderer use) */

@@ -2,7 +2,7 @@ package §0!J§
 {
    import §!!$§.§ 6§;
    import §!D§.§0!M§;
-   import §!]§.§4N§;
+   import map.Map;
    import §%!Q§.§ !>§;
    import §%!Q§.§=e§;
    import §%!Q§.§>K§;

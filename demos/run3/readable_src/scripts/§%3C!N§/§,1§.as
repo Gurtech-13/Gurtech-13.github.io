@@ -2,8 +2,8 @@ package §<!N§
 {
    import §!!$§.§ 6§;
    import §!!$§.§?y§;
-   import §!]§.§4N§;
-   import §!]§.Path;
+   import map.Map;
+   import map.Path;
    import §%!Q§.§+#§;
    import §-!!§.§8!8§;
    import §6!Q§.§<!T§;
@@ -180,7 +180,7 @@ package §<!N§
          }
          §§pop().§87§ = §§pop();
          addr0162:
-         var _loc8_:§4N§ = §4N§.§@!A§();
+         var _loc8_:Map = Map.§@!A§();
          if(_loc16_)
          {
             §§push(param2.§&k§);

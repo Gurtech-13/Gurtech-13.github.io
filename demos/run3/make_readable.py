@@ -71,6 +71,7 @@ PACKAGES = {
     "\u00a76[\u00a7": "game",       # the driver that runs a level
     "\u00a7`_\u00a7": "stage",      # the cutscene StageActor and its helpers
     "\u00a73!b\u00a7": "scenes",    # one class per cutscene
+    "\u00a7!]\u00a7": "map",        # Map, the game's map system handling tunnels, levels, and paths
 }
 
 
@@ -91,16 +92,17 @@ CLASSES = {
     "\u00a7\"B\u00a7": "Quaternion",
     "\u00a74!R\u00a7": "QuaternionUtils",
     "\u00a79x\u00a7": "Physics",          # base collider (inferred)
-    "\u00a76U\u00a7": "Object3D",         # nme3D display base of LevelView (inferred)
+    "\u00a76U\u00a7": "Object3D",         # nme3H display base of LevelView (inferred)
     "\u00a76O\u00a7": "CharacterDef",     # character definition handed to StageActor (inferred)
     "\u00a71![\u00a7": "Scene3D",           # the 3D renderer: view + projection matrices, project()/unproject()
     "\u00a71!1\u00a7": "AxisAngle",         # {angle, axis x/y/z}; QuaternionUtils.toAxisAngle returns one
-    # Additional mappings from notes.txt
+    # the character model, established from the call sites in the decomp
     "\u00a76M\u00a7": "CharacterBase",    # CHARACTER BASE CLASS
     "\u00a7'O\u00a7": "CharacterRegistry", # CHARACTER REGISTRY/character list + unlock logic
     "\u00a71e\u00a7": "Spritesheet",      # Spritesheet (the atlas class; its 3rd ctor arg is the scale)
     "\u00a74Y\u00a7": "Ability4Y",        # Ability object 4Y
     "\u00a7's\u00a7": "AbilityS",         # Ability object 's
+    "\u00a74N\u00a7": "Map",            # Map, manages paths and levels (inferred)
 }
 
 
@@ -153,7 +155,7 @@ MEMBER_ROWS = [
      "Static reusable `PositionData3D` passed into `layout.getPosition(index, scratch)`."),
     ("2e", "alignWith", "`StageActor`",
      "Copies its rotation toward another actor's (`transform.getRotation()`)."),
-    # Additional member mappings from notes.txt for CharacterDef (§6O§)
+    # CharacterDef (§6O§)'s own fields, from its constructor and use sites
     ("]w", "nameOverride", "CharacterDef",
      "CharacterDef name override (e.g., \"Ice Skater\", \"Jack-o-Lantern\")",
      ("\u00a76O\u00a7",)),
@@ -303,6 +305,7 @@ FILE_MEMBERS = [
      "Same member seen through `section.tunnel` (typed `Level`)."),
 ]
 
+
 # Classes whose members MEMBERS applies to: the camera + world, the layouts the
 # tunnel is built from, the Transform, the level, the staged actor and scenes.
 SCOPE = [
@@ -317,32 +320,33 @@ SCOPE = [
 
 PKG_NOTE = {
     "\u00a7<!&\u00a7": "`World` (the 3D scene graph that owns the camera `Transform`), "
-                       "`Entity3D`, `Billboard`, `Physics3D`, `Constraint3D`",
+                        "`Entity3D`, `Billboard`, `Physics3D`, `Constraint3D`",
     "\u00a72X\u00a7": "`Layout3D`, `LineLayout3D`, `GridLayout3D`, `TunnelLayout3D`, "
-                       "`PositionData3D` - the layout the tunnel's cells are indexed by",
+                        "`PositionData3D` - the layout the tunnel's cells are indexed by",
     "\u00a71^\u00a7": "`Transform`",
     "\u00a76[\u00a7": "`Game`, the driver that runs a level (keys, cutscenes, camera easing)",
     "\u00a7`_\u00a7": "`StageActor`, the cutscene actor class",
     "\u00a73!b\u00a7": "one class per cutscene (`ComingThrough`, `Obvious`, `Candy`, ...)",
+    "\u00a7!]\u00a7": "`Map`, the game's map system handling tunnels, levels, and paths",
 }
 
 CLS_NOTE = {
     "\u00a7=2\u00a7": "3D scene graph: `camera:Transform`, `gravity3D`, a `Vector` of `Entity3D`, "
-                       "`animations`, `update()`; `Level` extends it",
+                        "`animations`, `update()`; `Level` extends it",
     "\u00a7 !W\u00a7": "`class ... extends World`; holds `title`, `power`, `endTiles`, "
-                       "`victoryCondition`, the character list - the level",
+                        "`victoryCondition`, the character list - the level",
     "\u00a7%!\u00a7": "Scene node: `transform`, `physicsData`, `model`, `level`, `update()`; "
-                       "base of `Billboard` and `StageActor`",
+                        "base of `Billboard` and `StageActor`",
     "\u00a7 !#\u00a7": "`extends Entity3D`, takes an `up` vector, and `display()` re-orients its own "
-                       "transform to face the world's `camera` every frame - a billboard",
+                        "transform to face the world's `camera` every frame - a billboard",
     "\u00a73!`\u00a7": "`extends Physics`; 3D collider with a `Point3D` offset",
     "\u00a7]p\u00a7": "Pairwise body interaction - **inferred** from its update acting on two bodies",
     "\u00a7^s\u00a7": "Cutscene actor: `spritesheet`, `section:TunnelSection`, `billboardMode`, "
-                       "`placeAt(ring, row)`",
+                        "`placeAt(ring, row)`",
     "\u00a7>x\u00a7": "`extends Layout3D`, `vertices`, `rotation`, `flipped`; its errors say "
-                       "\"Tunnels need at least three sides.\" - the tunnel ring layout",
+                        "\"Tunnels need at least three sides.\" - the tunnel ring layout",
     "\u00a7`!O\u00a7": "Imported by `boot`, `Main`, the level and the menus; drives the level "
-                       "including the cutscene camera - **inferred**",
+                        "including the cutscene camera - **inferred**",
     "\u00a7]!^\u00a7": "`extends Object3D`, holds an observer `Vector` and a `camera:Transform` - **inferred**",
     "\u00a7\"B\u00a7": "Quaternion (x/y/z/w)",
     "\u00a74!R\u00a7": "Quaternion helpers (`fromAxes`, ...)",
@@ -350,16 +354,17 @@ CLS_NOTE = {
     "\u00a76U\u00a7": "`nme3D` display base of `LevelView` - **inferred**",
     "\u00a76O\u00a7": "Character definition passed to `StageActor` - **inferred**",
     "\u00a71![\u00a7": "`nme3D`'s renderer: the view + projection matrices, `project()` / `unproject()`, "
-                       "the `Object3D` children and the shaders; `Context3DUtils` holds the live one. "
-                       "`World.display` builds its view matrix - **inferred**",
+                        "the `Object3D` children and the shaders; `Context3DUtils` holds the live one. "
+                        "`World.display` builds its view matrix - **inferred**",
     "\u00a71!1\u00a7": "An axis and an angle (`.angle`, and the axis in x/y/z). `QuaternionUtils.toAxisAngle` "
-                       "returns one and `Transform.getMatrix3D`'s `appendRotation(angle, axis)` consumes it",
+                        "returns one and `Transform.getMatrix3D`'s `appendRotation(angle, axis)` consumes it",
     # Additional class notes
     "\u00a76M\u00a7": "CHARACTER BASE CLASS (com/player03/run3/character/§6M§.as)",
     "\u00a7'O\u00a7": "CHARACTER REGISTRY/character list + unlock logic (com/player03/run3/character/§'O§.as)",
     "\u00a71e\u00a7": "Spritesheet (the atlas class; its 3rd ctor arg is the scale)",
     "\u00a74Y\u00a7": "Ability object 4Y (§4Y§.as)",
     "\u00a7's\u00a7": "Ability object 's (§'s§.as)",
+    "\u00a74N\u00a7": "`Map`, manages paths and levels (inferred)",
 }
 
 
@@ -392,7 +397,7 @@ def in_scope(rel):
     """True when the file lives in (or under) one of the SCOPE directories."""
     p = "/" + rel.replace(os.sep, "/")
     return any(p.startswith("/scripts/" + s + "/") or p.startswith("/" + s + "/")
-                for s in SCOPE)
+               for s in SCOPE)
 
 
 def read_source(p):
@@ -553,7 +558,7 @@ def write_docs():
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true",
-                     help="do not regenerate; just report what is on disk")
+                      help="do not regenerate; just report what is on disk")
     a = ap.parse_args()
     if a.check and os.path.isdir(DST):
         left = 0

@@ -1,9 +1,9 @@
 package §"!M§
 {
    import §!!$§.§ 6§;
-   import §!]§.§4N§;
-   import §!]§.§9u§;
-   import §!]§.Path;
+   import map.Map;
+   import map.§9u§;
+   import map.Path;
    import §%!Q§.§>K§;
    import §%!Z§.§&!S§;
    import §%G§.§ m§;

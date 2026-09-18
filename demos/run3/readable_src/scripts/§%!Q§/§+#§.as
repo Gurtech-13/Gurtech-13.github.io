@@ -2,7 +2,7 @@ package §%!Q§
 {
    import § @§.§<!+§;
    import §!!$§.§ 6§;
-   import §!]§.§4N§;
+   import map.Map;
    import §%!Z§.§&!S§;
    import §-!!§.§2!B§;
    import §-d§.§!!-§;
@@ -2520,7 +2520,7 @@ package §%!Q§
                            break;
                         }
                      }
-                     §[!<§.§@!A§().§4X§(§4N§.§@!A§());
+                     §[!<§.§@!A§().§4X§(Map.§@!A§());
                      if(_loc9_)
                      {
                         Main.instance.§,Z§(null);
@@ -2528,13 +2528,13 @@ package §%!Q§
                         {
                            break;
                         }
-                        §4N§.§@!A§().§0H§.visible = true;
+                        Map.§@!A§().§0H§.visible = true;
                         if(!_loc9_)
                         {
                            break;
                         }
                      }
-                     §4N§.§@!A§().§0H§.reset();
+                     Map.§@!A§().§0H§.reset();
                      break;
                   }
                   return;
@@ -2623,13 +2623,13 @@ package §%!Q§
                break;
             }
             addr01ab:
-            §[!<§.§@!A§().§4X§(§4N§.§@!A§());
+            §[!<§.§@!A§().§4X§(Map.§@!A§());
             if(!_loc10_)
             {
                Main.instance.§,Z§(null);
             }
-            §4N§.§@!A§().§0H§.visible = true;
-            §4N§.§@!A§().§0H§.reset();
+            Map.§@!A§().§0H§.visible = true;
+            Map.§@!A§().§0H§.reset();
             return;
          }
          §§push(§+#§.§,!B§());

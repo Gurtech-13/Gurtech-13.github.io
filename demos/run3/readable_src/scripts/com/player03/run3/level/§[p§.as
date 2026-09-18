@@ -1,7 +1,7 @@
 package com.player03.run3.level
 {
-   import §!]§.§4N§;
-   import §!]§.Path;
+   import map.Map;
+   import map.Path;
    import §%!Q§.§ !>§;
    import §%!Q§.§>K§;
    import layout3d.§"S§;
@@ -305,8 +305,8 @@ package com.player03.run3.level
                                        }
                                        §§goto(addr02ad);
                                     }
-                                    var _loc10_:Path = §4N§.§@!A§().§;O§(_loc5_.pathName);
-                                    var _loc11_:Path = §4N§.§@!A§().§;O§(_loc7_);
+                                    var _loc10_:Path = Map.§@!A§().§;O§(_loc5_.pathName);
+                                    var _loc11_:Path = Map.§@!A§().§;O§(_loc7_);
                                     if(_loc21_)
                                     {
                                        if(_loc11_ != null)

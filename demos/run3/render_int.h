@@ -17,7 +17,7 @@
 #include "run3.h"
 
 /* ---------------- gfx.c: the framebuffer ---------------- */
-extern uint32_t fb[W * H];
+extern uint32_t fb[MAXW * MAXH];
 extern uint32_t g_sky; /* colour the last frame's background was cleared to */
 uint32_t *run3_buffer(void);
 uint32_t run3_sky(void);
@@ -33,6 +33,10 @@ void blit_sprite_mirrored(int dx, int dy, int dw, int dh,
 void blit_sprite_rot(double fx, double fy, int dw, int dh, double ang,
                      const uint32_t *pix, int sw, int sh, double alpha,
                      int mirror, int centre);
+/* any simple (possibly concave) polygon, even-odd scanline filled: the
+   speech engine's bubbles, bands and tails are smooth closed curves, which
+   are sampled into a polygon first. */
+void fill_poly(const double *xs, const double *ys, int n, uint32_t c);
 void fill_circle(int cx, int cy, int r, uint32_t c);
 void stroke_circle(int cx, int cy, int r, uint32_t c);
 void stroke_rect(int x, int y, int w, int h, uint32_t c);

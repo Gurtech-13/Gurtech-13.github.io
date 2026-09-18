@@ -3,7 +3,7 @@ package §2!S§
    import §!!$§.§ 6§;
    import §!!$§.§?y§;
    import §!!X§.§!_§;
-   import §!]§.§4N§;
+   import map.Map;
    import §%!Q§.§ !>§;
    import §%!Z§.§&!S§;
    import §-!!§.§&!;§;
@@ -151,7 +151,7 @@ package §2!S§
          §§push(false);
          var _loc2_:Boolean = true;
          var _loc3_:* = §§pop();
-         §[!<§.§@!A§().§4X§(§4N§.§@!A§());
+         §[!<§.§@!A§().§4X§(Map.§@!A§());
          if(_loc2_)
          {
             Main.instance.§,Z§(null);

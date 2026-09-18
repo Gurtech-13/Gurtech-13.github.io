@@ -1463,7 +1463,7 @@ double run3_rows_per(void) { return G.rowsPer; }
    loaded (run3_version/run3_version_len) and paints the label from that, and
    the engine is fetched with cache revalidation so the bytes are never the
    old ones. Bump this ONE line per build. */
-#define RUN3_VERSION "0.9.6"
+#define RUN3_VERSION "0.9.11"
 const char *run3_version(void) { return RUN3_VERSION; }
 int32_t run3_version_len(void) { return (int32_t)(sizeof(RUN3_VERSION) - 1); }
 int32_t run3_sides(void) { return G.shape; }
@@ -2056,9 +2056,11 @@ void run3_map_scroll_xy(int dx, int dy) { run3_map_scroll2(dx, dy); }
 void run3_map_scroll(int dx) { run3_map_scroll2(dx, 0); }
 void run3_map_scroll_delta(int dx) { run3_map_scroll2(dx, 0); }
 /* centre the view on a tunnel (used when a level finishes and the map opens).
-   The framebuffer is 1280x720 in render.c; the map is drawn there. */
-#define MAP_VIEW_CX 640
-#define MAP_VIEW_CY 360
+   The map is drawn into the same framebuffer the world is, so its centre is the
+   viewport's centre (CX, CY) — the 4:3 base box's centre — rather than a
+   hard-coded 640x360 that only matches a 1280-wide frame. */
+#define MAP_VIEW_CX CX
+#define MAP_VIEW_CY CY
 void run3_map_center_on(int tun) {
   if (tun < 0 || tun >= MAP_TUNNEL_COUNT) return;
   map_scroll_x = clamp_scroll(MAP_VIEW_CX - map_nodes[tun].x, MAP_CLAMP_X);
@@ -2241,18 +2243,26 @@ int run3_char_is_locked(int id) {
 
 /* menu click/hover: returns button id (0=play, 1=infinite, 2+=char) — bigger boxes, spread, 2 rows */
 int run3_menu_hover(int mx, int my) {
-  int cx = W / 2;
-  if (mx > cx - 160 && mx < cx + 160 && my > 340 && my < 400) return 0;
-  if (mx > cx - 160 && mx < cx + 160 && my > 420 && my < 480) return 1;
+  /* the SAME 1280x720 design space render_menu translates onto the viewport
+     centre (see there), so the drawn boxes and these hit boxes cannot drift
+     apart on a window that is not 1280x720 */
+  int cx = CX;
+  int ox = CX - 640, oy = CY - 360;
+  if (mx > cx - 160 && mx < cx + 160 && my > 340 + oy && my < 400 + oy) return 0;
+  if (mx > cx - 160 && mx < cx + 160 && my > 420 + oy && my < 480 + oy) return 1;
   // character grid: 80x80 boxes, 90px pitch, 9 per row, 2 rows
-  // row 0: y 520-600, row 1: y 620-700. i is the PRESENTATION slot, so the
-  // host indexes story.js C[] (which is in the original registry order).
+  // row 0: y 520-600, row 1: y 620-700. The CELL is the character's
+  // PRESENTATION slot (run3_char_pres) because that is where render_menu draws
+  // the box; indexing by the sprite id put the hit box on a different
+  // character wherever the two orders differ. The returned id is that slot, so
+  // run3_menu_click's run3_char_order(hover - 2) resolves it back to a sprite.
   for (int i = 0; i < menu_char_count && i < NCHAR; i++) {
-    int row = i / 9;
-    int col = i % 9;
-    int bx = 40 + col * 90;
-    int by = 520 + row * 100;
-    if (mx >= bx && mx < bx + 80 && my >= by && my < by + 80) return 2 + i;
+    int pres = run3_char_pres(i);
+    int row = pres / 9;
+    int col = pres % 9;
+    int bx = ox + 40 + col * 90;
+    int by = oy + 520 + row * 100;
+    if (mx >= bx && mx < bx + 80 && my >= by && my < by + 80) return 2 + pres;
   }
   return -1;
 }

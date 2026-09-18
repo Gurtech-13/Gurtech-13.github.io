@@ -2,7 +2,7 @@ package §%!Q§
 {
    import §!!$§.§ 6§;
    import §!!$§.§?y§;
-   import §!]§.§4N§;
+   import map.Map;
    import §"§.§5O§;
    import §,x§.§3!I§;
    import §,x§.§=B§;
@@ -1746,7 +1746,7 @@ package §%!Q§
                      }
                      else
                      {
-                        §[!<§.§@!A§().§4X§(§4N§.§@!A§());
+                        §[!<§.§@!A§().§4X§(Map.§@!A§());
                         if(!_loc13_)
                         {
                            break;

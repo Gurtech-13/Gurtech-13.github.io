@@ -1,7 +1,7 @@
 package scenes
 {
    import §!!$§.§ 6§;
-   import §!]§.§4N§;
+   import map.Map;
    import §%!Q§.§ !>§;
    import §%!Q§.§ !N§;
    import §%!Q§.§+#§;
@@ -217,9 +217,9 @@ package scenes
                   }
                   if(§§pop())
                   {
-                     §[!<§.§@!A§().§4X§(§4N§.§@!A§());
+                     §[!<§.§@!A§().§4X§(Map.§@!A§());
                      Main.instance.§,Z§(null);
-                     §4N§.§@!A§().§0H§.visible = true;
+                     Map.§@!A§().§0H§.visible = true;
                      if(!_loc5_)
                      {
                         break;
@@ -227,7 +227,7 @@ package scenes
                   }
                   break loop0;
                }
-               §4N§.§@!A§().§0H§.reset();
+               Map.§@!A§().§0H§.reset();
             }
             break;
          }

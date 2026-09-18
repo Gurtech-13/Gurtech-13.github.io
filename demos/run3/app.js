@@ -546,18 +546,52 @@
     for (var i = 0; i < n; i++) mem[i] = s.charCodeAt(i) & 0xff;
     mem[n] = 0;
   }
-  /* x/y are the line's authored bubble centre in dialog units; the engine
-     draws the bubble there (the DOM copy of it is display:none) */
-  function cutShow(title, text, x, y, small, step, total) {
+  /* ONE FRAME of speech, handed to the engine, which lays it out and draws it.
+
+     The original fills its Speech object a frame at a time (`dialog.bubble(...)`
+     calls that share an authored frame show together), so this takes the whole
+     frame: its lines are the frame's elements, in order.
+
+     x/y are the line's authored position in DESIGN UNITS (the original's
+     3000x2000 space, Main.as' own scaler), s its font as a fraction of the 40
+     unit default, w its wrap width. `c` is a connection to another line and `t`
+     the speaker; both are indices into the SCENE, so they are resolved here to
+     this frame's element index and to a staged cast slot. The DOM copy of the
+     bubble is display:none — the engine owns what is on screen. */
+  function cutFrame(title, group, step, total, scene) {
     try {
-      if (!exps || !exps.run3_cut_show) return;
+      if (!exps || !exps.run3_cut_item) return;
       cutWriteStr(exps.run3_cut_title_buf(), title || "");
-      cutWriteStr(exps.run3_cut_text_buf(), text || "");
-      exps.run3_cut_show(x, y, small, -1, step, total, 1);
+      /* a connection's index counts BUBBLES only (a label never joins the
+         speech's own list), across the whole scene */
+      var bubbles = [];
+      for (var q = 0; q < scene.length; q++) if (scene[q].k !== 2) bubbles.push(scene[q]);
+      var n = Math.min(group.length, 10);
+      for (var i = 0; i < n; i++) {
+        var L = group[i];
+        cutWriteStr(exps.run3_cut_text_buf(i), L.m || "");
+        var conn = -1;
+        if (typeof L.c === "number" && L.c >= 0) {
+          var tgt = bubbles[L.c];
+          for (var j = 0; j < n; j++) if (group[j] === tgt) { conn = j; break; }
+        }
+        var slot = -1;
+        if (typeof L.t === "number" && stage && stage.cur) {
+          for (var s = 0; s < stage.cur.length; s++)
+            if (stage.cur[s] && stage.cur[s].ch === L.t) { slot = s; break; }
+        }
+        exps.run3_cut_item(i, L.k === 2 ? 2 : 1,
+                           typeof L.x === "number" ? L.x : 0,
+                           typeof L.y === "number" ? L.y : 0,
+                           typeof L.s === "number" ? L.s : 1.0,
+                           typeof L.w === "number" ? L.w : 0,
+                           conn, slot);
+      }
+      exps.run3_cut_frame(n, step, total, 1);
     } catch (e) {}
   }
   function cutShowOff() {
-    try { if (exps && exps.run3_cut_show) exps.run3_cut_show(0, 120, 0, -1, 0, 0, 0); } catch (e) {}
+    try { if (exps && exps.run3_cut_frame) exps.run3_cut_frame(0, 0, 0, 0); } catch (e) {}
   }
   function showCutscene(name, cb) {
     var lines = cutLines(name);
@@ -598,15 +632,21 @@
         if (cb) cb();
         return;
       }
-      var L = lines[i++];
-      txt.textContent = L.m;
+      /* THE FRAME, not the line: a bubble's connection and tail only ever
+         point at an element of its own authored frame, so a frame is what is
+         shown and what a click advances past. */
+      var L = lines[i];
+      var group = [L];
+      if (typeof L.f === "number") {
+        for (var g = i + 1; g < lines.length && lines[g].f === L.f; g++) group.push(lines[g]);
+      }
+      i += group.length;
+      txt.textContent = group.map(function (x) { return x.m; }).join("\n");
       bub.className = "cutbubble" + (L.small ? " small" : "");
       prog.textContent = (i < lines.length) ? (i + "/" + lines.length) : cutTitle(name);
       place(L);
       /* the engine draws the visible scene; the DOM above is inert */
-      cutShow(cutTitle(name), L.m, typeof L.x === "number" ? L.x : 0,
-              typeof L.y === "number" ? L.y : 120,
-              L.small ? 1 : 0, i, lines.length);
+      cutFrame(cutTitle(name), group, i, lines.length, lines);
       /* the cast walks to this line's keyframe (custom scenes key on the
          line index, baked ones on the authored dialogue frame) */
       if (stage) {
@@ -692,6 +732,27 @@
         musicAudio.volume = save.musicVol * pw;
       }
     } catch(e) {}
+  }
+  /* the render target follows the WINDOW's SHAPE. The backing store keeps the
+     engine's composition height (720) and takes its width from the window's
+     aspect, so the pixel scale is UNIFORM on both axes — a 4:3 composition is
+     never stretched to fill a widescreen; the surplus width is extra world
+     (and on a tall window, surplus height). The engine derives its centred 4:3
+     base box from whatever it is handed (run3_resize), so the composition is
+     centred x and y and the dialogue bubble stays inside it. */
+  function fitViewport() {
+    if (!exps || !cv) return;
+    var r = cv.getBoundingClientRect();
+    var cw = r.width || window.innerWidth || 1280;
+    var ch = r.height || window.innerHeight || 720;
+    if (!(cw >= 16 && ch >= 16)) return;
+    var h = 720, w = Math.round(h * cw / ch);
+    /* clamp to the engine's capacity WITHOUT changing the aspect */
+    if (w > 2560) { h = Math.round(h * 2560 / w); w = 2560; }
+    if (w < 320) { h = Math.max(240, Math.round(h * 320 / w)); w = 320; }
+    if (w !== cv.width || h !== cv.height) { cv.width = w; cv.height = h; }
+    W = w; H = h;
+    try { if (exps.run3_resize) exps.run3_resize(W, H); } catch (eFV) {}
   }
   function blit() {
     if(!words || !view) return;
@@ -1269,8 +1330,10 @@
         window.GAME_VERSION=vs;
         if (verEl) verEl.textContent="v"+vs;
       } catch (eVer) {}
-      // update W/H from WASM (framebuffer now 1280x720, covers whole page)
-      try { W=exps.run3_width(); H=exps.run3_height(); cv.width=W; cv.height=H; } catch(e) { W=1280; H=720; }
+      /* size the engine's viewport to the window before anything is drawn
+         (it falls back to the engine's own 1280x720 if it cannot measure) */
+      try { fitViewport(); } catch(eFV) {}
+      try { if (!exps.run3_resize) { W=exps.run3_width(); H=exps.run3_height(); cv.width=W; cv.height=H; } } catch(e) { W=1280; H=720; }
       ctx=cv.getContext("2d");
       imageData=ctx.createImageData(W,H);
       view=new Uint32Array(imageData.data.buffer);
@@ -1298,4 +1361,8 @@
     .catch(function(e){document.getElementById("status").textContent="Error: "+(e&&e.message?e.message:String(e));});
 
   window.addEventListener("error",function(e){try{document.getElementById("status").textContent="Error: "+(e.message||e);}catch(x){}});
+  /* re-fit on every window change: the 4:3 base is re-derived by the engine,
+     so the composition stays centred and unscaled at any shape */
+  window.addEventListener("resize",function(){try{fitViewport();}catch(e){}});
+  window.addEventListener("orientationchange",function(){try{fitViewport();}catch(e){}});
 })();

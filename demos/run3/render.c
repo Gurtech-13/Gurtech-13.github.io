@@ -25,6 +25,55 @@
    multi-megabyte generated header, so it is included once, here */
 #include "levels/assets_data.h"
 
+/* ==================== THE VIEWPORT (see run3.h) ====================
+   Defaults are the 1280x720 the engine has always rendered, so anything that
+   never calls run3_resize (the verify suites, a host that has not measured its
+   canvas yet) keeps exactly the old geometry: base 960x720 at x 160..1120,
+   FOCAL 495.497, centre (640, 360). */
+int W = 1280, H = 720;
+int BASE_W = 960, BASE_H = 720;
+int BASE_X0 = 160, BASE_Y0 = 0;
+int CX = 640, CY = 360;
+double FOCAL = 720.0 * 0.5 / TAN_HALF_FOV; /* 495.497 */
+
+/* Set the render target to the window's size, in pixels. The composition is
+   re-derived here and NOWHERE else, so the base box, the projection centre and
+   the focal length can never disagree with each other. */
+void run3_resize(int w, int h) {
+  if (w < 320) w = 320;
+  if (h < 240) h = 240;
+  if (w > MAXW) w = MAXW;
+  if (h > MAXH) h = MAXH;
+  W = w;
+  H = h;
+  /* The composition is the largest 4:3 box that fits in HALF the frame on each
+     axis, i.e. the main viewport covers half the screen in x and y — a quarter
+     of its area — centred, with everything outside it periphery. Height-limited
+     on a wide window (the common case, so the periphery is extra WIDTH at the
+     sides); width-limited on a tall one, where the periphery is extra HEIGHT.
+
+     Because the bound is halved on BOTH axes, this is exactly half the box the
+     full frame would give, so the base keeps presenting the same 72-degree
+     view: the periphery is world the old frame never showed, not a rescale. */
+  int halfW = W / 2, halfH = H / 2;
+  if ((double)halfW * 3.0 / 4.0 <= (double)halfH) {
+    BASE_W = halfW;
+    BASE_H = (halfW * 3) / 4;
+  } else {
+    BASE_H = halfH;
+    BASE_W = (halfH * 4) / 3;
+  }
+  BASE_X0 = (W - BASE_W) / 2;
+  BASE_Y0 = (H - BASE_H) / 2;
+  CX = W / 2;
+  CY = H / 2;                     /* the axis is the frame centre (was H/2-2) */
+  FOCAL = (double)BASE_H * 0.5 / TAN_HALF_FOV;
+}
+int32_t run3_base_w(void) { return BASE_W; }
+int32_t run3_base_h(void) { return BASE_H; }
+int32_t run3_base_x0(void) { return BASE_X0; }
+int32_t run3_base_y0(void) { return BASE_Y0; }
+
 /* ==================== PALETTE ==================== */
 
 /* depth (rotated view space) at which a node is too close to the view plane
@@ -65,7 +114,9 @@ static const uint32_t LPAL[4] = {
    and the framing must not zoom along a side or between checkpoints. The
    runner's own sprite is a fixed pixel size and never scales with any of this.
 
-   tan(pitch) = (h + t*cam_back)/(t*h - cam_back), t = (CY - 2H/3)/FOCAL,
+   tan(pitch) = (h + t*cam_back)/(t*h - cam_back), t = (CY - low)/FOCAL,
+   low = the BASE box's lower third (the runner's screen line, measured from the
+   4:3 base rather than the window, so it holds at every aspect),
    h = cam_off = how far the runner's wall is below the camera. */
 #define VIEW_ROWS 28.0 /* rows drawn ahead: tile width must not decide it */
 double cam_pitch = 0.0;
@@ -198,10 +249,13 @@ double run3_probe_d(void) { return g_probeD; }
 /* ==================== PROJECTION ==================== */
 
 /* project a tube-space point through the chase camera (see CAMERA above) */
-/* the pitch that puts a point cam_off below the camera at 2H/3 on screen
-   (small-angle atan to 3rd order) */
+/* the pitch that puts a point cam_off below the camera on the BASE box's lower
+   third (small-angle atan to 3rd order). The line is measured from the 4:3 base,
+   never from the raw window: on a wide window 2H/3 of the WINDOW would slide the
+   runner down as the periphery grew, and on a tall one it would drag it up. */
 static double cam_pitch_for(double off, double back) {
-  double t = ((double)CY - 2.0 * (double)H / 3.0) / FOCAL;
+  double low = (double)BASE_Y0 + 2.0 * (double)BASE_H / 3.0;
+  double t = ((double)CY - low) / FOCAL;
   double x = (off + t * back) / (t * off - back);
   return x - x * x * x / 3.0;
 }
@@ -306,8 +360,9 @@ static void stage_cam_basis(void) {
    Subtracting here mirrored the whole shot, and a mirror reverses every
    rotation: a scene that rolled its camera about the bore came out rolling the
    other way, which is the tilt-along-the-tunnel-axis error.
-   (The centre is (W/2, H/2) exactly — the gameplay CY offset is the port's own
-   vanishing-point nudge and has no counterpart in the original.)
+   (The centre is the 4:3 BASE box's centre, which is the frame centre too —
+   the gameplay CY offset the port used to carry (H/2 - 2) is gone; the axis is
+   exactly the composition's centre, as in the original.)
 
    Returns 1 for a staged frame, 0 otherwise so the caller can use the port's
    own chase camera. The tube, the cast, the props, the sky sphere and the
@@ -334,8 +389,10 @@ int stage_view_map(double x, double y, double z, double *sx, double *sy, double 
             + (1.0 - 2.0 * (qx * qx + qy * qy)) * vz;
   double depth = z3;
   double k = FOCAL / depth;
-  *sx = (double)W / 2.0 + x3 * k;
-  *sy = (double)H / 2.0 + y2 * k;
+  /* the BASE box's centre — the same point gameplay projects about, and the
+     frame centre, because the box is centred on both axes */
+  *sx = (double)CX + x3 * k;
+  *sy = (double)CY + y2 * k;
   if (dd) *dd = depth;
   return 1;
 }
@@ -627,6 +684,9 @@ static double stage_char_h(double dd) {
   }
   return stage_sprite_h(ref, dd);
 }
+/* the tube radius the last staged frame was drawn at, so the speech overlay can
+   place a tail on the cast with the same projection the cast was drawn by */
+static double g_stageR = 0.0;
 typedef struct { int ch; double ring, zrow; int vis; } stage_actor_t;
 typedef struct { int kind; double ring, zrow, size, inset; int vis; } stage_prop_t;
 static stage_actor_t g_sactors[NSTAGE_ACT];
@@ -659,6 +719,25 @@ static void ring_point(double ring, double R, double *mx, double *my) {
   corner(su, &ax, &ay, R); corner(su + 1, &bx, &by, R);
   *mx = ax + (bx - ax) * f;
   *my = ay + (by - ay) * f;
+}
+/* A STAGED actor's or prop's cross-section point: the level's own ring point
+   turned a HALF TURN ABOUT THE TUNNEL AXIS (`(x, y) -> (-x, -y)`, which is the
+   same rigid turn for every radius, so it is exactly 180 degrees about the
+   bore and not a mirror). Characters and props both come through here, and so
+   does `stage_slot_rect`, the speaker rect the dialogue's tails are aimed at,
+   so the whole cast turns together and a tail stays on the character it names.
+
+   The turn is taken on the POINT, not on the sprite: `stage_sprite_roll` is
+   handed the turned point, derives the inward radial direction from it and
+   rotates the sprite into the wall the member now stands on, so its own roll
+   follows the turn instead of staying pinned to the old wall. The prop inset
+   is applied after the turn and only scales toward the axis, which a half turn
+   leaves unchanged. `ring_point` itself is left alone: the hint route reads it
+   directly and is a gameplay overlay, not a member of the cast. */
+static void stage_ring_point(double ring, double R, double *mx, double *my) {
+  ring_point(ring, R, mx, my);
+  *mx = -*mx;
+  *my = -*my;
 }
 /* The screen rotation of the cast and props in a STAGED frame.
 
@@ -700,7 +779,7 @@ static double stage_sprite_roll(double x, double y, double z) {
 }
 static void draw_stage_actor(double R, int ch, double ring, double zrow) {
   double mx, my, px, py, dd;
-  ring_point(ring, R, &mx, &my);
+  stage_ring_point(ring, R, &mx, &my);
   proj(mx, my, run3_stage_row_z(zrow), &px, &py, &dd);
   if (dd < VIEWPLANE_EPS) return;
   int cm = ch < 0 ? 0 : (ch >= CHAR_COUNT ? CHAR_COUNT - 1 : ch);
@@ -727,7 +806,7 @@ static void draw_stage_actor(double R, int ch, double ring, double zrow) {
 static void draw_stage_prop(double R, int kind, double ring, double zrow, double size, double inset) {
   if (kind == 0) return;
   double mx, my, px, py, dd;
-  ring_point(ring, R, &mx, &my);
+  stage_ring_point(ring, R, &mx, &my);
   /* inset: float off the wall toward the tube axis (the map falls through
      the tube's interior and lands on the floor) */
   double k2 = 1.0 - inset;
@@ -769,6 +848,7 @@ static void draw_stage_prop(double R, int kind, double ring, double zrow, double
   }
 }
 static void draw_stage(double R) {
+  g_stageR = R;
   for (int i = 0; i < NSTAGE_ACT; i++)
     if (g_sactors[i].vis) draw_stage_actor(R, g_sactors[i].ch, g_sactors[i].ring, g_sactors[i].zrow);
   for (int i = 0; i < NSTAGE_PROP; i++)
@@ -1139,167 +1219,503 @@ static int text_width(const char *s, double scale);
 static void draw_text_centered(int y, const char *s, uint32_t col, double scale);
 static int strlen_p(const char *s);
 
-/* ==================== CUTSCENE OVERLAY (engine-owned) ==================== */
-/* The host supplies the strings and the typewriter state; the ENGINE lays the
-   scene out and draws it, full-window, exactly like gameplay. There is no
-   dialog card and no DOM text on screen: the host keeps the click target.
-   The host writes NUL-terminated UTF-8 into these buffers before each frame.
-
-   Dialogue is a BUBBLE, not a full-width band: every authored line carries its
-   own dialog-unit x/y (the 800x600 stage, centre origin), which is where that
-   line's speaker is. The engine anchors the bubble on that point and wraps the
-   text to fit it, so a line spoken from the left wall reads on the left and one
-   from the right reads on the right — the band read every line as if it came
-   from the middle of the tunnel. */
+/* ==================== CUTSCENE SPEECH (the 2014 engine, ported) ====================
+ *
+ * The host hands over ONE FRAME's elements; the engine lays that frame out and
+ * draws it. There is no dialog card and no DOM text on screen: the host keeps
+ * the click target only.
+ *
+ * This is a port of the original's own speech engine, not an approximation of
+ * it. In `runIII.swf` (the readable 2014 build) a scene holds a `Speech` object
+ * as `dialog` and fills it with two kinds of element:
+ *
+ *   bubble  Speech.bubble(text, x, y, size, width, connection, tail)
+ *           builds a `§-_----__--__§` (the panel) and, for every connection and
+ *           tail, a `§--_---_--_§` (the band).
+ *   label   Speech.label(text, x, y, size, width, colour)
+ *           bare centred text: no panel, no band.
+ *
+ * COORDINATES ARE DESIGN UNITS. Main.as builds the asset scaler with
+ *     new §--____-___-§(3000, 2000, true, null);
+ * so the design space is 3000 x 2000 and the mapping to the stage is UNIFORM:
+ *     scale = min(stageW / 3000, stageH / 2000)
+ * with the design origin at the stage's centre. The port's stage is the 4:3 BASE
+ * box (run3.h), so that same rule with the base box in place of the stage is
+ * what is used here: the one source of every number below.
+ *
+ * The panel (`§-_----__--__§.§--_---_---_§`): the text block gets 10% padding a
+ * side, clamped so neither axis may exceed five times the other; the ring's
+ * eight points sit on the block's 5% insets plus one mid-edge point pushed out
+ * by the padding; the ring is rounded by `§-_---_--___§.smooth` (its 0.33
+ * factor) and filled white (0xFFFFFF) with black text.
+ *
+ * The band (`§--_---_--_§`) is the original's construction, constants and all:
+ *     12    a connection's width              (its own `§-____-__--_-§`)
+ *     40    a tail's width                    (`§-___-_--__--§`)
+ *     150   the longest a tail may be         (`§-_-_____-§`)
+ *     0.435 how far into a panel it attaches (`§-_----__--_§`)
+ * two cubic curves bulged by 13 (a connection) or 10 (a tail) design units,
+ * anchored by direction sign and bowed away from the stage centre.
+ */
 #define CUT_TITLE_MAX 96
 #define CUT_TEXT_MAX 512
+/* the original's Speech constants (`§--_---_--_§`) */
+#define CUT_CONN_W     12.0
+#define CUT_TAIL_W     40.0
+#define CUT_TAIL_MAX   150.0
+#define CUT_ANCHOR     0.435
+#define CUT_BULGE_CONN 13.0
+#define CUT_BULGE_TAIL 10.0
+/* The scene base class' own dialog size, in design units. The 2014 build's
+   base (cutscene/\u00a7--_-__-__--\u00a7) sets `dialog.<defaultSize> = 100`; the v1.13
+   build's base sets 40 = 100 / 2.5, its whole UI being the 2014's / 2.5. The
+   bake emits the 2014's numbers, so this is the 2014's 100. */
+#define CUT_DESIGN_SIZE 100.0
+/* the atlas' own em, in atlas pixels (its cell is 52 tall, its cap 39) */
+#define CUT_FONT_EM 52.0
+/* the design space Main.as builds its scaler with */
+#define CUT_DESIGN_W 3000.0
+#define CUT_DESIGN_H 2000.0
 static char g_cutTitle[CUT_TITLE_MAX];
-static char g_cutText[CUT_TEXT_MAX];
-static int g_cutSmall = 0, g_cutShown = -1, g_cutStep = 0, g_cutTotal = 0, g_cutOn = 0;
-static double g_cutX = 0.0, g_cutY = 120.0; /* bubble centre, dialog units */
+typedef struct {
+  int kind;               /* 1 bubble, 2 label */
+  double x, y;            /* design units, stage-centre origin */
+  double size;            /* font as a fraction of the 40 design-unit default */
+  double width;           /* wrap width in design units; <= 0 = auto */
+  int conn, tail;         /* other element of this frame, the cast slot */
+  char text[RUN3_CUT_TEXT];
+  char lines[RUN3_CUT_TEXT + 64];  /* the wrapped text, NUL-separated */
+  /* laid out, in screen px */
+  double bx, by, bw, bh;  /* the element's box (for a bubble, its panel) */
+  double em, scale, lh;   /* font em, glyph scale and line step */
+  double padx, pady;      /* the panel's padding */
+  double tw, th;          /* the text block */
+  int nl;                 /* lines the text wrapped to */
+} cut_item_t;
+static cut_item_t g_cut[RUN3_CUT_MAX];
+static int g_cutN = 0;
+static int g_cutShown = -1, g_cutStep = 0, g_cutTotal = 0, g_cutOn = 0;
 static int g_cutChars = 0; /* characters the overlay actually drew (test seam) */
 char *run3_cut_title_buf(void) { return g_cutTitle; }
-char *run3_cut_text_buf(void) { return g_cutText; }
-void run3_cut_show(double x, double y, int small, int shown, int step, int total, int on) {
-  g_cutX = x;
-  g_cutY = y;
-  g_cutSmall = small ? 1 : 0;
-  g_cutShown = shown;
+char *run3_cut_text_buf(int32_t i) {
+  /* an out-of-range write lands in element 0 rather than nowhere */
+  if (i < 0 || i >= RUN3_CUT_MAX) i = 0;
+  return g_cut[i].text;
+}
+void run3_cut_item(int32_t i, int32_t kind, double x, double y, double size,
+                   double width, int32_t conn, int32_t tail) {
+  if (i < 0 || i >= RUN3_CUT_MAX) return;
+  cut_item_t *it = &g_cut[i];
+  it->kind = kind == 2 ? 2 : 1;
+  it->x = x;
+  it->y = y;
+  it->size = size > 0.0 ? size : 1.0;
+  it->width = width;
+  it->conn = conn;
+  it->tail = tail;
+}
+void run3_cut_frame(int32_t n, int32_t step, int32_t total, int32_t on) {
+  if (n < 0) n = 0;
+  if (n > RUN3_CUT_MAX) n = RUN3_CUT_MAX;
+  g_cutN = on ? (int)n : 0;
   g_cutStep = step;
   g_cutTotal = total;
   g_cutOn = on ? 1 : 0;
 }
 int32_t run3_cut_chars(void) { return g_cutChars; }
-/* scale factor from the original's 800x600 stage to this window (the authored
-   bubble positions are dialog units on that stage, x/2.5 = px) */
+/* one bubble, for callers that were here before the frame API existed */
+void run3_cut_show(double x, double y, int small, int shown, int step, int total, int on) {
+  run3_cut_item(0, 1, x, y, small ? 0.65 : 1.0, 0.0, -1, -1);
+  g_cutShown = shown;
+  run3_cut_frame(1, step, total, on);
+}
+/* the design -> screen scale: the original's own rule (Main.as:
+   `new §--____-___-§(3000, 2000, true, null)`), with the port's stage — the
+   4:3 BASE box — in place of the original's window. Every dialogue number below
+   is derived from this, so the composition is the same at any window shape. */
 static double cut_fit(void) {
-  double fw = (double)W / 800.0, fh = (double)H / 600.0;
+  double fw = (double)BASE_W / CUT_DESIGN_W, fh = (double)BASE_H / CUT_DESIGN_H;
   return fw < fh ? fw : fh;
 }
-/* a bubble panel: a rect with its four corners notched off, so it reads as a
-   rounded speech bubble without carrying a texture. Everything stays inside
-   the (x, y, w, h) box, so a caller can clamp it as a plain rectangle. */
-static void cut_panel(int x, int y, int w, int h, int r, uint32_t col) {
-  if (w < 4 || h < 4) return;
-  if (r < 0) r = 0;
-  if (r > w / 2 - 2) r = w / 2 - 2;
-  if (r > h / 2 - 2) r = h / 2 - 2;
-  fill_rect(x + r, y, w - 2 * r, h, col);
-  if (r > 0) {
-    fill_rect(x, y + r, r, h - 2 * r, col);
-    fill_rect(x + w - r, y + r, r, h - 2 * r, col);
+/* The dialogue's own text path.
+
+   draw_text() advances a whole pixel a glyph and pads each by one more: at menu
+   sizes that is invisible, but the dialogue's font is 40 design units — a
+   handful of screen px inside the base box — where the +1 would be a third of a
+   glyph and every wrap and centring would come out wrong. These advance by the
+   glyph's own width and round only the origin. */
+static int cut_text_w(const char *s, double scale) {
+  double cx = 0.0;
+  while (*s) {
+    int ci = (int)*s - FONT_FIRST_CHAR;
+    if (ci >= 0 && ci < FONT_NUM_CHARS) cx += (double)font_glyphs[ci].w;
+    s++;
+  }
+  return (int)(cx * scale + 0.5);
+}
+static void cut_draw_text(int x, int y_top, const char *s, uint32_t col, double scale) {
+  int max_yoff = 0;
+  for (const char *p = s; *p; p++) {
+    int ci = (int)*p - FONT_FIRST_CHAR;
+    if (ci >= 0 && ci < FONT_NUM_CHARS && font_glyphs[ci].yoff > max_yoff)
+      max_yoff = font_glyphs[ci].yoff;
+  }
+  int baseline = y_top + (int)((double)max_yoff * scale + 0.5);
+  double cx = (double)x;
+  for (; *s; s++) {
+    int ci = (int)*s - FONT_FIRST_CHAR;
+    if (ci >= 0 && ci < FONT_NUM_CHARS) {
+      draw_glyph((int)(cx + 0.5), baseline, *s, col, scale);
+      cx += (double)font_glyphs[ci].w * scale;
+    }
   }
 }
-/* greedy word wrap: writes NUL-separated lines into out, returns the count */
+/* greedy word wrap: writes NUL-separated lines into out, returns the count.
+   The original lets its own TextField do this (wordWrap is switched on as soon
+   as a width is given), so the rule is the same one: break at the last space
+   that still fits, else mid-word. maxW <= 0 means no wrapping. */
 static int cut_wrap(char *out, int cap, const char *in, double scale, int maxW) {
   int nl = 0, o = 0;
   const char *p = in;
-  while (*p && nl < 24) {
+  while (*p && nl < 32) {
     int best = 0;            /* chars on this line */
     int lastSpace = -1;
     int i = 0;
     while (p[i] && p[i] != '\n') {
-      char tmp[256];
+      char tmp[RUN3_CUT_TEXT + 1];
       int n = i + 1;
-      if (n > 255) n = 255;
+      if (n > RUN3_CUT_TEXT) n = RUN3_CUT_TEXT;
       for (int j = 0; j < n; j++) tmp[j] = p[j];
       tmp[n] = 0;
-      if (text_width(tmp, scale) > maxW) break;
+      if (maxW > 0 && cut_text_w(tmp, scale) > maxW) break;
       if (p[i] == ' ') lastSpace = i;
       i++;
     }
     if (!p[i] || p[i] == '\n') best = i;
     else best = (lastSpace > 0) ? lastSpace : i;
     if (best <= 0) best = i > 0 ? i : 1;
-    int n = best;
-    if (o + n + 1 >= cap) break;
-    for (int j = 0; j < n; j++) out[o++] = p[j];
+    if (o + best + 1 >= cap) break;
+    for (int j = 0; j < best; j++) out[o++] = p[j];
     out[o++] = 0;
     nl++;
-    p += n;
+    p += best;
     while (*p == ' ') p++;
     if (*p == '\n') p++;
   }
   if (o < cap) out[o] = 0;
   return nl;
 }
+/* ---------- smooth closed curves ----------
+   The original draws its panels and bands with Graphics.cubicCurveTo; the port
+   has no path rasteriser, so each curve is flattened into a polygon and filled
+   even-odd (fill_poly). */
+typedef struct { double x[96], y[96]; int n; } cut_poly_t;
+static void cut_poly_add(cut_poly_t *p, double x, double y) {
+  if (p->n >= 96) return;
+  p->x[p->n] = x;
+  p->y[p->n] = y;
+  p->n++;
+}
+static void cut_line(cut_poly_t *p, double x0, double y0, double x1, double y1) {
+  (void)x0; (void)y0;   /* the start is already the polygon's current point */
+  cut_poly_add(p, x1, y1);
+}
+static void cut_cubic(cut_poly_t *p, double x0, double y0, double x1, double y1,
+                      double x2, double y2, double x3, double y3) {
+  const int SEG = 8;
+  for (int i = 1; i <= SEG; i++) {
+    double t = (double)i / (double)SEG, u = 1.0 - t;
+    double a = u * u * u, b = 3.0 * u * u * t, c = 3.0 * u * t * t, d = t * t * t;
+    cut_poly_add(p, a * x0 + b * x1 + c * x2 + d * x3,
+                    a * y0 + b * y1 + c * y2 + d * y3);
+  }
+}
+/* `§-_----__--__§.§--_---_---_§`, the panel's outline.
+   A text block of `tw x th` at the panel's own origin, its padding `padx/pady`;
+   the ring is the block's 5% insets with a mid-edge point pushed out by the
+   padding; `§-_---_--___§.smooth` (0.33) gives each point a tangent from its
+   neighbours' difference, and the closed path is cubics through every point. */
+static void cut_panel_path(cut_poly_t *out, double tw, double th, double padx, double pady) {
+  double ix = tw * 0.05, iy = th * 0.05;
+  double rx[8], ry[8], cx[8], cy[8], ox[8], oy[8];
+  rx[0] = padx + ix;          ry[0] = pady + iy;
+  rx[1] = padx + tw * 0.5;    ry[1] = 0.0;
+  rx[2] = padx + tw - ix;     ry[2] = pady + iy;
+  rx[3] = padx + tw + padx;   ry[3] = pady + th * 0.5;
+  rx[4] = padx + tw - ix;     ry[4] = pady + th - iy;
+  rx[5] = padx + tw * 0.5;    ry[5] = pady + th + pady;
+  rx[6] = padx + ix;          ry[6] = pady + th - iy;
+  rx[7] = 0.0;                ry[7] = pady + th * 0.5;
+  for (int i = 0; i < 8; i++) {
+    int pv = (i + 7) & 7, nx = (i + 1) & 7;
+    double tx = rx[nx] - rx[pv], ty = ry[nx] - ry[pv];
+    double tl = ssqrt(tx * tx + ty * ty);
+    if (tl > 1e-9) { tx /= tl; ty /= tl; } else { tx = 1.0; ty = 0.0; }
+    double lin = ssqrt((rx[i] - rx[pv]) * (rx[i] - rx[pv]) +
+                       (ry[i] - ry[pv]) * (ry[i] - ry[pv]));
+    double lout = ssqrt((rx[nx] - rx[i]) * (rx[nx] - rx[i]) +
+                        (ry[nx] - ry[i]) * (ry[nx] - ry[i]));
+    cx[i] = -tx * 0.33 * lin;  cy[i] = -ty * 0.33 * lin;   /* the point's `in` */
+    ox[i] =  tx * 0.33 * lout; oy[i] =  ty * 0.33 * lout;  /* its `out` */
+  }
+  out->n = 0;
+  cut_poly_add(out, rx[7], ry[7]);
+  for (int i = 0; i < 8; i++) {
+    int pv = (i + 7) & 7;
+    cut_cubic(out, rx[pv], ry[pv], rx[pv] + ox[pv], ry[pv] + oy[pv],
+              rx[i] + cx[i], ry[i] + cy[i], rx[i], ry[i]);
+  }
+}
+/* `§--_---_--_§`: the band between two panels (a connection at 12 units) or the
+   tapered arrow from a panel to the speaker (a tail at 40 units, capped at 150
+   and shortened to 0.8 of the gap). Direction signs, the 0.435 anchors, the
+   bow away from the stage centre and the 0.8 shortening are all the original's
+   own branches, in its own order. */
+static void cut_band(double x1, double y1, double w1, double h1,
+                     double x2, double y2, double w2, double h2,
+                     int isTail, double k, uint32_t col) {
+  double c1x = x1 + w1 * 0.5, c1y = y1 + h1 * 0.5;
+  double c2x = x2 + w2 * 0.5, c2y = y2 + h2 * 0.5;
+  double dirx = c2x - c1x, diry = c2y - c1y;
+  double dl = ssqrt(dirx * dirx + diry * diry);
+  if (dl > 1e-9) { dirx /= dl; diry /= dl; } else { dirx = 1.0; diry = 0.0; }
+  /* the perpendicular component of the midpoint about the stage centre: the
+     direction the band bows in, i.e. away from the middle of the frame */
+  double mx = (c1x + c2x) * 0.5 - (double)CX, my = (c1y + c2y) * 0.5 - (double)CY;
+  double dp = mx * dirx + my * diry;
+  double px = mx - dp * dirx, py = my - dp * diry;
+  double pl = ssqrt(px * px + py * py);
+  if (pl > 1e-9) { px /= pl; py /= pl; } else { px = -diry; py = dirx; }
+  int sx = 0, sy = 0;
+  if (x2 + w2 < x1) sx = -1; else if (x2 > x1 + w1) sx = 1;
+  if (y2 + h2 < y1) sy = -1; else if (y2 > y1 + h1) sy = 1;
+  double kk = w1 / 5.0;
+  if (h1 * 0.5 < kk) kk = h1 * 0.5;
+  if (!isTail) {
+    if (w2 * 0.5 < kk) kk = w2 * 0.5;
+    if (h2 * 0.5 < kk) kk = h2 * 0.5;
+  }
+  double ax = c1x + w1 * CUT_ANCHOR * (double)sx - kk * (double)sx;
+  double ay = c1y + h1 * CUT_ANCHOR * (double)sy - kk * (double)sy;
+  double bx = c2x - w2 * CUT_ANCHOR * (double)sx + kk * (double)sx;
+  double by = c2y - h2 * CUT_ANCHOR * (double)sy + kk * (double)sy;
+  if (sx != 0 || sy != 0) {
+    if (sx != 0 && sy != 0) {
+      ax += px * kk * 0.5; ay += py * kk * 0.5;
+      bx += px * kk * 0.5; by += py * kk * 0.5;
+    } else if (sx != 0) {
+      double yy = (py < 0.0) ? ((y1 > y2 ? y1 : y2) + kk)
+                             : (((y1 + h1 < y2 + h2) ? y1 + h1 : y2 + h2) - kk);
+      ay = yy; by = yy;
+      double l0 = y1 + kk, l1 = y1 + h1 - kk;
+      if (ay < l0) ay = l0; else if (ay > l1) ay = l1;
+      double m0 = y2 + kk, m1 = y2 + h2 - kk;
+      if (by < m0) by = m0; else if (by > m1) by = m1;
+    } else {
+      double xx = (px < 0.0) ? ((x1 > x2 ? x1 : x2) + kk)
+                             : (((x1 + w1 < x2 + w2) ? x1 + w1 : x2 + w2) - kk);
+      ax = xx; bx = xx;
+      double l0 = x1 + kk, l1 = x1 + w1 - kk;
+      if (ax < l0) ax = l0; else if (ax > l1) ax = l1;
+      double m0 = x2 + kk, m1 = x2 + w2 - kk;
+      if (bx < m0) bx = m0; else if (bx > m1) bx = m1;
+    }
+  }
+  if (isTail) {
+    double dx = bx - ax, dy = by - ay;
+    double L2 = dx * dx + dy * dy;
+    double cap = CUT_TAIL_MAX * k;
+    if (L2 > cap * cap) {
+      double L = ssqrt(L2);
+      bx = ax + dx / L * cap;
+      by = ay + dy / L * cap;
+    } else {
+      bx = ax + dx * 0.8;
+      by = ay + dy * 0.8;
+    }
+  }
+  double x0 = ax < bx ? ax : bx, y0 = ay < by ? ay : by;
+  ax -= x0; ay -= y0; bx -= x0; by -= y0;
+  double nx = by - ay, ny = ax - bx;
+  double nl = ssqrt(nx * nx + ny * ny);
+  if (nl > 1e-9) { nx /= nl; ny /= nl; } else { nx = 1.0; ny = 0.0; }
+  double hw = (isTail ? CUT_TAIL_W : CUT_CONN_W) * k * 0.5;
+  double ex = nx * hw, ey = ny * hw;
+  double a1x = ax - ex, a1y = ay - ey;   /* the near end, both edges */
+  double a2x = ax + ex, a2y = ay + ey;
+  double b1x = bx - ex, b1y = by - ey;   /* the far end (for a tail: the tip) */
+  double b2x = bx + ex, b2y = by + ey;
+  if (isTail) { b1x = bx; b1y = by; b2x = bx; b2y = by; }
+  double bulge = (isTail ? CUT_BULGE_TAIL : CUT_BULGE_CONN) * k;
+  double gx = px * bulge, gy = py * bulge;
+  const double t = 0.25;
+  cut_poly_t P;
+  P.n = 0;
+  cut_poly_add(&P, a1x, a1y);
+  cut_cubic(&P, a1x, a1y,
+            a1x + t * (b1x - a1x) + gx, a1y + t * (b1y - a1y) + gy,
+            a1x + (1.0 - t) * (b1x - a1x) + gx, a1y + (1.0 - t) * (b1y - a1y) + gy,
+            b1x, b1y);
+  if (!isTail) cut_line(&P, b1x, b1y, b2x, b2y);
+  else { gx *= 0.8; gy *= 0.8; }
+  cut_cubic(&P, b2x, b2y,
+            b2x + t * (a2x - b2x) + gx, b2y + t * (a2y - b2y) + gy,
+            b2x + (1.0 - t) * (a2x - b2x) + gx, b2y + (1.0 - t) * (a2y - b2y) + gy,
+            a2x, a2y);
+  cut_line(&P, a2x, a2y, a1x, a1y);
+  for (int i = 0; i < P.n; i++) { P.x[i] += x0; P.y[i] += y0; }
+  fill_poly(P.x, P.y, P.n, col);
+}
+/* the staged cast slot's screen rect, which is what a tail points at: the
+   original hands its band `actor.<screenRect()>` and the band reads the rect's
+   centre and its outer edges from it, so the arrow stops at the character
+   instead of running to its middle. */
+static int stage_slot_rect(int slot, double *rx, double *ry, double *rw, double *rh) {
+  if (slot < 0 || slot >= NSTAGE_ACT) return 0;
+  if (!g_sactors[slot].vis) return 0;
+  double mx, my, px, py, dd;
+  stage_ring_point(g_sactors[slot].ring, g_stageR, &mx, &my);
+  proj(mx, my, run3_stage_row_z(g_sactors[slot].zrow), &px, &py, &dd);
+  if (dd < VIEWPLANE_EPS) return 0;
+  int cm = g_sactors[slot].ch;
+  anim_range_t ar = CHAR_ANIM_RANGE(cm, STATE_RUN, DIR_CENTER);
+  int fw = 0, fh = 0;
+  const uint32_t *pix = get_char_frame(cm, ar.start, &fw, &fh);
+  if (!pix || fw <= 0 || fh <= 0) return 0;
+  double h = stage_sprite_h((double)fh, dd);
+  double w = h * (double)fw / (double)fh;
+  /* the sprite is anchored at its feet (see draw_stage_actor) */
+  *rx = px - w * 0.5;
+  *ry = py - h;
+  *rw = w;
+  *rh = h;
+  return 1;
+}
 static void draw_cut_overlay(void) {
   g_cutChars = 0;
-  if (!g_cutOn) return;
-  double scale = g_cutSmall ? 0.44 : 0.56;
-  double lh = 52.0 * scale + 6.0;
-  double fit = cut_fit();
-  int pad = (int)(W * 0.08);
+  if (!g_cutOn || g_cutN <= 0) return;
+  double k = cut_fit();
+  /* the design origin is the stage's centre, which is the BASE box's centre (and
+     so the frame's): `x = scale(x) + stageW/2 - width/2` in the original */
+  double ox = (double)CX, oy = (double)CY;
+  uint32_t panelCol = rgb(255, 255, 255);
+  uint32_t textCol = rgb(0, 0, 0);
+  uint32_t labelCol = rgb(255, 255, 255);
+  /* the composition's own edges. The original has nothing to clamp to (its
+     stage IS the window); the port's frame can be wider than the composition,
+     so an element that would land in the periphery is held inside the 4:3 box */
+  double bl = (double)BASE_X0, br = (double)(BASE_X0 + BASE_W);
+  double bt = (double)BASE_Y0, bb = (double)(BASE_Y0 + BASE_H);
 
-  /* the line's own bubble centre, on the original's stage, clamped to the box
-     the host's (hidden) DOM bubble used: 24..76% across, 18..78% down */
-  double cx = (double)W * 0.5 + (g_cutX / 2.5) * fit;
-  double cy = (double)H * 0.5 + (g_cutY / 2.5) * fit;
-  if (cx < W * 0.24) cx = W * 0.24;
-  if (cx > W * 0.76) cx = W * 0.76;
-  if (cy < H * 0.18) cy = H * 0.18;
-  if (cy > H * 0.78) cy = H * 0.78;
-
-  /* typewriter: draw only the first g_cutShown characters (negative = all) */
-  char full[CUT_TEXT_MAX + 1];
-  int shown = 0;
-  while (g_cutText[shown] && shown < CUT_TEXT_MAX) shown++;
-  int lim = (g_cutShown < 0 || g_cutShown > shown) ? shown : g_cutShown;
-  for (int j = 0; j < lim; j++) full[j] = g_cutText[j];
-  full[lim] = 0;
-
-  /* wrap to the bubble's own width, then size the panel to the longest line */
-  int maxW = (int)(W * 0.30);
-  if (maxW < 220) maxW = 220;
-  char wrapped[CUT_TEXT_MAX + 32];
-  int nl = cut_wrap(wrapped, (int)sizeof(wrapped), full, scale, maxW);
-  int widest = 0;
-  const char *line = wrapped;
-  for (int i = 0; i < nl; i++) {
-    int tw = text_width(line, scale);
-    if (tw > widest) widest = tw;
-    line += strlen_p(line) + 1;
-  }
-  int padx = (int)(30.0 * scale) + 10, pady = (int)(18.0 * scale) + 8;
-  int bw = widest + 2 * padx, bh = nl * (int)lh + 2 * pady;
-  if (bw < 140) bw = 140;
-  int bx = (int)(cx - 0.5 * (double)bw), by = (int)(cy - 0.5 * (double)bh);
-  if (bx < pad / 2) bx = pad / 2;
-  if (bx + bw > W - pad / 2) bx = W - pad / 2 - bw;
-  int barTop = H - (int)(H * 0.12); /* stay clear of the step/continue bar */
-  if (by < pad / 2) by = pad / 2;
-  if (by + bh > barTop) by = barTop - bh;
-
-  /* the tail points from the panel's bottom edge at the tunnel below it (the
-     cast is staged around the lower centre, whichever wall the line came from) */
-  int tx = (int)(W * 0.5);
-  if (tx < bx + 30) tx = bx + 30;
-  if (tx > bx + bw - 30) tx = bx + bw - 30;
-  uint32_t panel = rgb(10, 17, 32);
-  fill_quad((double)tx - 15.0, (double)(by + bh - 2), (double)tx + 15.0,
-            (double)(by + bh - 2), (double)tx, (double)(by + bh - 2) + 18.0 * fit,
-            (double)(by + bh - 2), (double)(by + bh - 2), panel);
-  /* panel + a thin lit edge so the bubble reads over any tunnel colour */
-  cut_panel(bx, by, bw, bh, 12, rgb(62, 92, 145));
-  cut_panel(bx + 1, by + 1, bw - 2, bh - 2, 11, panel);
-
-  int ty = by + pady;
-  line = wrapped;
-  for (int i = 0; i < nl; i++) {
-    if (line[0]) {
-      int tw = text_width(line, scale);
-      draw_text(bx + (bw - tw) / 2, ty, line, rgb(236, 240, 248), scale);
-      for (const char *q = line; *q; q++) g_cutChars++;
+  /* ---- 1. measure ----
+     The original builds its TextField first, sizes the panel from the field and
+     only then places both. Same order here, so a bubble is always as big as its
+     own line and its own wrap width say it is. */
+  for (int i = 0; i < g_cutN; i++) {
+    cut_item_t *it = &g_cut[i];
+    it->em = CUT_DESIGN_SIZE * it->size * k;   /* format.size = scale(size) */
+    it->scale = it->em / CUT_FONT_EM;
+    it->lh = it->em * 1.16;
+    int maxW = it->width > 0.0 ? (int)(it->width * k + 0.5) : 0;
+    /* the typewriter, when a caller set one, applies to element 0 */
+    char full[RUN3_CUT_TEXT + 1];
+    int shown = 0;
+    while (it->text[shown] && shown < RUN3_CUT_TEXT) shown++;
+    int lim = (i == 0 && g_cutShown >= 0 && g_cutShown < shown) ? g_cutShown : shown;
+    for (int j = 0; j < lim; j++) full[j] = it->text[j];
+    full[lim] = 0;
+    int nl = cut_wrap(it->lines, (int)sizeof(it->lines), full, it->scale, maxW);
+    int widest = 0;
+    const char *ln = it->lines;
+    for (int j = 0; j < nl; j++) {
+      int w = cut_text_w(ln, it->scale);
+      if (w > widest) widest = w;
+      ln += strlen_p(ln) + 1;
     }
-    ty += (int)lh;
-    line += (int)strlen_p(line) + 1;
+    it->nl = nl;
+    it->th = (double)nl * it->lh * 1.1;   /* the helper: height = textHeight*1.1 */
+    if (it->kind == 2) {
+      /* a label: bare text, no panel. With no width the field auto-sizes to the
+         text, x1.05, which is what the original's helper does */
+      it->tw = maxW > 0 ? (double)maxW : (double)widest * 1.05;
+      it->padx = it->pady = 0.0;
+    } else {
+      /* a bubble: the field's width is the scene's own wrap width, or — with
+         none — the natural width x1.05, clamped to the stage */
+      if (maxW > 0) {
+        it->tw = (double)maxW;
+      } else {
+        it->tw = (double)widest * 1.05;
+        if (it->tw > (double)BASE_W) it->tw = (double)BASE_W;
+      }
+      /* `§-_----__--__§.§--_---_---_§`: 10% of the text block a side, and
+         neither axis's padding may exceed five times the other's */
+      it->padx = it->tw * 0.1;
+      it->pady = it->th * 0.1;
+      if (it->padx > 5.0 * it->pady) it->padx = 5.0 * it->pady;
+      else if (it->pady > 5.0 * it->padx) it->pady = 5.0 * it->padx;
+    }
+    it->bw = it->tw + 2.0 * it->padx;
+    it->bh = it->th + 2.0 * it->pady;
+    it->bx = ox + it->x * k - it->bw * 0.5;
+    it->by = oy + it->y * k - it->bh * 0.5;
+    if (it->bx < bl) it->bx = bl;
+    if (it->bx + it->bw > br) it->bx = br - it->bw;
+    if (it->by < bt) it->by = bt;
+    if (it->by + it->bh > bb) it->by = bb - it->bh;
   }
-  /* the scene title sits above the bubble, out of its way */
-  if (g_cutTitle[0]) draw_text(pad, (int)(H * 0.06), g_cutTitle, rgb(150, 185, 235), 0.46);
-  /* step counter + continue prompt along the bottom */
-  int barY = H - (int)(H * 0.06);
+
+  /* ---- 2. the bands, behind every panel ----
+     The original adds its connections and tails before the panels, so a panel
+     always covers the spot its own band attaches to. */
+  for (int i = 0; i < g_cutN; i++) {
+    cut_item_t *it = &g_cut[i];
+    if (it->tail >= 0) {
+      double rx = 0.0, ry = 0.0, rw = 0.0, rh = 0.0;
+      if (stage_slot_rect(it->tail, &rx, &ry, &rw, &rh))
+        cut_band(it->bx, it->by, it->bw, it->bh, rx, ry, rw, rh, 1, k, panelCol);
+    }
+    if (it->conn >= 0 && it->conn < g_cutN && it->conn != i) {
+      cut_item_t *o2 = &g_cut[it->conn];
+      cut_band(o2->bx, o2->by, o2->bw, o2->bh, it->bx, it->by, it->bw, it->bh,
+               0, k, panelCol);
+    }
+  }
+
+  /* ---- 3. the panels over the bands, then their text ---- */
+  for (int i = 0; i < g_cutN; i++) {
+    cut_item_t *it = &g_cut[i];
+    if (it->kind == 1) {
+      cut_poly_t P;
+      cut_panel_path(&P, it->tw, it->th, it->padx, it->pady);
+      for (int j = 0; j < P.n; j++) { P.x[j] += it->bx; P.y[j] += it->by; }
+      fill_poly(P.x, P.y, P.n, panelCol);
+    }
+    const char *ln = it->lines;
+    for (int j = 0; j < it->nl; j++) {
+      if (ln[0]) {
+        int w = cut_text_w(ln, it->scale);
+        int tx = (int)(it->bx + it->padx + (it->tw - (double)w) * 0.5);
+        int ty = (int)(it->by + it->pady + (double)j * it->lh + it->em * 0.2);
+        cut_draw_text(tx, ty, ln, it->kind == 1 ? textCol : labelCol, it->scale);
+        for (const char *q = ln; *q; q++) g_cutChars++;
+      }
+      ln += strlen_p(ln) + 1;
+    }
+  }
+
+  /* ---- 4. the overlay's own chrome ----
+     The original has neither a title nor a prompt (its scenes advance the level
+     themselves); the port shows them, so they are sized off the same design
+     scale as the dialogue rather than off the window. */
+  double chrome = 1.6 * CUT_DESIGN_SIZE * k / CUT_FONT_EM;
+  int pad = (int)(BASE_W * 0.03);
+  if (g_cutTitle[0])
+    cut_draw_text((int)bl + pad, (int)bt + (int)(BASE_H * 0.04), g_cutTitle,
+                  rgb(150, 185, 235), chrome);
+  int barY = (int)bb - (int)(BASE_H * 0.05) - (int)(chrome * 26.0);
   if (g_cutTotal > 0) {
-    char buf[24];
+    char buf[8];
     int n = g_cutStep, m = g_cutTotal, o = 0;
     if (n > 99) n = 99;
     if (m > 99) m = 99;
@@ -1309,10 +1725,11 @@ static void draw_cut_overlay(void) {
     buf[o++] = (char)('0' + m / 10);
     buf[o++] = (char)('0' + m % 10);
     buf[o] = 0;
-    draw_text(pad, barY, buf, rgb(170, 178, 195), 0.46);
+    cut_draw_text((int)bl + pad, barY, buf, rgb(170, 178, 195), chrome);
   }
   const char *cont = "CONTINUE >";
-  draw_text(W - pad - text_width(cont, 0.46), barY, cont, rgb(150, 185, 235), 0.46);
+  cut_draw_text((int)br - pad - cut_text_w(cont, chrome), barY, cont,
+                rgb(150, 185, 235), chrome);
 }
 /* tiny strlen for the wrap tables (the wasm build has no libc) */
 static int strlen_p(const char *s) {
@@ -1543,6 +1960,11 @@ static void draw_glyph(int x, int y, char ch, uint32_t col, double scale) {
   if (ci < 0 || ci >= FONT_NUM_CHARS) return;
   const glyph_t *g = &font_glyphs[ci];
   int dw = (int)((double)g->w * scale), dh = (int)((double)g->h * scale);
+  /* at the dialogue's design scale a glyph can fall below a pixel. Give any
+     glyph that carries real ink one rather than dropping it (a period would
+     otherwise vanish); a space stays undrawn, which is what advances it. */
+  if (dw <= 0 && dh <= 0 && g->w > 2 && g->h > 2) { dw = 1; dh = 1; }
+  else if (dw > 0 && dh <= 0 && g->h > 2) dh = 1;
   if (dw <= 0 || dh <= 0) return;
   // resting on a common baseline — y is the baseline, glyph top at y - yoff*scale
   // nearest neighbor: no smoothing, crisp texels
@@ -1613,17 +2035,22 @@ void render_menu(void) {
   cam_back = DCAM; cam_out = 0.0; view_z = VIEW; near_z = NEARZ;
   sky_render(sky, 0.12, 0.0);
 
-  int cx = W / 2;
-  draw_text_centered(60, "Run 3", rgb(130, 185, 255), 1.6);
-  draw_text_centered(150, "Tunnel Runner Tribute", rgb(100, 130, 180), 0.54);
+  int cx = CX;
+  /* The menu is a fixed 1280x720 design, TRANSLATED onto the viewport centre so
+     it stays centred and clickable at any window shape. At 1280x720 the offset
+     is zero, so this is the layout it has always had. run3_menu_hover runs the
+     same offset, so the drawn boxes and the hit tests cannot drift apart. */
+  int ox = CX - 640, oy = CY - 360;
+  draw_text_centered(60 + oy, "Run 3", rgb(130, 185, 255), 1.6);
+  draw_text_centered(150 + oy, "Tunnel Runner Tribute", rgb(100, 130, 180), 0.54);
 
-  fill_rect(cx - 160, 340, 320, 60, rgb(50, 120, 60));
-  draw_text_centered(351, "Play", rgb(220, 255, 220), 0.76);
+  fill_rect(cx - 160, 340 + oy, 320, 60, rgb(50, 120, 60));
+  draw_text_centered(351 + oy, "Play", rgb(220, 255, 220), 0.76);
 
-  fill_rect(cx - 160, 420, 320, 60, rgb(90, 50, 140));
-  draw_text_centered(436, "Infinite Mode", rgb(220, 200, 255), 0.54);
+  fill_rect(cx - 160, 420 + oy, 320, 60, rgb(90, 50, 140));
+  draw_text_centered(436 + oy, "Infinite Mode", rgb(220, 200, 255), 0.54);
 
-  draw_text_centered(500, "Character:", rgb(180, 180, 200), 0.49);
+  draw_text_centered(500 + oy, "Character:", rgb(180, 180, 200), 0.49);
   int nchar = CHAR_COUNT;
   int sel = run3_menu_char();
   // bigger boxes 80x80, 90px pitch, 2 rows (9+8) — spread out.
@@ -1634,9 +2061,9 @@ void render_menu(void) {
     int pres = run3_char_pres(i);
     int row = pres / 9;
     int col = pres % 9;
-    int bx = 40 + col * 90;
-    int by = 520 + row * 100;
-    if (by + 80 > H - 20) break;
+    int bx = ox + 40 + col * 90;
+    int by = oy + 520 + row * 100;
+    if (by + 80 > oy + 700) break;
     int is_locked = run3_char_is_locked(i);
     uint32_t cc = (i == sel) ? rgb(255, 255, 255) : (is_locked ? rgb(45, 45, 60) : rgb(60, 60, 80));
     fill_rect(bx, by, 80, 80, cc);
@@ -1662,5 +2089,5 @@ void render_menu(void) {
     else if (is_locked) stroke_rect(bx, by, 80, 80, rgb(60, 60, 80));
   }
 
-  draw_text_centered(640, "Click to select  |  Fullscreen 1280x720", rgb(100, 110, 130), 0.38);
+  draw_text_centered(640 + oy, "Click to select  |  Fullscreen", rgb(100, 110, 130), 0.38);
 }

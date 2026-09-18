@@ -6,10 +6,10 @@ package
    import §!!X§.§`Q§;
    import §!9§.§'=§;
    import §!D§.§;U§;
-   import §!]§.§4N§;
-   import §!]§.§6!X§;
-   import §!]§.Path;
-   import §!]§.§[!6§;
+   import map.Map;
+   import map.§6!X§;
+   import map.Path;
+   import map.§[!6§;
    import §"!L§.§%z§;
    import §"!L§.§@C§;
    import §"!M§.§!!5§;
@@ -1277,12 +1277,12 @@ package
             §6!X§.§+z§ = new Rectangle();
             §6!X§.§1]§ = new Point();
          }
-         if(!§4N§.init__)
+         if(!Map.init__)
          {
-            §4N§.init__ = true;
-            §4N§.§1]§ = new Point(0,0);
-            §4N§.§;!D§ = new Point(0,0);
-            §4N§.§+!;§ = new §9t§("mapInstructionsShown");
+            Map.init__ = true;
+            Map.§1]§ = new Point(0,0);
+            Map.§;!D§ = new Point(0,0);
+            Map.§+!;§ = new §9t§("mapInstructionsShown");
          }
          if(!Path.init__)
          {

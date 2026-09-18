@@ -432,7 +432,11 @@ The scenes the original gives NO camera at all (`STAGE_TIMELINE[name].ca ===
 false`) keep the port's own staged camera (`run3_stage_cam`, `CAM_BACK_STAGE`
 apothems), the same model the out-of-band bare literals above fall back to.
 `ca` lives on the TIMELINE, not on its segments — reading it off a segment is
-the bug that made every authored scene take this path (notes.txt §7b).
+the bug that made every authored scene take this path: `bake_cutscenes.py`
+writes `ca` once per SCENE, on the timeline object, while `stageGoto` read it
+off the SEGMENT — and no segment carries one, so every authored scene silently
+took this legacy branch. `stageOpen` now derives `stage.authored` from the
+timeline's `ca` and `stageGoto` tests `stage.authored || s.ca || stage.cams`.
 
 **Cast size is the original's own spritesheet size.** `StageActor` builds its
 spritesheet quad at `(spriteSourceSize.x, spriteSourceSize.y, frame.w, frame.h)

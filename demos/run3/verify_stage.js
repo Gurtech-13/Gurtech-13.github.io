@@ -739,13 +739,18 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     m[s.length] = 0;
   };
   const shotWith = (x, y, text) => {
-    /* same scene with the overlay off, so the diff is exactly the bubble */
-    e.run3_cut_show(0, 120, 0, -1, 0, 0, 0);
+    /* Same title and step counter in both frames, and NO element in the
+       baseline, so the diff is exactly the one bubble. (Turning the overlay
+       off instead folds the port-only chrome into the diff; committing an
+       empty-texted element instead leaves a panel behind that is itself
+       most of the diff.) */
+    put(e.run3_cut_title_buf(), "Coming Through");
+    e.run3_cut_frame(0, 1, 3, 1);
     e.render_frame();
     const base = shot();
-    put(e.run3_cut_title_buf(), "Coming Through");
-    put(e.run3_cut_text_buf(), text);
-    e.run3_cut_show(x, y, 0, -1, 1, 3, 1);
+    put(e.run3_cut_text_buf(0), text);
+    e.run3_cut_item(0, 1, x, y, 1.0, -1, -1, -1);
+    e.run3_cut_frame(1, 1, 3, 1);
     e.render_frame();
     const out = shot();
     let left = 0, right = 0;
@@ -1264,5 +1269,183 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   console.log(`glowing tiles OK (last level ${tail.n} solid glow tiles; lvl 5 lights ` +
               `${litPx} bright px at power ${e.run3_power().toFixed(2)}, a no-glow level paints ${nonePx})`);
   e.run3_set_input(0);
+
+  // 14. VIEWPORT + DIALOGUE. The render target follows the window shape; the
+  //     composition lives in the largest CENTRED 4:3 box that fits in HALF the
+  //     frame on each axis (the main viewport is half the screen in x and y),
+  //     and the speech never leaves that box. FOCAL comes from the BASE, so a
+  //     wider window adds world at the sides rather than magnifying or
+  //     stretching the picture; a taller one adds world above and below. 4:3 is
+  //     the original's own stage ratio, and the design space every authored
+  //     dialogue number is measured in is 3000x2000 with a UNIFORM scale
+  //     min(stageW/3000, stageH/2000) (Main.as builds its scaler that way), so
+  //     the base box is the "stage" that scale is taken against here.
+  {
+    const geom = (w, h) => {
+      e.run3_resize(w, h);
+      return { W: e.run3_width(), H: e.run3_height(), bw: e.run3_base_w(),
+               bh: e.run3_base_h(), bx: e.run3_base_x0(), by: e.run3_base_y0() };
+    };
+    const check = (w, h) => {
+      const g = geom(w, h);
+      if (g.W !== w || g.H !== h) throw new Error(`resize did not take: ${g.W}x${g.H}`);
+      if (g.bw > g.W || g.bh > g.H) throw new Error(`base ${g.bw}x${g.bh} does not fit ${w}x${h}`);
+      if (Math.abs(g.bw * 3 - g.bh * 4) > 4)
+        throw new Error(`base ${g.bw}x${g.bh} is not 4:3`);
+      if (Math.abs(g.bx - (g.W - g.bw) / 2) > 1 || Math.abs(g.by - (g.H - g.bh) / 2) > 1)
+        throw new Error(`base is not centred: x0=${g.bx} y0=${g.by} in ${g.W}x${g.H}`);
+      // half the frame on each axis: no more, and no less than the half box
+      if (2 * g.bw > g.W + 1 || 2 * g.bh > g.H + 1)
+        throw new Error(`base ${g.bw}x${g.bh} is bigger than half of ${g.W}x${g.H}`);
+      // largest: it must touch the edge pair of the HALF box it is limited by
+      if (!(g.bw === Math.floor(g.W / 2) || g.bh === Math.floor(g.H / 2)))
+        throw new Error(`base ${g.bw}x${g.bh} is not the LARGEST 4:3 box that fits in half of ${g.W}x${g.H}`);
+      return g;
+    };
+    /* FOCAL is derived from the BASE height (the original's 72-degree vertical
+       FOV over the base box), never from the window. Measured through the
+       engine's own projection in a staged frame, where the camera sits on the
+       bore axis: the axis point must land on the BASE centre at every shape,
+       and a point a fixed distance off the axis must land at an offset that
+       scales with the base HEIGHT alone. */
+    e.run3_init(7);
+    e.run3_seek(0, 9);
+    e.run3_set_input(0);
+    e.run3_cutscene_hold();
+    e.run3_stage_cam(0, 0);
+    const projBase = (w, h) => {
+      e.run3_resize(w, h);
+      const g = { bw: e.run3_base_w(), bh: e.run3_base_h() };
+      e.run3_stage_project(0, 0, -400);
+      const ax = e.run3_probe_x(), ay = e.run3_probe_y();
+      e.run3_stage_project(0, -360, -400);
+      g.cx = e.run3_width() / 2;
+      g.cy = e.run3_height() / 2;
+      g.ax = ax; g.ay = ay;
+      g.oy = e.run3_probe_y() - ay;
+      return g;
+    };
+    const pa = projBase(1280, 720), pb = projBase(1600, 900);
+    if (Math.abs(pa.ax - pa.cx) > 1.5 || Math.abs(pa.ay - pa.cy) > 1.5)
+      throw new Error(`the bore axis is not on the base centre: ` +
+                      `(${pa.ax.toFixed(1)},${pa.ay.toFixed(1)}) vs (${pa.cx},${pa.cy})`);
+    const ratio = Math.abs(pb.oy) / Math.abs(pa.oy), want = pb.bh / pa.bh;
+    if (Math.abs(ratio - want) > 0.02)
+      throw new Error(`the vertical pixel scale does not follow the BASE height ` +
+                      `(${ratio.toFixed(3)} against ${want.toFixed(3)} for bases ` +
+                      `${pa.bh} and ${pb.bh})`);
+    console.log(`viewport projection OK (axis on the base centre at 1280x720 ` +
+                `(${pa.ax.toFixed(1)},${pa.ay.toFixed(1)}); vertical scale follows the base ` +
+                `height ${pa.bh}->${pb.bh} by ${ratio.toFixed(3)})`);
+    e.run3_cutscene_resume();
+
+    const w16 = check(1280, 720);
+    /* half the frame on both axes, so the 16:9 case is height-limited: the base
+       is 480x360 (exactly half of the 960x720 a full-frame fit would give) */
+    if (w16.bw !== 480 || w16.bh !== 360 || w16.bx !== 400 || w16.by !== 180)
+      throw new Error(`16:9 base wrong: ${JSON.stringify(w16)}`);
+    check(1680, 720);   // ultrawide: the surplus is WIDTH
+    check(720, 1000);   // portrait: the surplus is HEIGHT
+    check(1024, 768);   // exactly 4:3: no periphery at all
+    check(2560, 1440);
+
+    // the pixel scale and the shot must not change with the window's WIDTH:
+    // widening reveals more tunnel, it never magnifies or squashes the 4:3 one
+    e.run3_init(7);
+    e.run3_seek(0, 3);
+    e.run3_set_input(0);
+    for (let i = 0; i < 30; i++) e.run3_step(1 / 60);
+    const projAt = (w, h) => {
+      e.run3_resize(w, h);
+      e.run3_stage_project(300, -120, 900);
+      return { cx: e.run3_width() / 2, cy: e.run3_height() / 2,
+               x: e.run3_probe_x(), y: e.run3_probe_y(), d: e.run3_probe_d() };
+    };
+    const p16 = projAt(1280, 720), pUW = projAt(1680, 720);
+    if (Math.abs(p16.d - pUW.d) > 1e-6)
+      throw new Error(`the shot distance moved with the width (${p16.d} vs ${pUW.d})`);
+    if (Math.abs((p16.x - p16.cx) - (pUW.x - pUW.cx)) > 0.01 ||
+        Math.abs((p16.y - p16.cy) - (pUW.y - pUW.cy)) > 0.01)
+      throw new Error(`the view was STRETCHED: offset ${(p16.x - p16.cx).toFixed(1)} at 1280 ` +
+                      `vs ${(pUW.x - pUW.cx).toFixed(1)} at 1680`);
+    // and the bubble (with the title and the step bar) stays INSIDE the base
+    // box, at an ultrawide size where the periphery is at its widest
+    const g = check(1680, 720);
+    if (g.bx + g.bw / 2 !== 840 || g.by + g.bh / 2 !== 360)
+      throw new Error(`the base box is not centred on the 1680x720 frame: ` +
+                      `${g.bx + g.bw / 2},${g.by + g.bh / 2}`);
+    e.run3_init(0);
+    e.run3_seek(0, 9);
+    e.run3_cutscene_backdrop(0, 9);
+    const vshot = () => new Uint32Array(e.memory.buffer, e.run3_buffer(),
+                                        e.run3_width() * e.run3_height()).slice();
+    e.run3_cut_show(0, 120, 0, -1, 0, 0, 0);
+    // The tunnel AXIS must project onto the frame/base centre, at every shape.
+    // run3_stage_project routes through stage_view_map (the staged camera), so
+    // projecting the cross-section origin with the pan sitting on the rig's own
+    // offset (2, 0) asks the question directly; a sprite box would only report
+    // its own anchor offset.
+    const axisAt = (w, h) => {
+      e.run3_resize(w, h);
+      e.run3_stage_project(0.0, 0.0, e.run3_stage_row_z(1.0));
+      return { x: e.run3_probe_x(), y: e.run3_probe_y() };
+    };
+    /* ComingThrough's own authored camera: its pan IS the rig offset, so the
+       camera lands on the bore axis (pos 0,0) and there is depth ahead */
+    e.run3_stage_shot(4129, 0, 58.1);
+    e.run3_stage_camera(2, 106, 4129, 0, 0, 0, 1);
+    /* the camera's own bore slide (stage_cam_z) is latched during a render, so
+       one frame has to go out before the axis can be projected */
+    e.render_frame();
+    const ax16 = axisAt(1280, 720), axUW = axisAt(1680, 720);
+    const axTall = axisAt(720, 1000);
+    for (const [a, w, h] of [[ax16, 1280, 720], [axUW, 1680, 720], [axTall, 720, 1000]]) {
+      if (Math.abs(a.x - w / 2) > 1.5 || Math.abs(a.y - h / 2) > 1.5)
+        throw new Error(`the tunnel axis is at ${a.x.toFixed(1)},${a.y.toFixed(1)} in ${w}x${h} — ` +
+                        `not the base box / frame centre ${w / 2},${h / 2}`);
+    }
+    check(1680, 720); /* back to the ultrawide the bubble check runs at */
+    const put = (ptr, s) => {
+      const m = new Uint8Array(e.memory.buffer, ptr, s.length + 1);
+      for (let i = 0; i < s.length; i++) m[i] = s.charCodeAt(i) & 0xff;
+      m[s.length] = 0;
+    };
+    const outside = (x, y) => {
+      e.run3_cut_show(0, 120, 0, -1, 0, 0, 0);
+      e.render_frame();
+      const off = vshot();
+      put(e.run3_cut_title_buf(), "Coming Through");
+      put(e.run3_cut_text_buf(), "The map was blank all along - the stars were the only guide.");
+      e.run3_cut_show(x, y, 0, -1, 1, 3, 1);
+      e.render_frame();
+      const on = vshot();
+      const w = e.run3_width(), h = e.run3_height();
+      let n = 0, x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1;
+      for (let yy = 0; yy < h; yy++)
+        for (let xx = 0; xx < w; xx++) {
+          if (on[yy * w + xx] === off[yy * w + xx]) continue;
+          if (xx >= g.bx && xx < g.bx + g.bw && yy >= g.by && yy < g.by + g.bh) continue;
+          n++;
+          if (xx < x0) x0 = xx;
+          if (xx > x1) x1 = xx;
+          if (yy < y0) y0 = yy;
+          if (yy > y1) y1 = yy;
+        }
+      e.run3_cut_show(0, 120, 0, -1, 0, 0, 0);
+      return { n, x0, x1, y0, y1 };
+    };
+    const outL = outside(-380, -160), outR = outside(380, -160), outC = outside(0, 120);
+    if (outL.n || outR.n || outC.n)
+      throw new Error(`the dialogue overlay painted ${outL.n}/${outR.n}/${outC.n} px in the ` +
+                      `periphery (base box x ${g.bx}..${g.bx + g.bw}, y ${g.by}..${g.by + g.bh}; ` +
+                      `left spilled to x ${outL.x0}..${outL.x1} y ${outL.y0}..${outL.y1}, ` +
+                      `right to x ${outR.x0}..${outR.x1} y ${outR.y0}..${outR.y1})`);
+    e.run3_resize(1280, 720);
+    console.log(`viewport OK (4:3 base ${w16.bw}x${w16.bh} = half the 16:9 frame on ` +
+                `each axis, centred; the ` +
+                `axis projects to the centre at every shape (${ax16.x.toFixed(0)},${ax16.y.toFixed(0)} ` +
+                `@1280x720, ${axUW.x.toFixed(0)},${axUW.y.toFixed(0)} @1680x720); the periphery is ` +
+                `extra world, never a stretch; the dialogue stays inside the base)`);
+  }
   console.log("ALL STAGE CHECKS PASSED");
 })().catch((err) => { console.error("FAIL:", (err && err.message) || err); process.exit(1); });

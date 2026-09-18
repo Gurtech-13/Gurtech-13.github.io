@@ -1,9 +1,9 @@
 package scenes
 {
    import §!!$§.§ 6§;
-   import §!]§.§4N§;
-   import §!]§.§9u§;
-   import §!]§.Path;
+   import map.Map;
+   import map.§9u§;
+   import map.Path;
    import §%!Q§.§ !>§;
    import §%!Q§.§ !N§;
    import §%!Q§.§>K§;
@@ -159,10 +159,10 @@ package scenes
                   break;
                }
             }
-            §4N§.§@!A§().§#!T§(§%!G§.graphics,§>!$§,§?m§,false);
+            Map.§@!A§().§#!T§(§%!G§.graphics,§>!$§,§?m§,false);
             break;
          }
-         var _loc1_:Path = §4N§.§@!A§().§;O§(§>K§.§;!4§.pathName);
+         var _loc1_:Path = Map.§@!A§().§;O§(§>K§.§;!4§.pathName);
          var _loc2_:Point = _loc1_.§;3§(§>+§);
          while(true)
          {
@@ -210,7 +210,7 @@ package scenes
                   }
                }
             }
-            var _loc5_:Path = §4N§.§@!A§().§;O§(§>K§.§2s§.pathName);
+            var _loc5_:Path = Map.§@!A§().§;O§(§>K§.§2s§.pathName);
             if(_loc10_)
             {
                _loc5_.draw(_loc4_.graphics,false,true);
@@ -253,7 +253,7 @@ package scenes
                      break loop4;
                   }
                }
-               _loc8_ = §4N§.§@!A§().§;O§(§>K§.§>-§.pathName);
+               _loc8_ = Map.§@!A§().§;O§(§>K§.§>-§.pathName);
                §§push(_loc8_.waypoints);
                §§push(int(_loc8_.waypoints.length));
                if(_loc10_)
