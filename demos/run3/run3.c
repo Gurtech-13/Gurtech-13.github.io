@@ -2451,11 +2451,13 @@ int run3_menu_char_rect(int pres, int *x, int *y, int *w, int *h) {
 
 /* A menu item's box, when the item is drawn as text with a bitmap in front:
    the original sizes the icon to the text's height and puts them side by side,
-   so the button's width is icon + text. The port's font is not the original's,
-   so the width differs by the text's own metrics — the ANCHOR (centred, or
-   40*sx off centre) is the original's, which is what fixes the layout. The
-   metrics themselves come from render.c: it owns the font, and both the drawn
-   text and these boxes read the same two functions. */
+   so the button's width is icon + text. The face is the original's own —
+   Comfortaa Regular, the one its menu text is set in (GUI_2014.md) — but the
+   raster is the port's atlas, so the width is the measured ink rather than
+   Flash's advance sum. The ANCHOR (centred, or 40*sx off centre) is the
+   original's, which is what fixes the layout. The metrics themselves come from
+   render.c: it owns the font, and both the drawn text and these boxes read the
+   same two functions. */
 
 int run3_menu_hover(int mx, int my) {
   int x, y, w, h;

@@ -2243,8 +2243,9 @@ void render_menu(void) {
  * render_menu_text_h is the LINE BOX the layout reserves for a menu label:
  * the original sets its text buttons at design size 100, so the box is that
  * size through k. render_menu_text_w is that same label's width in the port's
- * own font, which is what both the drawn text and run3_menu_rect's hit box
- * measure. There is one copy of each, so they cannot disagree. */
+ * glyphs — the SAME face the 2014 sets its menu text in (Comfortaa Regular,
+ * see GUI_2014.md) — which is what the drawn text and the hit box both measure.
+ * There is one copy of each, so they cannot disagree. */
 int render_menu_text_h(void) {
   return (int)(MENU_TEXT_SIZE * run3_menu_scale() + 0.5);
 }
