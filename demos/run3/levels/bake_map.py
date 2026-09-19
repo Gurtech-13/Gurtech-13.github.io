@@ -1,19 +1,45 @@
 #!/usr/bin/env python3
-"""Bake map background + decorations into assets_data.h for WASM rendering.
+"""Bake the world map's art and coordinates into map_assets.h.
 
-Scales the original Run 3 mapmask and decoration images to fit the WxH canvas
-(1280x720, stretched to cover whole screen, not tiled).
-Also generates the C arrays for tunnel node positions (scaled from the original
-1550x1100 coordinate space to WxH).
+THE COORDINATE SPACE IS THE 2014 BUILD'S OWN, and the placement rule is its
+too (MapMenu.create):
+
+  * ScaledAssets is built as `new §--____-___-§(3000, 2000, true, null)`, so
+    the map's design box is 3000 x 2000 and every COORDINATE is scaled by
+    `k = min(stageW/3000, stageH/2000)` (the `true` is the uniform flag).
+  * `ScaledAssets.§---_--_§()` (the Bitmap loader) sets that Bitmap's scale to
+    TWICE k, so every BITMAP — the MapMask and every decoration — is drawn at
+    2k, i.e. at its native pixel size x 2k.
+  * MapMask.png is placed at `x = (stageW - width)/2`, `y = stageH - height`
+    with width/height its SCALED size (3072k x 2048k), and the content pane
+    sits at that box's top-left + 1: that is design (0, 0).
+
+So this bake stores the map in DESIGN UNITS and lets the renderer apply k,
+which is the only way the rule can hold at every window: k is 0.16 at a 480-wide
+base box and 0.36 at a 1280-wide one.
+
+The vendored orig_map.json holds the v1.13 MapContents.json verbatim, and the
+v1.13's coordinates are the 2014's divided by 2.5 (checked: `explore` starts
+(0,0),(1200,300) in the 2014 and (0,0),(480,120) in the v1.13; the Teapot,
+Snowflakes and DerpRunner images agree to the digit). So every stored coordinate
+is multiplied by MK = 2.5 on the way in.
 """
 from PIL import Image
 import json
 import os
 
-W, H = 1280, 720  # canvas size — 2x 640x360 for higher framebuffer resolution, covers full page
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS_DIR = os.path.join(BASE, "assets")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "map_assets.h")
+
+# the v1.13 coords we vendor are the 2014's / 2.5 (see the module doc)
+MK = 2.5
+
+
+# the 2014's own MapContents.json, extracted from runIII.swf: the decoration
+# positions are ALREADY in the design space, so these are used verbatim.
+DESIGN_CONTENTS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "swf_orig", "map_contents.json")
 
 
 def image_to_rgba(im):
@@ -37,18 +63,13 @@ def write_frame_array(f, name, w, h, data):
 
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
-# Map transform: UNIFORM scale of the original map space so the layout keeps its
-# shape (non-uniform SX/SY would shear it). S=0.82 fits y (-72..660) with room.
-MSX, MSY = 0.82, 0.82
-MOX, MOY = 150, 100
-SX, SY = MSX, MSY  # legacy names used below
 
+def dxy(ox, oy):
+    """Stored (v1.13) map coords -> the 2014's design units, rounded. No
+    offset and one uniform factor: the placement rule is entirely the
+    renderer's (k and the mask box), never a baked screen position."""
+    return (int(round(ox * MK)), int(round(oy * MK)))
 
-def map_sxy(ox, oy):
-    """Original map coords -> screen coords (rounded, always >= 0 here)."""
-    import math
-    return (int(math.floor(ox * MSX + MOX + 0.5)),
-            int(math.floor(oy * MSY + MOY + 0.5)))
 
 total_bytes = 0
 
@@ -58,96 +79,90 @@ with open(OUT, "w") as f:
     f.write("#ifndef MAP_ASSETS_H\n#define MAP_ASSETS_H\n\n")
     f.write("#include <stdint.h>\n\n")
 
-    # ===== MAP BACKGROUND =====
-    # Use map_mapiconflat.png (brown parchment) tiled, then overlay map_mapmask.png (dotted map)
-    flat_path = os.path.join(ASSETS_DIR, "images/map_mapiconflat.png")
+    # ===== MAP MASK (the original's own frame) =====
+    # Drawn at NATIVE size and scaled to 2k at run time (the 2014's bitmap
+    # scale). It is a black frame with an organic inner edge: 91% of it is
+    # transparent, the opaque part is the map's vignette, and it is added ON TOP
+    # of the content container in MapMenu.create — so it crops the map.
     mask_path = os.path.join(ASSETS_DIR, "images/map_mapmask.png")
-
-    canvas = Image.new("RGBA", (W, H), (180, 150, 110, 255))  # fallback brown
-
-    if os.path.exists(flat_path):
-        flat = Image.open(flat_path).convert("RGBA").resize((W, H), Image.LANCZOS)
-        # stretch to cover whole canvas — no tiling
-        canvas = flat
-        print(f"  stretched map_mapiconflat to {W}x{H}")
-
-    if os.path.exists(mask_path):
-        mask = Image.open(mask_path).convert("RGBA")
-        # resize mask to canvas size
-        mask = mask.resize((W, H), Image.LANCZOS)
-        # composite: mask on top of flat background
-        canvas = Image.alpha_composite(canvas, mask)
-        print(f"  overlaid map_mapmask: {W}x{H}")
-
-    w, h, data = image_to_rgba(canvas)
-    write_frame_array(f, "map_bg", w, h, data)
-    f.write(f"#define MAP_BG_W {w}\n")
-    f.write(f"#define MAP_BG_H {h}\n\n")
+    if not os.path.exists(mask_path):
+        raise SystemExit(f"missing {mask_path}")
+    mask = Image.open(mask_path).convert("RGBA")
+    w, h, data = image_to_rgba(mask)
+    write_frame_array(f, "map_mask", w, h, data)
+    f.write(f"#define MAP_MASK_W {w}\n")
+    f.write(f"#define MAP_MASK_H {h}\n\n")
     total_bytes += w * h * 4
-    print(f"  map_bg final: {w}x{h}")
+    print(f"  map_mask: {w}x{h} (drawn at 2k)")
 
     # ===== DECORATION IMAGES =====
-    # sizes doubled for 1280x720 (2x) to keep visual proportion
+    # Native size, name -> (file, design x, design y). The positions are the
+    # ORIGINAL's authored ones, from the 2014 MapContents.json (Planet, Teapot,
+    # Snowflakes, DerpRunner); the four the v1.13 added are that file's numbers
+    # x 2.5. Nothing is hand-placed and nothing is resized: the original draws
+    # each image at its own pixel size x 2k, which is what the renderer does.
+    with open(DESIGN_CONTENTS) as fh:
+        _orig = json.load(fh)
+    _orig_img = _orig.get("images", {})
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "swf_orig", "map_contents_113.json")) as fh:
+            _v113_img = json.load(fh).get("images", {})
+    except FileNotFoundError:
+        _v113_img = {}
+
+    def authored(name):
+        """A decoration's authored design position, or None."""
+        if name in _orig_img:
+            return int(_orig_img[name]["x"]), int(_orig_img[name]["y"])
+        if name in _v113_img:
+            return dxy(_v113_img[name]["x"], _v113_img[name]["y"])
+        return None
+
     DECORATIONS = [
-        ("deco_planet",     "images/map_planet.png",           96, 96),
-        ("deco_teapot",     "images/map_teapot.png",           56, 56),
-        ("deco_wormhole",   "images/map_wormhole.png",         72, 72),
-        ("deco_snowflakes", "images/map_snowflakes.png",       48, 48),
-        ("deco_bridge",     "images/map_bridge.png",            56, 40),
-        ("deco_box",        "images/map_box.png",               40, 40),
-        ("deco_movbox",     "images/map_movableboxicon.png",    32, 32),
-        ("deco_speech",     "images/map_speechbubbles.png",     40, 40),
-        ("deco_infinity",   "images/map_infinity.png",          64, 48),
-        ("deco_battery",    "images/map_battery.png",           40, 40),
-        ("deco_belt0",      "images/map_planetoidbelt0.png",    72, 72),
-        ("deco_belt1",      "images/map_planetoidbelt1.png",    56, 56),
-        ("deco_run3logo",   "images/menu_run3.png",            360, 112),
+        ("deco_planet",     "images/map_planet.png",         "Planet"),
+        ("deco_teapot",     "images/map_teapot.png",         "Teapot"),
+        ("deco_wormhole",   "images/map_wormhole.png",       "Wormhole"),
+        ("deco_snowflakes", "images/map_snowflakes.png",     "Snowflakes"),
+        ("deco_derp",       "images/map_derprunner.png",     "DerpRunner"),
+        ("deco_battery",    "images/map_battery.png",        "Battery"),
+        ("deco_belt0",      "images/map_planetoidbelt0.png", "PlanetoidBelt0"),
+        ("deco_belt1",      "images/map_planetoidbelt1.png", "PlanetoidBelt1"),
     ]
 
     deco_entries = []
-    for dname, drel, dw, dh in DECORATIONS:
+    deco_boxes = []   # design-space footprints, for the map's own extent
+    for dname, drel, src in DECORATIONS:
         dpath = os.path.join(ASSETS_DIR, drel)
         if not os.path.exists(dpath):
             print(f"  {dname}: NOT FOUND")
             continue
+        if authored(src) is None:
+            print(f"  {dname}: no authored position, skipped")
+            continue
         dim = Image.open(dpath).convert("RGBA")
-        dim = dim.resize((dw, dh), Image.LANCZOS)
         w, h, data = image_to_rgba(dim)
         write_frame_array(f, dname, w, h, data)
         f.write(f"#define {dname}_W {w}\n")
         f.write(f"#define {dname}_H {h}\n\n")
         total_bytes += w * h * 4
-        print(f"  {dname}: {w}x{h}")
+        print(f"  {dname}: {w}x{h} at {authored(src)}")
         deco_entries.append(dname)
+        dx, dy = authored(src)
+        deco_boxes.append((dx, dy, dx + w, dy + h))
 
-    # Decoration positions (from story.js MAP_DECOR, scaled to WxH)
-    DECOR_POSITIONS = [
-        ("deco_planet",     1450, 50),
-        ("deco_teapot",     720, 310),
-        ("deco_wormhole",   1180, 390),
-        ("deco_snowflakes", 100, 100),
-        ("deco_bridge",     1100, 230),
-        ("deco_box",        1145, 290),
-        ("deco_movbox",     1130, 240),
-        ("deco_speech",     580, 50),
-        ("deco_infinity",   575, 970),
-        ("deco_battery",    1070, 100),
-        ("deco_belt0",      300, 130),
-        ("deco_belt1",      850, 160),
-    ]
-
-    f.write("/* Decoration struct */\n")
+    f.write("/* Decoration struct: native pixels, design-unit position. */\n")
     f.write("typedef struct {\n")
     f.write("  const uint32_t *pix;\n")
     f.write("  int w, h, x, y;\n")
     f.write("} map_deco_t;\n\n")
 
-    f.write(f"#define MAP_DECO_COUNT {len(DECOR_POSITIONS)}\n\n")
+    f.write(f"#define MAP_DECO_COUNT {len(deco_entries)}\n\n")
 
     f.write("static const map_deco_t map_decorations[] = {\n")
-    for dname, ox, oy in DECOR_POSITIONS:
+    for dname, drel, src in DECORATIONS:
         if dname in deco_entries:
-            cx, cy = map_sxy(ox, oy)
+            cx, cy = authored(src)
             f.write(f"  {{ {dname}, {dname}_W, {dname}_H, {cx}, {cy} }},\n")
     f.write("};\n\n")
 
@@ -245,11 +260,33 @@ with open(OUT, "w") as f:
         assert _cid not in _wp_by_id, f"custom id {_cid} collides with original"
         _wp_by_id[_cid] = [[float(x), float(y)] for x, y in _pts]
 
+    # ===== THE MAP'S OWN DESIGN EXTENT =====
+    # Everything the map draws lies inside this box, so the renderer can derive
+    # the parchment's span and the pan's reach from it instead of a constant
+    # that only matched one window size.
+    # the paths are still in the v1.13 units here, the decorations already in
+    # design units, so convert the waypoints (only) on the way in
+    _wp_design = [dxy(x, y) for pts in _wp_by_id.values() for x, y in pts]
+    _ex0 = min(p[0] for p in _wp_design)
+    _ex1 = max(p[0] for p in _wp_design)
+    _ey0 = min(p[1] for p in _wp_design)
+    _ey1 = max(p[1] for p in _wp_design)
+    for bx0, by0, bx1, by1 in deco_boxes:
+        _ex0 = min(_ex0, bx0); _ex1 = max(_ex1, bx1)
+        _ey0 = min(_ey0, by0); _ey1 = max(_ey1, by1)
+    f.write("/* The map's own design extent (design units): the parchment's world span\n")
+    f.write(" * and the pan's reach derive from it. */\n")
+    f.write(f"#define MAP_DESIGN_MINX {_ex0}\n")
+    f.write(f"#define MAP_DESIGN_MAXX {_ex1}\n")
+    f.write(f"#define MAP_DESIGN_MINY {_ey0}\n")
+    f.write(f"#define MAP_DESIGN_MAXY {_ey1}\n\n")
+    print(f"  design extent x {_ex0}..{_ex1} y {_ey0}..{_ey1}")
+
     f.write("/* Tunnel node data: id, kind(0=name,1=letter), x, y, r, g, b.\n")
-    f.write(" * Node coords = original first waypoints (uniform map transform).\n")
-    f.write(" * Ids 30+ are custom extended tunnels (hand-placed, node = path start);\n")
-    f.write(" * 33/34/35 are the 140-checkpoint main runs, 36-41 their branches,\n")
-    f.write(" * 42-45 the recovered original paths. */\n")
+    f.write(" * Node coords = original first waypoints, in the 2014's design units\n")
+    f.write(" * (the renderer applies k). Ids 30+ are custom extended tunnels\n")
+    f.write(" * (hand-placed, node = path start); 33/34/35 are the 140-checkpoint\n")
+    f.write(" * main runs, 36-41 their branches, 42-45 the recovered original paths. */\n")
     f.write("#define MAP_TUNNEL_COUNT 46\n\n")
 
     f.write("typedef struct {\n")
@@ -260,10 +297,14 @@ with open(OUT, "w") as f:
 
     f.write("static const map_node_t map_nodes[MAP_TUNNEL_COUNT] = {\n")
     for tid, kind, ox, oy, r, g, b in TUNNELS_DATA:
-        # node MUST equal the path's first waypoint (original layout guarantee)
+        # node MUST equal the path's first waypoint (original layout guarantee).
+        # The table's x/y are that waypoint to the integer, so they agree here
+        # to well under the 2.5 design conversion; the node is then taken from
+        # the PATH so the two cannot drift apart again.
         w0 = _wp_by_id[tid][0]
-        assert map_sxy(w0[0], w0[1]) == map_sxy(ox, oy), f"node {tid} != first waypoint"
-        cx, cy = map_sxy(ox, oy)
+        assert abs(w0[0] - ox) <= 0.6 and abs(w0[1] - oy) <= 0.6, \
+            f"node {tid} != first waypoint"
+        cx, cy = dxy(w0[0], w0[1])
         f.write(f"  {{ {cx}, {cy}, {r}, {g}, {b}, {kind} }}, /* {tid} */\n")
     f.write("};\n\n")
 
@@ -273,7 +314,7 @@ with open(OUT, "w") as f:
     for tid, kind, ox, oy, r, g, b in TUNNELS_DATA:
         pts = []
         for wx, wy in _wp_by_id[tid]:
-            cx, cy = map_sxy(wx, wy)
+            cx, cy = dxy(wx, wy)
             pts.append(f"{cx},{cy}")
         f.write(f"static const int16_t map_wp_{tid}[] = {{{','.join(pts)}}};\n")
     f.write("static const int16_t *map_wp[MAP_TUNNEL_COUNT] = {\n")

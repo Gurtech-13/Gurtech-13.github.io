@@ -65,16 +65,27 @@ All in `demos/run3`, three translation units sharing `render_int.h`:
   `a_s → a_{s+1}`.
 - **Authored roll**: `BAKED_ROT` per level, read into `g_rotOff`
   (`run3.c` ~line 355), added to the roll.
-- **Seams**: `rowcross_t` + `ROWXC_ROWS 12` in `render.c`/`run3.h` already
-  blend sides/size/colour across a level boundary over a 12-row seam
-  (`SEAM_SOLID 6` solid rows either side).
+- **Seams**: `rowcross_t` + `TRANSITION_LEN 1050` in `run3.c`/`run3.h` blend
+  sides/size/colour across a level boundary over the transition run, and the
+  same run is the solid band a boundary is crossed on. **It is a world length,
+  not a row count**: the 2014 lays each `TunnelSection`'s `startZ` at the
+  previous one's `endZ + 1050` (`Level.§+M§`, and the instance default `§'!,`
+  is the same number; `noTransitionTiles` is what zeroes it), and each level
+  carries its OWN tile width (`BAKED_TILEW`, loader default 75), so each half
+  of the run is measured in the tile width of the level it lies in — half at
+  each end of every level, i.e. `round(1050 / tile) / 2` rows at that level's
+  head and its tail. The rows before a boundary belong to the outgoing level
+  and the rows after it to the incoming one, so the two levels' runs meet at
+  the boundary and are never measured with each other's tile width.
 - **Test seams**: `run3_rot()`, `run3_rot_at(row)`, `run3_runner_offset()`,
   `run3_runner_rad()`, `run3_runner_pt()`, `run3_stage_cam()`,
   `run3_stage_liftf()`, `run3_stage_sidef()`, `run3_space_visible()`,
   `run3_space_survived()`.
-- **Cutscenes**: a DOM overlay (`#cutview`, `run3.css .cutstage`) with the
-  wasm drawing only the tunnel backdrop; the host drives
-  `run3_cutscene_hold/backdrop/backdrop_end` + `run3_stage_actor/prop/cam`.
+- **Cutscenes**: the wasm composes the whole scene (held tunnel, staged cast
+  and props, speech layer); the DOM overlay (`#cutview`, `run3.css .cutstage`)
+  is only the full-window click target, with no title, progress or Continue
+  button. The host drives `run3_cutscene_hold/backdrop/backdrop_end` +
+  `run3_stage_actor/prop/cam`.
 - **Level load**: `open_level()` sets `G.rot = cam_rot_target()` so there is
   no spin-in; `open_level_continue()` deliberately preserves the roll.
 
@@ -472,7 +483,7 @@ applies the conjugate as the single rotation matrix the original's own
 `QuaternionUtils.rotateVector` uses, so every component of the authored
 orientation lands where the original puts it.
 
-**`STAGE_GAUGE` = a quarter turn about the bore, plus a half turn.** The port's cross-section frame puts side
+**`STAGE_GAUGE` = a quarter turn about the bore, and nothing else.** The port's cross-section frame puts side
 0's midpoint at `-PI/2` (§4.1, `m_s = -PI/2 + TAU*s/n`); the original indexes
 its sides by the angle of the point turned into the LEVEL's own frame —
 `TunnelLayout3D.getIndexNearest` takes `atan2(y, x)` (mirrored: `atan2(y, -x)`)
@@ -487,11 +498,19 @@ which is why the places read correctly while the shot did not. It applies to
 **authored** scenes only: a fallback scene is shot in the port's own frame (the
 level already rolled to the runner's facet), so it takes no gauge.
 
-On top of that quarter turn the frame is rolled a **half turn** about the bore —
-a genuine 180° rotation of the picture, not a mirror — so `STAGE_GAUGE` is
-`PI/2 + PI` and the camera's pan converts as the matching inverse `(x, y) ->
-(-y, x)`. The two must move together: turning the world without turning the
-camera's own place leaves the camera where the scene never put it.
+It is the ONLY cross-section turn in the frame, and the camera's pan converts as
+its matching inverse `(x, y) -> (y, -x)`. The two must move together: turning the
+world without turning the camera's own place leaves the camera where the scene
+never put it.
+
+There used to be a second, **half turn** in the frame — in `STAGE_GAUGE` itself
+and, matching it, on the cast alone (`stage_ring_point` negated its point). The
+two cancelled on the cast and nowhere else, so the cast drew facing the way the
+original does while the tube came out rolled 180° under it: every scene's cast
+read as standing on the wrong wall, in the wrong place relative to the props and
+the tube, with the camera angle itself correct. Both are gone; the tube, the
+cast, the props, the sky and the space layers are now all children of the one
+gauge, as they are children of the original's one scene.
 
 **The camera's pan carries the rig's own offset.** A scene's authored `x`/`y` is
 a place in the original's cross-section, and the original's camera rig sits at
@@ -536,10 +555,9 @@ original.
 of the fallback path, Candy's recovered push-form camera (`endZ - 800`, zb 1, a
 real quaternion), the endZ shot resolving to 800.0 px exactly, the cast's size
 coming from the original's own frame size (and scaling with the shot), a short
-authored shot used as it is, the cross-section quarter turn plus the half-turn
-rollout (side 0 half a turn off the `+x` axis with side 4 a quarter turn UP,
-both radii equal — equal radii are what tell a rollout from a mirror), and the
-roll: a
+authored shot used as it is, the cross-section quarter turn (side 0 on the `+x`
+axis with side 4 a quarter turn DOWN, both radii equal — equal radii are what
+tell a rollout from a mirror), and the roll: a
 pure authored roll must move the cast exactly like a rotation about the bore's
 own screen point (15/30/45/90°, `< 2 px`) and must leave the whole frame the
 identity frame's rigidly-turned likeness.

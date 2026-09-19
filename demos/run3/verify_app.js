@@ -192,11 +192,14 @@ function makeEl() {
     fireWin("keyup", { code });
   }
   function save() { return JSON.parse(store["run3tribute-v3"]); }
+  // A scene has ONE control: the view itself. There is no Continue button and
+  // no title/progress markup (the engine draws the scene and nothing else), so
+  // advancing is a click on the full-window view.
   async function finishScene(budget) {
-    const btn = el("cutbtn");
+    const view = el("cutview");
     for (let i = 0; i < (budget || 60); i++) {
-      if (!el("cutview").classList.contains("on")) return;
-      fire(btn, "click");
+      if (!view.classList.contains("on")) return;
+      fire(view, "click");
       await frames(1);
     }
     if (el("cutview").classList.contains("on")) throw new Error("scene never finished");
@@ -208,10 +211,21 @@ function makeEl() {
   if (els.status.textContent.indexOf("mapped") < 0) throw new Error("did not reach map: " + els.status.textContent);
   console.log("menu -> map OK");
 
-  // tunnel entry plays NO scene anymore (all scenes fire at level end)
-  for (let i = 0; i < 9; i++) key("ArrowRight"); // scroll F node (1503,215) into view
-  await frames(2);
-  click(1233, 215);
+  // tunnel entry plays NO scene anymore (all scenes fire at level end).
+  // ENTER TUNNEL F BY ASKING THE ENGINE WHERE ITS NODE IS DRAWN: the map is
+  // placed by the 2014's own rule (k = min(base/3000, base/2000) with the
+  // cutout centred — see verify_map.js), so a hard-coded pixel only ever
+  // described the retired placement maths. Centre the node, then click the
+  // pixel the map draws it at.
+  {
+    const SPN = wasmExports.run3_scratch();
+    wasmExports.run3_map_center_on(30);          // tunnel F
+    wasmExports.run3_map_node_pos(30, SPN, SPN + 4);
+    const a = new Int32Array(wasmExports.memory.buffer, SPN, 4);
+    const px = wasmExports.run3_map_screen_x(a[0]) + wasmExports.run3_map_scroll_x();
+    const py = wasmExports.run3_map_screen_y(a[1]) + wasmExports.run3_map_scroll_y();
+    click(px, py);
+  }
   await frames(5);
   if (sceneOn()) throw new Error("scene played on tunnel entry");
   console.log("no scene on entry OK");
@@ -254,6 +268,16 @@ function makeEl() {
   }
   if (!opened) throw new Error("mid-gate scene never opened");
   if (!sawGate) throw new Error("scene did not stage on an S_GATE pause");
+  // NOTHING but the scene is on screen: the site chrome stands down while a
+  // cutscene plays, and there is no card markup left in it at all
+  for (const id of ["backbtn", "musicToggle", "sceneBtn", "achBtn", "ver", "status"]) {
+    if (el(id).style.display !== "none") throw new Error("page chrome visible in a scene: " + id);
+  }
+  {
+    const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
+    for (const gone of ["cutbtn", "cuttitle", "cutprog", "cutbubble", "cuttext", "cutbar"])
+      if (html.indexOf(gone) >= 0) throw new Error("retired cutscene markup still in index.html: " + gone);
+  }
   const gateLvl = wasmExports.run3_lvl();
   if (gateLvl !== 3) throw new Error("gate paused on the wrong level: " + gateLvl);
   // the engine is drawing the staged cast into the held frame: clear the
@@ -271,12 +295,16 @@ function makeEl() {
   let castDiff = 0;
   for (let i = 0; i < W3 * H3; i++) if (withCast[i] !== noCast[i]) castDiff++;
   if (castDiff < 100) throw new Error("no staged cast drawn on the gate frame: " + castDiff);
+  // The engine is the only thing that renders the speech now, so the proof the
+  // line is up is the character count it drew (there is no DOM copy).
+  const gateChars = wasmExports.run3_cut_chars();
+  if (gateChars <= 0) throw new Error("gate scene drew no dialogue: " + gateChars);
   console.log(`gate pause OK (lvl ${gateLvl}, ${sawGate} frames in S_GATE,`,
-    `${castDiff} cast pixels); bubble:`,
-    JSON.stringify(el("cuttext").textContent.slice(0, 40)));
+    `${castDiff} cast pixels, ${gateChars} dialogue chars drawn)`);
   await finishScene();
   await frames(10);
   if (el("cutview").classList.contains("on")) throw new Error("mid-gate scene stuck");
+  if (el("backbtn").style.display === "none") throw new Error("page chrome not restored after a scene");
   if (wasmExports.run3_state() === 3) throw new Error("gate never released");
   if (wasmExports.run3_lvl() < 4) throw new Error("gate release did not advance the run");
   if (!save().cuts.m30_3) throw new Error("m30_3 not marked seen");
@@ -294,7 +322,7 @@ function makeEl() {
   }
   if (!ended) throw new Error("tunnel end never reached");
   if (el("cutview").classList.contains("on")) {
-    console.log("end scene opened OK; bubble:", JSON.stringify(el("cuttext").textContent.slice(0, 40)));
+    console.log("end scene opened OK; dialogue chars drawn:", wasmExports.run3_cut_chars());
     await finishScene();
     await frames(3);
   }

@@ -308,6 +308,50 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   const c0 = CAMSHOT.ComingThrough[0];
   if (Math.abs(c0[1] - 2) > 1 || c0[2] < 50 || c0[3] < 1000)
     throw new Error("ComingThrough framing wrong: " + JSON.stringify(c0));
+  /* THE HAND-TRANSCRIBED CAMERAS (custom_cutscenes.js, STORY_CAMERA).
+
+     The bake's regexes miss a scene's rotation whenever the decompiler emits
+     the assignment in a shape they do not know, and a missed rotation is not a
+     missing detail: app.js's camera target then carries no quaternion, i.e. the
+     identity, and the shot is aimed straight down the tunnel's axis — the one
+     angle these scenes never use ("the camera angle should not be parallel to
+     the axis, but it is"). So each hand run must be a WHOLE camera key: an
+     ordered frame and a unit quaternion, never null. */
+  const HAND = sandbox.STORY_CAMERA || {};
+  const handNames = Object.keys(HAND);
+  if (!handNames.length) throw new Error("no hand-transcribed cameras (STORY_CAMERA)");
+  for (const name of handNames) {
+    if (!CUT[name] || !CUT[name].length) throw new Error("hand camera for unknown scene " + name);
+    let last = -1;
+    for (const r of HAND[name]) {
+      if (r.length !== 6) throw new Error("bad hand run in " + name + ": " + JSON.stringify(r));
+      if (!(r[0] > last)) throw new Error(`hand runs out of order in ${name}: ${JSON.stringify(r)}`);
+      last = r[0];
+      if (!Array.isArray(r[4]) || r[4].length !== 4)
+        throw new Error(`hand run without an authored rotation in ${name}: ${JSON.stringify(r)}`);
+      const n = Math.sqrt(r[4][0] ** 2 + r[4][1] ** 2 + r[4][2] ** 2 + r[4][3] ** 2);
+      if (Math.abs(n - 1) > 0.01) throw new Error(`hand quaternion not unit in ${name}: ${n}`);
+      if (!ZBASES.has(r[5])) throw new Error("bad hand camera z base in " + name);
+    }
+  }
+  /* ChangeTheSubject is the scene that proved the point: the bake recovered
+     frames 5-7 but left 0 and 8 with no rotation (and frame 8 with z 0 instead
+     of its authored 1903), so the hand table is what makes the scene's camera
+     turn. And it must WIN over the baked run. */
+  const ctsHand = HAND.ChangeTheSubject;
+  if (!ctsHand || ctsHand.length < 5) throw new Error("ChangeTheSubject hand camera incomplete");
+  const ctsBaked = CAMSHOT.ChangeTheSubject || [];
+  for (const r of ctsBaked) {
+    if (r[0] === 0 || r[0] === 8) {
+      const fix = ctsHand.filter((h) => h[0] === r[0])[0];
+      if (!fix) throw new Error("no hand run to replace the baked frame " + r[0]);
+      if (r[4] !== null) throw new Error(`the bake now recovers ChangeTheSubject frame ${r[0]} — the hand entry may be retired`);
+    }
+  }
+  const cts8 = ctsHand.filter((h) => h[0] === 8)[0];
+  if (!cts8 || cts8[3] !== 1903) throw new Error("ChangeTheSubject frame 8 lost its authored z");
+  console.log(`hand cameras OK (${handNames.length} scene(s), ` +
+              `ChangeTheSubject ${ctsHand.length} keys with rotations the bake missed)`);
   // every BAKED scene with dialogue carries a timeline, and its segments keep
   // the continuous framing the player eases (custom scenes synthesise one;
   // unvoiced scenes fall back to CAMSHOT)
@@ -738,38 +782,53 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     for (let i = 0; i < s.length; i++) m[i] = s.charCodeAt(i) & 0xff;
     m[s.length] = 0;
   };
-  const shotWith = (x, y, text) => {
+  /* The line is wrapped to a scene-like width, the way every baked line is: at
+     the true design scale (k = base/3000) an UNWRAPPED line of this length is
+     some 900 px of text — wider than the 4:3 box it is clamped into — so its
+     own panel would span the box and there would be no side to read. The wrap
+     width is the only thing that makes the question meaningful; the bubble's
+     own size then no longer scales with the window either, which is the point
+     of taking the scale off the base box. */
+  const shotWith = (x, y, text, width) => {
     /* Same title and step counter in both frames, and NO element in the
-       baseline, so the diff is exactly the one bubble. (Turning the overlay
-       off instead folds the port-only chrome into the diff; committing an
-       empty-texted element instead leaves a panel behind that is itself
-       most of the diff.) */
+       baseline, so the diff is the one bubble plus the port-only chrome
+       (which is why the assertion below is a RATIO, not a side count: the
+       title sits top-left and CONTINUE bottom-right in every shot). */
     put(e.run3_cut_title_buf(), "Coming Through");
     e.run3_cut_frame(0, 1, 3, 1);
     e.render_frame();
     const base = shot();
     put(e.run3_cut_text_buf(0), text);
-    e.run3_cut_item(0, 1, x, y, 1.0, -1, -1, -1);
+    e.run3_cut_item(0, 1, x, y, 1.0, width, -1, -1);
     e.run3_cut_frame(1, 1, 3, 1);
     e.render_frame();
     const out = shot();
-    let left = 0, right = 0;
+    let left = 0, right = 0, sx = 0, n = 0;
     for (let yy = 0; yy < H; yy++)
       for (let xx = 0; xx < W; xx++)
-        if (base[yy * W + xx] !== out[yy * W + xx]) (xx < W / 2 ? left++ : right++);
-    return { left, right, chars: e.run3_cut_chars(), px: out };
+        if (base[yy * W + xx] !== out[yy * W + xx]) {
+          (xx < W / 2 ? left++ : right++);
+          sx += xx; n++;
+        }
+    return { left, right, cx: n ? sx / n : 0, chars: e.run3_cut_chars(), px: out };
   };
   const LINE = "The map was blank all along - the stars were the only guide.";
-  const fromLeft = shotWith(-380, -160, LINE);
-  const fromRight = shotWith(380, -160, LINE);
+  const WRAP = 1000;   /* the design-space wrap width of a typical line */
+  const fromLeft = shotWith(-380, -160, LINE, WRAP);
+  const fromRight = shotWith(380, -160, LINE, WRAP);
   if (fromLeft.chars < 40 || fromRight.chars < 40)
     throw new Error(`cutscene bubble drew ${fromLeft.chars}/${fromRight.chars} characters`);
   if (fromLeft.left < 4000 || fromLeft.left < fromLeft.right * 2)
     throw new Error(`left-spoken line painted L=${fromLeft.left} R=${fromLeft.right}`);
   if (fromRight.right < 4000 || fromRight.right < fromRight.left * 2)
     throw new Error(`right-spoken line painted L=${fromRight.right} R=${fromRight.left}`);
+  if (!(fromLeft.cx < W / 2 && fromRight.cx > W / 2))
+    throw new Error(`the bubble does not follow the speaker's side: centres ` +
+                    `${fromLeft.cx.toFixed(0)} (x=-380) and ${fromRight.cx.toFixed(0)} (x=+380) ` +
+                    `about the frame midline ${W / 2}`);
   console.log(`cutscene bubbles OK (x=-380 -> ${fromLeft.left}L/${fromLeft.right}R, ` +
-              `x=+380 -> ${fromRight.left}L/${fromRight.right}R px)`);
+              `x=+380 -> ${fromRight.left}L/${fromRight.right}R px, centres ` +
+              `${fromLeft.cx.toFixed(0)}/${fromRight.cx.toFixed(0)} about ${W / 2})`);
   const before = shot();
   e.run3_cut_show(0, 120, 0, -1, 1, 3, 1);
   e.render_frame();
@@ -875,6 +934,44 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
               `${camUp.y.toFixed(0)}/${camMid.y.toFixed(0)}/${camDown.y.toFixed(0)})`);
   e.run3_stage_cam(0, 0);
 
+  // 6h0. THE AUTHORED ROTATION REACHES THE ENGINE, and it turns the shot.
+  //      A baked timeline's segment carries the camera's POSITION only, so the
+  //      orientation comes from the camera runs (app.js resolves it per frame)
+  //      and is handed over with the position. When that link is missing the
+  //      engine keeps the identity — the shot aimed straight down the tunnel's
+  //      axis, which is the one angle the scenes that turn their camera never
+  //      use. Pin the seam here: the SAME position staged with and without a
+  //      run's rotation must not draw the same picture, and the stored
+  //      quaternion must be the one handed in (the engine normalises it).
+  {
+    const q5 = [0.10873, -0.53924, -0.04305, 0.83389];   /* |q| = 1 */
+    const shotAt = (q) => {
+      e.run3_init(3);
+      e.run3_seek(0, 9);
+      e.run3_cutscene_backdrop(0, 9);
+      e.run3_stage_shot(0, 0, 0);
+      e.run3_stage_camera(2, 106, 0, q[0], q[1], q[2], q[3]);
+      e.render_frame();
+      const p = e.run3_stage_quat();
+      const got = Array.from(new Float64Array(e.memory.buffer, p, 4));
+      return { px: new Uint32Array(e.memory.buffer, e.run3_buffer(), W * H).slice(), q: got };
+    };
+    const ident = shotAt([0, 0, 0, 1]), turned = shotAt(q5);
+    /* 1e-3 and not tighter: the engine normalises what it is handed through the
+       port's own ssqrt approximation (see render.c), so the stored quaternion
+       is the authored one to ~1e-4. */
+    for (let i = 0; i < 4; i++)
+      if (Math.abs(turned.q[i] - q5[i]) > 1e-3)
+        throw new Error(`the authored rotation did not reach the engine: ${JSON.stringify(turned.q)}`);
+    let moved = 0;
+    for (let i = 0; i < ident.px.length; i++) if (ident.px[i] !== turned.px[i]) moved++;
+    if (moved < W * H * 0.25)
+      throw new Error(`a rotation of the staged camera moved only ${moved} px — the shot ` +
+                      `is still parallel to the bore`);
+    console.log(`authored rotation OK (ChangeTheSubject frame 5's quaternion is applied and ` +
+                `repaints ${moved} of ${W * H} px; the identity draws a different shot)`);
+  }
+
   // 6i1. THE STAGED CAST IS THE RUNNER'S OWN SIZE, SEEN FROM ONE TUBE RADIUS.
   //      A cutscene is not a different world scale: the camera's PLACE is
   //      authored, so a character must read against the tunnel exactly as the
@@ -938,10 +1035,13 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
      the same picture), which is why only the authored path needs it.
 
      On top of that quarter turn the frame is rolled a HALF TURN about the
-     bore, so the pair comes out 180 degrees from the description above: side 0
-     to the LEFT, side 4 quarter-turned UP. Both are the same rotation, so the
-     two radii stay equal - the assertion below is what tells a rollout apart
-     from a mirror. */
+     bore: side 0 to the RIGHT, side 4 quarter-turned DOWN. The cast and the
+     tube are placed by the SAME ring point and read the SAME gauge (the cast
+     used to negate its point to match a half turn that also sat in the gauge,
+     which cancelled on the cast alone and left the tube rolled 180 degrees
+     under it). Both measures are rotations of the port's own frame, so the two
+     radii stay equal - the assertion below is what tells a rollout apart from
+     a mirror. */
   const b0 = castBox(1, -800, 0, 1.0, 0.5);      /* side 0's midpoint */
   const b4 = castBox(1, -800, 0, 1.0, 4.5);      /* side 4, a quarter turn on */
   const b8 = castBox(1, -800, 0, 1.0, 8.5);      /* side 8, opposite side 0 */
@@ -958,20 +1058,29 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     const r0 = ringPt(b0, b8), r4 = ringPt(b4, b12);
     const R = Math.hypot(r0.x, r0.y);
     if (typeof b0.cy !== "number") throw new Error("castBox must report the box centre");
-    /* STAGE_GAUGE is that quarter turn PLUS the half turn the scenes are
-       presented with, so the quarter turn shows up as an exact 180-degree
-       rotation of the pair: side 0 sits half a turn from the +x axis (to the
-       LEFT) and side 4 a quarter turn ABOVE it. The two radii still have to
-       match, which is what proves the frame was ROTATED and not mirrored. */
-    if (!(r0.x < -0.5 * R) || !(Math.abs(r0.y) < 0.25 * R))
-      throw new Error(`side 0 is not half a turn from the +x axis (${r0.x.toFixed(0)},${r0.y.toFixed(0)}); the staged view is not a clean 180-degree rollout`);
-    if (!(r4.y < -0.5 * R) || !(Math.abs(r4.x) < 0.25 * R))
-      throw new Error(`side 4 is not a quarter turn ABOVE the axis (${r4.x.toFixed(0)},${r4.y.toFixed(0)}); the staged view lost its quarter turn or came out mirrored`);
+    /* WHERE THE ONE GAUGE LEAVES THE PAIR:
+
+         port's ring        side 0's midpoint is at angle -PI/2, i.e. (0,-R) in
+                            the port's own frame (GridLayout/spacings)
+         STAGE_GAUGE        PI/2 (the port's frame -> the original's frame),
+                            whose map is (x,y) -> (-y,x)
+
+       so side 0 lands on (R, 0), straight along the original's +x (the RIGHT),
+       and side 4 - a quarter turn on from side 0 in the ring - lands a quarter
+       turn BELOW the axis, because the original's view +y runs down the screen.
+       The two radii still have to match, which is what proves the frame was
+       ROTATED and not mirrored. (Read off the drawn frames, not derived twice:
+       the probe's own report is the measurement.) */
+    if (!(r0.x > 0.5 * R) || !(Math.abs(r0.y) < 0.25 * R))
+      throw new Error(`side 0 is not on the original's own +x axis ` +
+                      `(${r0.x.toFixed(0)},${r0.y.toFixed(0)}); the staged view is not the port's frame quarter-turned`);
+    if (!(r4.y > 0.5 * R) || !(Math.abs(r4.x) < 0.25 * R))
+      throw new Error(`side 4 is not a quarter turn BELOW the axis (${r4.x.toFixed(0)},${r4.y.toFixed(0)}); the staged view lost its quarter turn or came out mirrored`);
     if (Math.abs(Math.hypot(r4.x, r4.y) - R) > 0.15 * R)
       throw new Error(`the two sides are not the same radius (${R.toFixed(0)} vs ${Math.hypot(r4.x, r4.y).toFixed(0)})`);
     console.log(`staged cross-section OK (side 0 at (${r0.x.toFixed(0)},${r0.y.toFixed(0)}), ` +
-                `a quarter turn UP to side 4 at (${r4.x.toFixed(0)},${r4.y.toFixed(0)}); ` +
-                `a clean 180-degree rollout, both radii ${R.toFixed(0)}px)`);
+                `a quarter turn DOWN to side 4 at (${r4.x.toFixed(0)},${r4.y.toFixed(0)}); ` +
+                `the port's frame quarter-turned into the original's, both radii ${R.toFixed(0)}px)`);
   }
   if (!(e.run3_cast_ref() > shotApo))
     throw new Error(`cast scale reference ${e.run3_cast_ref().toFixed(2)} is not the runner's own plane (${shotApo.toFixed(2)})`);
@@ -1271,8 +1380,9 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
   e.run3_set_input(0);
 
   // 14. VIEWPORT + DIALOGUE. The render target follows the window shape; the
-  //     composition lives in the largest CENTRED 4:3 box that fits in HALF the
-  //     frame on each axis (the main viewport is half the screen in x and y),
+  //     composition lives in the largest CENTRED 4:3 box that fits in the FULL
+  //     frame (the main viewport spans the window in one axis and is
+  //     letterboxed on the other),
   //     and the speech never leaves that box. FOCAL comes from the BASE, so a
   //     wider window adds world at the sides rather than magnifying or
   //     stretching the picture; a taller one adds world above and below. 4:3 is
@@ -1294,12 +1404,12 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
         throw new Error(`base ${g.bw}x${g.bh} is not 4:3`);
       if (Math.abs(g.bx - (g.W - g.bw) / 2) > 1 || Math.abs(g.by - (g.H - g.bh) / 2) > 1)
         throw new Error(`base is not centred: x0=${g.bx} y0=${g.by} in ${g.W}x${g.H}`);
-      // half the frame on each axis: no more, and no less than the half box
-      if (2 * g.bw > g.W + 1 || 2 * g.bh > g.H + 1)
-        throw new Error(`base ${g.bw}x${g.bh} is bigger than half of ${g.W}x${g.H}`);
-      // largest: it must touch the edge pair of the HALF box it is limited by
-      if (!(g.bw === Math.floor(g.W / 2) || g.bh === Math.floor(g.H / 2)))
-        throw new Error(`base ${g.bw}x${g.bh} is not the LARGEST 4:3 box that fits in half of ${g.W}x${g.H}`);
+      // full frame: it must touch the frame on the axis it is limited by
+      if (g.bw > g.W || g.bh > g.H)
+        throw new Error(`base ${g.bw}x${g.bh} does not fit ${g.W}x${g.H}`);
+      // largest: it must touch the edge pair of the frame it is limited by
+      if (!(g.bw === g.W || g.bh === g.H))
+        throw new Error(`base ${g.bw}x${g.bh} is not the LARGEST 4:3 box that fits in ${g.W}x${g.H}`);
       return g;
     };
     /* FOCAL is derived from the BASE height (the original's 72-degree vertical
@@ -1340,9 +1450,9 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
     e.run3_cutscene_resume();
 
     const w16 = check(1280, 720);
-    /* half the frame on both axes, so the 16:9 case is height-limited: the base
-       is 480x360 (exactly half of the 960x720 a full-frame fit would give) */
-    if (w16.bw !== 480 || w16.bh !== 360 || w16.bx !== 400 || w16.by !== 180)
+    /* the frame is wider than 4:3, so the 16:9 case is height-limited: the base
+       spans the full height (720) and is centred horizontally */
+    if (w16.bw !== 960 || w16.bh !== 720 || w16.bx !== 160 || w16.by !== 0)
       throw new Error(`16:9 base wrong: ${JSON.stringify(w16)}`);
     check(1680, 720);   // ultrawide: the surplus is WIDTH
     check(720, 1000);   // portrait: the surplus is HEIGHT
@@ -1441,8 +1551,8 @@ const bytes = fs.readFileSync(path.join(dir, "run3.wasm"));
                       `left spilled to x ${outL.x0}..${outL.x1} y ${outL.y0}..${outL.y1}, ` +
                       `right to x ${outR.x0}..${outR.x1} y ${outR.y0}..${outR.y1})`);
     e.run3_resize(1280, 720);
-    console.log(`viewport OK (4:3 base ${w16.bw}x${w16.bh} = half the 16:9 frame on ` +
-                `each axis, centred; the ` +
+    console.log(`viewport OK (4:3 base ${w16.bw}x${w16.bh} = the largest 4:3 box that ` +
+                `fits the 16:9 frame, centred; the ` +
                 `axis projects to the centre at every shape (${ax16.x.toFixed(0)},${ax16.y.toFixed(0)} ` +
                 `@1280x720, ${axUW.x.toFixed(0)},${axUW.y.toFixed(0)} @1680x720); the periphery is ` +
                 `extra world, never a stretch; the dialogue stays inside the base)`);

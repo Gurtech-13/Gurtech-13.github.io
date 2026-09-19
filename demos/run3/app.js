@@ -13,7 +13,23 @@
   var MID_CUTS = window.STORY_MID_CUTS || [];
   var STAGE = window.STORY_STAGE || {};
   var TIMELINE = window.STORY_TIMELINE || {};
-  var CAMSHOT = window.STORY_CAMSHOT || {};
+  /* THE AUTHORED CAMERA RUNS, per scene — [frame, x, y, z, rot, zb].
+
+     STORY_CAMSHOT is baked from the decompiled scenes by regexes, and the
+     decompiler's output is not regular enough for that to be trusted: a
+     scene's rotation is missed whenever the shape of the emitted code
+     differs (ChangeTheSubject lost frames 0 and 8 that way, and its z with
+     them). So a scene's camera can be HAND-transcribed into STORY_CAMERA in
+     custom_cutscenes.js — read here, and it WINS over the baked run for the
+     scenes it names. Every scene in that table is read straight off its own
+     `.as` frame functions: `_loc1_.x/.y/.z` for the position and the
+     `axis * sin(A), cos(A)` quaternion for the orientation. */
+  var CAMSHOT = {};
+  (function (baked, hand) {
+    var k;
+    for (k in baked) if (baked.hasOwnProperty(k)) CAMSHOT[k] = baked[k];
+    for (k in hand) if (hand.hasOwnProperty(k)) CAMSHOT[k] = hand[k];
+  })(window.STORY_CAMSHOT || {}, window.STORY_CAMERA || {});
   var ACHIEVEMENTS = window.ACHIEVEMENTS || [];
   var ACH_NEED = window.ACH_PLANETSTOLEN_NEED || 8;
 
@@ -90,7 +106,8 @@
        push  - the ENGINE's own view: staged pos, shot distance, whether an
                authored camera is in force, the camera place the renderer
                actually uses, and the frame's gauge in radians
-               (PI/2 + PI = 4.7124 means the half-turn rollout is live).
+               (PI/2 = 1.5708 is the whole gate: the cross-section quarter turn
+               that puts the port's ring index in the original's frame).
      `run3StageLog(false)` from the console silences it. */
   var STAGE_LOG = true;
   window.run3StageLog = function (v) { STAGE_LOG = !!v; };
@@ -116,8 +133,11 @@
     stage = { segs: segs, cur: [], tgt: [], curP: [], tgtP: [],
               side: 0, lift: 0, tside: 0, tlift: 0,
               auth: null, tauth: null,
-              /* synthesised scenes still take the authored camera runs */
-              cams: baked ? null : (CAMSHOT[name] || null) };
+              /* EVERY scene takes its authored camera from the runs — a baked
+                 timeline's segments carry the position only, so this is the
+                 one place the frame's whole pose (position + rotation) is
+                 read (see camRun) */
+              cams: CAMSHOT[name] || null };
     /* the scene's front cast row: the anchor the bake measures the cast's own
        z from, which the engine needs to resolve the camera's authored z
        against the level (see run3_stage_shot) */
@@ -128,8 +148,9 @@
        segment finds nothing in a baked timeline (segments are {f,cam,actors,
        props}), which silently dropped every authored scene onto the legacy
        side/lift path: the camera went to a corner instead of the bore axis
-       and the frame's gauge stayed 0, so the half-turn presentation never
-       applied. Synthesised scenes keep using CAMSHOT (stage.cams). */
+       and the frame's gauge stayed 0, so the port's cross-section frame was
+       never turned into the original's. Synthesised scenes keep using CAMSHOT
+       (stage.cams). */
     stage.authored = baked ? !!meta.ca : false;
     var stg = STAGE[name] || {};
     slog("[stage] start " + name + " tun=" + (stg.tun != null ? stg.tun : "?") +
@@ -151,14 +172,30 @@
       }
     }
   }
-  /* authored staged camera for a frame, when the scene has no baked timeline */
+  /* THE AUTHORED CAMERA RUN covering dialogue frame `fr`, with its ROTATION
+     CARRIED FORWARD. A scene sets a frame's position and its orientation
+     independently — the decompiled frames that move the camera's Point3D very
+     often leave the quaternion alone — so a run that names no rotation keeps
+     the last one the scene set, and a frame before the first run has none.
+     This is the ONE reader of the staged camera's pose, for baked and
+     synthesised scenes alike. */
+  function camRun(fr) {
+    if (!stage || !stage.cams) return null;
+    var c = stage.cams, cur = null, q = null;
+    for (var i = 0; i < c.length; i++) {
+      if (c[i][0] > fr) break;
+      cur = c[i];
+      if (c[i].length >= 5 && c[i][4]) q = c[i][4];
+    }
+    if (!cur) return null;
+    if (cur.length >= 5 && cur[4]) return cur;
+    return [cur[0], cur[1] || 0, cur[2] || 0, cur[3] || 0, q,
+            (typeof cur[5] === "number" ? cur[5] : 0)];
+  }
+  /* authored staged camera for a frame */
   function stageShot(fr) {
     if (!stage || !stage.cams) return;
-    var cur = null;
-    for (var i = 0; i < stage.cams.length; i++) {
-      if (stage.cams[i][0] <= fr) cur = stage.cams[i];
-      else break;
-    }
+    var cur = camRun(fr);
     if (!cur) return;
     if (cur.length >= 5) {
       /* AUTHORED run [frame, x_px, y_px, z_px, rot, zb]: the whole camera. */
@@ -215,6 +252,15 @@
            dolly); a synthesised scene takes it from CAMSHOT in stageShot */
         if (s.cam.length > 2) stage.tauth.z = s.cam[2] || 0;
         if (s.cam.length > 3) stage.tauth.zb = s.cam[3] || 0;
+        /* THE ROTATION. A baked segment carries the camera's position only
+           (the bake writes [x, y, z, zb]), so the orientation has to be read
+           from the camera runs for this frame. Without this the target's
+           quaternion stayed null — the identity — and every authored shot was
+           aimed straight down the tunnel's axis no matter what the scene
+           turned its camera to ("the camera angle should not be parallel to
+           the axis, but it is"). */
+        var run = camRun(typeof s.f === "number" ? s.f : 0);
+        if (run && run.length >= 5 && run[4]) stage.tauth.q = run[4];
       } else {
         stage.tside = s.cam[0] || 0; stage.tlift = s.cam[1] || 0;
       }
@@ -264,10 +310,10 @@
      Reported from stagePush instead (i.e. before render_frame) this was a trap:
      the gauge and the camera place are written DURING the render, so the log
      showed the PREVIOUS frame's values — a freshly opened scene always printed
-     `gauge=0.0000 camPlace=(0,0)`, which reads exactly like "the flip is off and
+     `gauge=0.0000 camPlace=(0,0)`, which reads exactly like "the gauge is off and
      the camera is not on the axis" even when both are live. Measured directly
-     on a staged frame the same build reports gauge 4.712389 and engPos (0,0,-d),
-     so the logging, not the engine, was lying. */
+     on a staged frame the same build reports gauge 1.570796, so the logging, not
+     the engine, was lying. */
   function stageEngineLog() {
     if (!STAGE_LOG || !exps || !stage) return;
     if (!(stage._n === 1 || stage._n % 30 === 0)) return;
@@ -279,7 +325,7 @@
          " dist=" + (E.run3_stage_dist ? fmtN(E.run3_stage_dist()) : "?") +
          " hasCam=" + (E.run3_stage_has_camera ? E.run3_stage_has_camera() : "?") +
          " camPlace=(" + fmtN(E.run3_cam_x()) + "," + fmtN(E.run3_cam_y()) + ")" +
-         " gauge=" + gv + (gv === "4.7124" ? " [half-turn rollout live]" : ""));
+         " gauge=" + gv + (gv === "0.0000" ? " [no gauge: fallback camera]" : ""));
   }
   /* eased toward the current keyframe; called once per rendered frame */
   function stageTick() {
@@ -534,11 +580,10 @@
       return [{ m: "New hints unlocked! Replay the Coordination Challenges to view them.", small: false, x: 0, y: 120 }];
     return CUT[name] || null;
   }
-  /* The cutscene is composed by the ENGINE, full-window: the held tunnel and
-     the cast render behind, and the engine draws the title, the dialogue and
-     the Continue prompt over them. The DOM nodes below keep only the click
-     target (and their text, which the tests read) — nothing of the card is
-     visible. */
+  /* The cutscene is composed by the ENGINE, full-window: the held tunnel, the
+     staged cast and props render, and the engine lays the speech layer over
+     them. That is the whole overlay — the host contributes a click target and
+     nothing else, so there is no title, no progress and no Continue button. */
   function cutWriteStr(ptr, s) {
     if (!exps || !ptr || !exps.memory) return;
     var n = Math.min(s.length, 500);
@@ -556,12 +601,12 @@
      3000x2000 space, Main.as' own scaler), s its font as a fraction of the 40
      unit default, w its wrap width. `c` is a connection to another line and `t`
      the speaker; both are indices into the SCENE, so they are resolved here to
-     this frame's element index and to a staged cast slot. The DOM copy of the
-     bubble is display:none — the engine owns what is on screen. */
-  function cutFrame(title, group, step, total, scene) {
+     this frame's element index and to a staged cast slot. The engine owns
+     everything on screen: a scene is the tunnel, the cast and props, and the
+     speech — there is no title, progress readout or Continue prompt. */
+  function cutFrame(group, step, total, scene) {
     try {
       if (!exps || !exps.run3_cut_item) return;
-      cutWriteStr(exps.run3_cut_title_buf(), title || "");
       /* a connection's index counts BUBBLES only (a label never joins the
          speech's own list), across the whole scene */
       var bubbles = [];
@@ -593,34 +638,39 @@
   function cutShowOff() {
     try { if (exps && exps.run3_cut_frame) exps.run3_cut_frame(0, 0, 0, 0); } catch (e) {}
   }
+  /* A cutscene fills the screen with the scene alone — the cast, the tunnels,
+     the props and the dialogue. The surrounding SITE chrome (the menu / music /
+     gallery / achievements buttons, the version label, the status line) is not
+     part of the scene, so it stands down while one plays; the 2014's cutscenes
+     have no HUD over them either. Each element's own inline display is
+     remembered and restored, so the host's own visibility rules survive. */
+  var cutChrome = null;
+  function showPageChrome(show) {
+    var ids = ["backbtn", "musicToggle", "sceneBtn", "achBtn", "ver", "status"];
+    if (show) {
+      if (!cutChrome) return;
+      for (var i = 0; i < cutChrome.length; i++) cutChrome[i].e.style.display = cutChrome[i].d;
+      cutChrome = null;
+      return;
+    }
+    if (cutChrome) return;
+    cutChrome = [];
+    for (var j = 0; j < ids.length; j++) {
+      var e = document.getElementById(ids[j]);
+      if (e) { cutChrome.push({ e: e, d: e.style.display }); e.style.display = "none"; }
+    }
+  }
   function showCutscene(name, cb) {
     var lines = cutLines(name);
     if (!lines || !lines.length) { if (cb) cb(); return; }
     var view = document.getElementById("cutview"),
-        stageEl = document.getElementById("cutstage"),
-        bub = document.getElementById("cutbubble"),
-        txt = document.getElementById("cuttext"),
-        prog = document.getElementById("cutprog"),
-        cutbtn = document.getElementById("cutbtn"),
-        cuttitle = document.getElementById("cuttitle");
+        stageEl = document.getElementById("cutstage");
     /* fail open (e.g. stale cached page): never soft-lock the game */
-    if (!view || !stageEl || !bub || !txt || !cutbtn) { if (cb) cb(); return; }
-    if (cuttitle) cuttitle.textContent = cutTitle(name);
+    if (!view || !stageEl) { if (cb) cb(); return; }
     stageOpen(name, typeof lines[0].f === "number" ? lines[0].f : 0, lines);
     var i = 0, done = false;
     view.classList.add("on");
-    function place(L) {
-      var w = stageEl.clientWidth || 800, h = stageEl.clientHeight || 600;
-      var s = Math.min(w / 800, h / 600);
-      var x = (typeof L.x === "number") ? L.x : 0;
-      var y = (typeof L.y === "number") ? L.y : 120;
-      var left = 50 + (x / 2.5) * s / w * 100;
-      var top = 50 + (y / 2.5) * s / h * 100;
-      left = Math.max(24, Math.min(76, left));
-      top = Math.max(18, Math.min(78, top));
-      bub.style.left = left + "%";
-      bub.style.top = top + "%";
-    }
+    showPageChrome(false);
     function next() {
       if (done) return;
       if (i >= lines.length) {
@@ -628,6 +678,7 @@
         view.classList.remove("on");
         view.onclick = null;
         cutShowOff();
+        showPageChrome(true);
         stageClose();
         if (cb) cb();
         return;
@@ -641,12 +692,8 @@
         for (var g = i + 1; g < lines.length && lines[g].f === L.f; g++) group.push(lines[g]);
       }
       i += group.length;
-      txt.textContent = group.map(function (x) { return x.m; }).join("\n");
-      bub.className = "cutbubble" + (L.small ? " small" : "");
-      prog.textContent = (i < lines.length) ? (i + "/" + lines.length) : cutTitle(name);
-      place(L);
-      /* the engine draws the visible scene; the DOM above is inert */
-      cutFrame(cutTitle(name), group, i, lines.length, lines);
+      /* the engine draws everything visible (tunnel, cast, props, speech) */
+      cutFrame(group, i, lines.length, lines);
       /* the cast walks to this line's keyframe (custom scenes key on the
          line index, baked ones on the authored dialogue frame) */
       if (stage) {
@@ -655,7 +702,7 @@
         stageShot(lf);
       }
     }
-    cutbtn.onclick = function (ev) { if (ev) ev.stopPropagation(); next(); };
+    /* the whole view is the advance target: a click, anywhere, moves on */
     view.onclick = function () { next(); };
     next();
   }

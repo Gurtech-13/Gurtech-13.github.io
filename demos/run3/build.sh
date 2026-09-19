@@ -33,7 +33,7 @@ fi
   -Wl,--export=run3_start_inf -Wl,--export=run3_inf_score -Wl,--export=run3_inf_rows \
   -Wl,--export=run3_powercells -Wl,--export=run3_add_cells -Wl,--export=run3_spend_cells \
   -Wl,--export=run3_cutscene_backdrop -Wl,--export=run3_cutscene_backdrop_end -Wl,--export=run3_cutscene_hold -Wl,--export=run3_power \
-  -Wl,--export=run3_cutscene_resume -Wl,--export=run3_level_color0 -Wl,--export=run3_level_color1 -Wl,--export=run3_level_music -Wl,--export=run3_stage_cam -Wl,--export=run3_dislodged -Wl,--export=run3_is_inf \
+  -Wl,--export=run3_cutscene_resume -Wl,--export=run3_level_color0 -Wl,--export=run3_level_color1 -Wl,--export=run3_level_music -Wl,--export=run3_level_tilew -Wl,--export=run3_stage_cam -Wl,--export=run3_dislodged -Wl,--export=run3_is_inf \
   -Wl,--export=run3_stage_liftf -Wl,--export=run3_stage_sidef \
   -Wl,--export=run3_stage_camera -Wl,--export=run3_stage_pos_x -Wl,--export=run3_stage_pos_y -Wl,--export=run3_stage_pos_z -Wl,--export=run3_stage_row_z -Wl,--export=run3_stage_shot -Wl,--export=run3_stage_dist -Wl,--export=run3_cast_ref -Wl,--export=run3_stage_quat -Wl,--export=run3_stage_has_camera \
   -Wl,--export=run3_cut_title_buf -Wl,--export=run3_cut_text_buf -Wl,--export=run3_cut_show \
@@ -47,6 +47,7 @@ fi
   -Wl,--export=run3_map_set_locked -Wl,--export=run3_map_set_cleared \
   -Wl,--export=run3_map_is_locked -Wl,--export=run3_map_is_cleared -Wl,--export=run3_map_is_discovered -Wl,--export=run3_map_sync_state \
   -Wl,--export=run3_map_checkpoint_count -Wl,--export=run3_map_checkpoint_pos -Wl,--export=run3_map_node_pos -Wl,--export=run3_map_hover_level -Wl,--export=run3_map_selected_level -Wl,--export=run3_map_set_hover_level \
+  -Wl,--export=run3_map_scale -Wl,--export=run3_map_origin_x -Wl,--export=run3_map_origin_y -Wl,--export=run3_map_screen_x -Wl,--export=run3_map_screen_y -Wl,--export=run3_map_mask_x -Wl,--export=run3_map_mask_y -Wl,--export=run3_map_mask_w -Wl,--export=run3_map_mask_h -Wl,--export=run3_map_clamp_x -Wl,--export=run3_map_clamp_y \
   -Wl,--export=run3_map_set_best -Wl,--export=run3_map_best \
   -Wl,--export=run3_enter_menu -Wl,--export=run3_menu_click -Wl,--export=run3_menu_hover \
   -Wl,--export=run3_menu_select_char -Wl,--export=run3_menu_char -Wl,--export=run3_set_char_count \

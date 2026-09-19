@@ -283,7 +283,12 @@ void space_outer(void) {
      and the depth grow with its real map distance, so the nearest tunnel is
      the biggest and the ones further along the map recede. Space.as moves the
      Planet and the Wormhole onto the same TunnelSection position, so the
-     planet hangs out past the nearest branch. */
+     planet hangs out past the nearest branch.
+
+     The map distance is in the map's DESIGN UNITS (run3_map_checkpoint_pos),
+     which are 2.5x the old stored MapContents numbers, so the two divisors
+     below are those numbers x 2.5: the spread is a property of the MAP, not
+     of whatever unit the map happens to be baked in. */
   for (int i = 0; i < SPACE_GHOSTS; i++) {
     int t = best[i];
     if (t < 0) continue;
@@ -291,8 +296,8 @@ void space_outer(void) {
     run3_map_checkpoint_pos(t, 0, &nx, &ny);
     double ang = satan2((double)(cy - ny), (double)(nx - cx));
     double md = bestD[i];
-    double off = (1.8 + 2.4 * md / 120.0) * rrad;
-    double wz = 2.6 * view_z + (md / 90.0) * view_z;
+    double off = (1.8 + 2.4 * md / 300.0) * rrad;
+    double wz = 2.6 * view_z + (md / 225.0) * view_z;
     draw_ghost(t, ang, wz, off, sky);
     if (i == 0) draw_planet(ang, wz + 9.0 * view_z, rrad * 3.2, sky);
   }

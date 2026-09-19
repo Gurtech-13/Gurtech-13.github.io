@@ -275,66 +275,24 @@ html, body {
   backdrop-filter: none;
   padding: 0;
 }
-/* the engine draws the title, the dialogue and the Continue prompt now; the
-   DOM keeps only the full-window click target (and the text the tests read) */
-.cuttitle, .cutbubble, .cutbar { display: none; }
+/* the engine draws the whole scene; this is a full-window click target and
+   nothing else — there is no title, bubble, progress bar or button here */
 .cutstage {
   position: relative;
   width: 100vw;
   height: 100vh;
   max-height: none;
   aspect-ratio: auto;
-  /* edge vignette only; the engine paints the scene full-frame behind it */
-  background: linear-gradient(180deg, rgba(2,6,23,.45), rgba(2,6,23,0) 18%, rgba(2,6,23,0) 66%, rgba(2,6,23,.55));
+  /* nothing is painted here: no dimmer, no vignette, no card — the engine
+     fills the frame with the scene and that is all that is on screen */
+  background: none;
   border: none;
   border-radius: 0;
   box-shadow: none;
   overflow: hidden;
 }
 /* the cast is staged INSIDE the tunnel render by the engine (staged-cast
-   slots), so the viewer no longer overlays portrait images */
-.cuttitle {
-  position: absolute; top: 10px; left: 14px;
-  font-family: 'Run3Title', 'Permanent Marker', cursive;
-  font-size: .95rem; letter-spacing: .02em;
-  color: rgba(255,255,255,.75); text-shadow: 0 2px 8px rgba(0,0,0,.8);
-  pointer-events: none;
-}
-.cutbubble {
-  position: absolute;
-  transform: translate(-50%,-50%);
-  max-width: 44%;
-  padding: 10px 14px;
-  box-sizing: border-box;
-  background: rgba(8,12,24,.9);
-  border: 1px solid rgba(125,211,252,.25);
-  border-radius: 12px;
-  box-shadow: 0 6px 24px rgba(0,0,0,.5);
-}
-.cutbubble p {
-  margin: 0; color: #fff;
-  font-size: .92rem; line-height: 1.5;
-}
-.cutbubble.small p {
-  font-size: .78rem; font-style: italic;
-  color: rgba(255,255,255,.75);
-}
-.cutbar {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 10px 14px; box-sizing: border-box;
-  background: linear-gradient(180deg, transparent, rgba(2,6,23,.8));
-}
-.cutbar span {
-  color: rgba(255,255,255,.5); font-size: .75rem;
-}
-.cutbar button {
-  font: inherit; cursor: pointer;
-  background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-  color: #04131d; font-weight: 700;
-  border: none; border-radius: 999px;
-  padding: 8px 22px;
-}
+   slots), so the viewer overlays no images and draws no chrome of its own */
 
 /* ==================== CUTSCENE GALLERY ==================== */
 .scene-grid {

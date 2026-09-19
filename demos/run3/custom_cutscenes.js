@@ -446,6 +446,114 @@
   });
   global.STORY_STAGE = STAGE;
 
+  /* ===== HAND-TRANSCRIBED CUTSCENE CAMERAS =====
+
+     window.STORY_CAMERA: cutscene name -> camera RUNS, in the same shape the
+     bake emits so app.js reads both the same way:
+
+       [frame, x, y, z, [qx, qy, qz, qw], zb]
+
+     x/y/z are the scene's own authored numbers in ORIGINAL PIXELS (x/y the
+     pan/height about the rest pose, z the absolute coordinate along the bore),
+     zb says what z is measured from (0 = a bare literal, as every scene here
+     writes it), and the quaternion is the scene's rotation.
+
+     Why hand-written: the bake recovers these with regexes over the
+     decompiler's output, and that output is not regular — ChangeTheSubject's
+     frames 0 and 8 have no rotation recovered (so the port aimed the camera
+     straight down the tunnel's axis, the one angle the scene never uses) and
+     its frame 8 z came out 0 instead of 1903. Reading the frame functions by
+     hand is the reliable way, and a scene listed here OVERRIDES its baked run.
+
+     HOW TO TRANSCRIBE one scene. Open its `.as` (the readable build is
+     swf_orig/decomp/adobeflash/scripts, the file whose name is the scene's):
+
+       function frameN() {                                    <- frame N
+         var _loc1_:Point3D = tunnel.<cam>.<position>;
+         _loc1_.x = 110; _loc1_.y = 25; _loc1_.z = -61;       <- position
+         var _loc3_ = Math.sin(0.3839724354387525);           <- sin(A)
+         _loc2_.x = -0.362 * _loc3_;
+         _loc2_.y = -0.924 * _loc3_;
+         _loc2_.z = -0.122 * _loc3_;
+         _loc2_.w = Math.cos(0.3839724354387525);             <- cos(A)
+
+     i.e. the quaternion is axis * sin(A) with w = cos(A) — the same half-angle
+     pair the bake builds. A frame that moves only the position keeps the
+     rotation already in force (app.js carries it forward), so a scene needs an
+     entry per frame that CHANGES anything, not one per frame.
+     The other form the scenes use is:
+
+       setPosition(x, y, endZ - 800);
+       QuaternionUtils.setFromEuler(ex, ey, ez, camera.rotation);
+
+     which is a XYZ Euler triple: bake_cutscenes.euler_quat converts one the
+     same way the original does, so a hand entry uses that result. */
+  var CAMERA = global.STORY_CAMERA || {};
+
+  /* ChangeTheSubject — HandY/v1.13 build (adobeflash scripts, §3!b§):
+     the Skater's lost wooden spoon scene. Six camera keys, read off frame0,
+     frame5, frame6, frame7 and frame8 of the scene's own `.as`; every one of
+     them turns the camera off the bore, which is what the shot is: the two
+     characters stand still while the camera swings around the tunnel. */
+  CAMERA.ChangeTheSubject = [
+    /* frame 0: Math.sin(0.3839724354387525), axis (-0.362, -0.924, -0.122) */
+    [0, 110, 25, -61, [-0.13561, -0.34614, -0.0457, 0.92718], 0],
+    /* frame 5: Math.sin(0.5846852994181003), axis (-0.197, -0.977, -0.078) */
+    [5, 171, 29, 7, [-0.10873, -0.53924, -0.04305, 0.83389], 0],
+    /* frame 6: Math.sin(0.8377580409572781), axis (-0.156, -0.972, -0.177) */
+    [6, 323, -48, 189, [-0.11593, -0.72234, -0.13154, 0.66913], 0],
+    /* frame 7: Math.sin(1.0297442586766543), axis (-0.139, -0.984, -0.115) */
+    [7, 866, -265, 778, [-0.11915, -0.84345, -0.09857, 0.51504], 0],
+    /* frame 8: Math.sin(1.1868238913561442), axis (-0.144, -0.986, -0.087) */
+    [8, 1149, -408, 1903, [-0.13351, -0.9142, -0.08066, 0.37461], 0],
+  ];
+
+  /* The rest of the scenes whose rotation the bake never recovered at all
+     (its report says these have NO rotation anywhere, which leaves every one
+     of their frames aimed down the bore). Each entry below is read off the
+     scene's own `frameN()` in the readable build — the same numbers as
+     ChangeTheSubject above, with the axis * sin(A) and w = cos(A) normalised
+     (the original normalises right after assigning, and the engine normalises
+     on receipt anyway).
+
+     ComingThrough is deliberately NOT here: frame0 sets only the position
+     (2, 106, 4129) and no rotation anywhere in the scene, so the identity is
+     what it really authored — its camera IS parallel to the axis. */
+  /* frame0: axis (-0.068, -0.021, -0.997) * sin(1.1519173063162575) */
+  CAMERA.GoldMedal = [
+    [0, 122, -152, 3638, [-0.06215, -0.01919, -0.91116, 0.40689], 0],
+  ];
+  /* frame0: axis (0.333, 0.519, -0.788) * sin(0.8290313946973066) */
+  CAMERA.Inflation = [
+    [0, 144, 137, 137, [0.24543, 0.38252, -0.58079, 0.67537], 0],
+  ];
+  /* frame0: axis (0.01, 0.031, 0.999) * sin(1.2566370614359172) */
+  CAMERA.WormholeInSight = [
+    [0, -22, -33, 4868, [0.00951, 0.0295, 0.95051, 0.30915], 0],
+  ];
+  /* frame0: axis (-0.024, 0.059, -0.998) * sin(PI/2) — a half turn, so w = 0 */
+  CAMERA.Sneaking = [
+    [0, 7, -81, 3760, [-0.024, 0.059, -0.99797, 0], 0],
+  ];
+  /* frame0: axis (-0.155, 0.979, 0.13) * sin(0.39269908169872414) */
+  CAMERA.AngelVsBunny = [
+    [0, -96, 43, 1600, [-0.05932, 0.37466, 0.04975, 0.92392], 0],
+  ];
+  /* SelfAssembly is the odd one: every frame's axis IS the camera's own
+     position vector, i.e. the scene turns the camera about the direction it
+     sits in — the shot is a slow roll as the camera flies in. The angle moves
+     per frame (1.178, 1.143, 1.126, 1.108, 1.108, 1.108), so each frame is a
+     key; the axis values below are the position columns x sin(A), normalised. */
+  CAMERA.SelfAssembly = [
+    [0, 1581, -622, -474, [0.89634, -0.35264, -0.26873, 0.00023], 0],
+    [1, 1651, -566, -338, [0.9287, -0.31838, -0.19013, 0.00026], 0],
+    [2, 1648, -450, -144, [0.96127, -0.26248, -0.08399, 0.00028], 0],
+    [3, 1235, -362, 187, [0.94965, -0.27836, 0.14379, 0.00038], 0],
+    [4, 830, -211, 560, [0.81115, -0.20621, 0.54728, 0.00049], 0],
+    [5, 611, -204, 768, [0.60955, -0.20352, 0.76618, 0.0005], 0],
+  ];
+  global.STORY_CAMERA = CAMERA;
+
   global.STORY_CUT = CUT;
   global.STORY_PATH_CUT = PATH_CUT;
 })(typeof window !== "undefined" ? window : globalThis);

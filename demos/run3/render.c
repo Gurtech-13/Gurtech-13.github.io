@@ -46,22 +46,18 @@ void run3_resize(int w, int h) {
   if (h > MAXH) h = MAXH;
   W = w;
   H = h;
-  /* The composition is the largest 4:3 box that fits in HALF the frame on each
-     axis, i.e. the main viewport covers half the screen in x and y — a quarter
-     of its area — centred, with everything outside it periphery. Height-limited
-     on a wide window (the common case, so the periphery is extra WIDTH at the
-     sides); width-limited on a tall one, where the periphery is extra HEIGHT.
-
-     Because the bound is halved on BOTH axes, this is exactly half the box the
-     full frame would give, so the base keeps presenting the same 72-degree
-     view: the periphery is world the old frame never showed, not a rescale. */
-  int halfW = W / 2, halfH = H / 2;
-  if ((double)halfW * 3.0 / 4.0 <= (double)halfH) {
-    BASE_W = halfW;
-    BASE_H = (halfW * 3) / 4;
+  /* The composition is the largest 4:3 box that fits in the FULL frame: the
+     main viewport spans the whole window in one axis and is letterboxed on the
+     other, centred on both. Height-limited on a wide window (the common case,
+     so the periphery is extra WIDTH at the sides); width-limited on a tall one,
+     where the periphery is extra HEIGHT. Everything outside the box is
+     periphery, and the dialogue bubble lives inside the box. */
+  if ((double)W * 3.0 / 4.0 <= (double)H) {
+    BASE_W = W;
+    BASE_H = (W * 3) / 4;
   } else {
-    BASE_H = halfH;
-    BASE_W = (halfH * 4) / 3;
+    BASE_H = H;
+    BASE_W = (H * 4) / 3;
   }
   BASE_X0 = (W - BASE_W) / 2;
   BASE_Y0 = (H - BASE_H) / 2;
@@ -288,25 +284,35 @@ double run3_stage_gauge(void) { return stage_gauged; }
    which is why the roll only ever pinned the STEPS. A staged frame is viewed
    through the AUTHORED camera, whose position and rotation are absolute in the
    original's frame, so the port has to put its own world into that frame --
-   rotate every world offset by +PI/2 about the bore. It moves the cast and the
-   props around the tube but not the tube, which is why the world places read
-   correctly while the shot did not. */
-#define STAGE_GAUGE (PI / 2.0 + PI)
-   /* The gauge is the cross-section QUARTER turn the original's frame needs
-      (`PI/2`) PLUS a HALF TURN — the roll-out the scenes are presented with.
+   rotate every world offset by +PI/2 about the bore. ONE gauge, applied once,
+   to one scene: the tube, the cast, the props, the sky and the space layers all
+   read the same transform (they are all children of the original's one scene
+   and `Scene3D.project` places every one of them), so no member of the frame may
+   carry a second cross-section turn of its own. */
+#define STAGE_GAUGE (PI / 2.0)
+   /* The gauge is the cross-section QUARTER turn the original's frame needs,
+      and that is all it is.
 
-      The quarter turn is the part that matters for correctness and is pinned
-      by verify_stage.js's cross-section assertion: it makes the port's ring
-      index the original's side index, which is what puts an actor placed by
-      `placeAt(ring, row)` on the wall the scene named.
+      It is pinned by verify_stage.js's cross-section assertion: it makes the
+      port's ring index the original's side index, which is what puts an actor
+      placed by `placeAt(ring, row)` on the wall the scene named. Under it side
+      0's midpoint lands to the RIGHT of the bore axis and side 4 a quarter turn
+      BELOW it, which is the original's own orientation (`GridLayout3D` places
+      side s at `TAU*s/n` from +x, and the original's view +y runs down the
+      screen).
 
-      The half turn on top of it is the scene's own presentation: a frame
-      rolled 180 degrees about the bore, i.e. exactly the 2D rotation of the
-      picture (not a mirror - a mirror would reverse every other turn in the
-      scene too). Its inverse in run3.c is `R(-(PI/2+PI)) = R(PI/2)`, i.e. the
-      camera's pan converts as `(x, y) -> (-y, x)`. The gauge and that inverse
-      have to move TOGETHER: turning the world without turning the camera's
-      own place leaves the camera in a spot the scene never set. */
+      Its inverse in run3.c is `R(-PI/2)`, i.e. the camera's authored pan
+      converts as `(x, y) -> (y, -x)`. The gauge and that inverse have to move
+      TOGETHER: turning the world without turning the camera's own place leaves
+      the camera in a spot the scene never set.
+
+      An EXTRA half turn used to sit here (gauge 3PI/2) with a matching half
+      turn on the cast alone (`stage_ring_point` negated its point). The two
+      cancelled on the cast and nowhere else, so the cast drew in the original's
+      orientation while the TUBE came out rolled 180 degrees under it - the cast
+      read as standing on the wrong wall of every scene. Both are gone: the
+      quarter turn is the whole gauge, and the cast is placed by the level's own
+      ring point like every other child of the scene. */
 /* The inverse of the authored camera's rotation: the quaternion that carries a
    world offset into the camera's view basis, i.e. the CONJUGATE, applied
    exactly as the original applies it (`QuaternionUtils.rotateVector`: a child
@@ -720,24 +726,25 @@ static void ring_point(double ring, double R, double *mx, double *my) {
   *mx = ax + (bx - ax) * f;
   *my = ay + (by - ay) * f;
 }
-/* A STAGED actor's or prop's cross-section point: the level's own ring point
-   turned a HALF TURN ABOUT THE TUNNEL AXIS (`(x, y) -> (-x, -y)`, which is the
-   same rigid turn for every radius, so it is exactly 180 degrees about the
-   bore and not a mirror). Characters and props both come through here, and so
-   does `stage_slot_rect`, the speaker rect the dialogue's tails are aimed at,
-   so the whole cast turns together and a tail stays on the character it names.
+/* A STAGED actor's or prop's cross-section point: the level's own ring point,
+   in the level's own frame. `StageActor.placeAt` puts its point on the wall with
+   `section.layout.getPosition(ring)` x `tileWidth` and nothing else - no extra
+   turn of its own - so the cast and the tile under its feet are the same place
+   in the tube. Characters and props both come through here, and so does
+   `stage_slot_rect`, the speaker rect the dialogue's tails are aimed at, so a
+   tail stays on the character it names.
 
-   The turn is taken on the POINT, not on the sprite: `stage_sprite_roll` is
-   handed the turned point, derives the inward radial direction from it and
-   rotates the sprite into the wall the member now stands on, so its own roll
-   follows the turn instead of staying pinned to the old wall. The prop inset
-   is applied after the turn and only scales toward the axis, which a half turn
-   leaves unchanged. `ring_point` itself is left alone: the hint route reads it
-   directly and is a gameplay overlay, not a member of the cast. */
+   This used to negate the point (a half turn about the bore) to match a half
+   turn that was also in STAGE_GAUGE. That double turn cancelled on the cast and
+   left the tube rolled 180 degrees under it, which is why the cast of a scene
+   drew on the opposite wall from the tile it named. Both halves are gone; the
+   gauge is the one cross-section turn in the frame (see STAGE_GAUGE).
+
+   `stage_sprite_roll` is handed this point and derives the inward radial
+   direction from it, so the sprite stands on the wall it is placed on with its
+   head toward the axis. */
 static void stage_ring_point(double ring, double R, double *mx, double *my) {
   ring_point(ring, R, mx, my);
-  *mx = -*mx;
-  *my = -*my;
 }
 /* The screen rotation of the cast and props in a STAGED frame.
 
@@ -937,8 +944,10 @@ static void fill_tile_tex(double ax, double ay, double bx, double by,
 /* A level's layout (sides n, tiles per side k, tile width, tint) is per level,
    so a checkpoint can change the tube's shape. The engine hands the renderer,
    per row, the owning level's cross-section and the neighbouring level's it
-   leans toward over ROWXC_ROWS rows. Size, side count and colour therefore all
-   morph over a run of solid tiles instead of snapping when the runner crosses.
+   leans toward over the transition run (TRANSITION_LEN world units, half at
+   each end of the level, each half measured in that level's own tile width —
+   see run3.c). Size, side count and colour therefore all morph over a run of
+   solid tiles instead of snapping when the runner crosses.
    Only the shape is interpolated — the tiles are always the owning level's, so
    the mask grid and the drawn grid stay the same. */
 
@@ -1072,9 +1081,10 @@ void render_frame(void) {
        actually passed */
     near_z = stage_cam_z + 50.0;
     stage_gauged = run3_stage_has_camera() ? STAGE_GAUGE : 0.0;
-    /* the space layers are drawn OUTSIDE proj (their own camera model), so
-       they take the frame's roll as a single angle — measured on the bore a
-       little ahead of the camera, where the perspective factor is negligible */
+    /* the space layers have their own camera model (space.c's sproj), but they
+       route a staged frame through this same transform, so they need no roll
+       of their own here — `view_roll` is the GAMEPLAY roll and is unused while
+       a scene is up */
     /* The staged cast is sized ONLY by the authored camera's own perspective
        (render.c's stage_sprite_h, which is the original's own spritesheet size
        quotient), so it grows and shrinks with the shot distance exactly as
@@ -1294,7 +1304,7 @@ typedef struct {
 } cut_item_t;
 static cut_item_t g_cut[RUN3_CUT_MAX];
 static int g_cutN = 0;
-static int g_cutShown = -1, g_cutStep = 0, g_cutTotal = 0, g_cutOn = 0;
+static int g_cutShown = -1, g_cutOn = 0;
 static int g_cutChars = 0; /* characters the overlay actually drew (test seam) */
 char *run3_cut_title_buf(void) { return g_cutTitle; }
 char *run3_cut_text_buf(int32_t i) {
@@ -1317,9 +1327,8 @@ void run3_cut_item(int32_t i, int32_t kind, double x, double y, double size,
 void run3_cut_frame(int32_t n, int32_t step, int32_t total, int32_t on) {
   if (n < 0) n = 0;
   if (n > RUN3_CUT_MAX) n = RUN3_CUT_MAX;
+  (void)step; (void)total;   /* the readout they fed is gone (see draw_cut_overlay) */
   g_cutN = on ? (int)n : 0;
-  g_cutStep = step;
-  g_cutTotal = total;
   g_cutOn = on ? 1 : 0;
 }
 int32_t run3_cut_chars(void) { return g_cutChars; }
@@ -1703,33 +1712,13 @@ static void draw_cut_overlay(void) {
       ln += strlen_p(ln) + 1;
     }
   }
-
-  /* ---- 4. the overlay's own chrome ----
-     The original has neither a title nor a prompt (its scenes advance the level
-     themselves); the port shows them, so they are sized off the same design
-     scale as the dialogue rather than off the window. */
-  double chrome = 1.6 * CUT_DESIGN_SIZE * k / CUT_FONT_EM;
-  int pad = (int)(BASE_W * 0.03);
-  if (g_cutTitle[0])
-    cut_draw_text((int)bl + pad, (int)bt + (int)(BASE_H * 0.04), g_cutTitle,
-                  rgb(150, 185, 235), chrome);
-  int barY = (int)bb - (int)(BASE_H * 0.05) - (int)(chrome * 26.0);
-  if (g_cutTotal > 0) {
-    char buf[8];
-    int n = g_cutStep, m = g_cutTotal, o = 0;
-    if (n > 99) n = 99;
-    if (m > 99) m = 99;
-    buf[o++] = (char)('0' + n / 10);
-    buf[o++] = (char)('0' + n % 10);
-    buf[o++] = '/';
-    buf[o++] = (char)('0' + m / 10);
-    buf[o++] = (char)('0' + m % 10);
-    buf[o] = 0;
-    cut_draw_text((int)bl + pad, barY, buf, rgb(170, 178, 195), chrome);
-  }
-  const char *cont = "CONTINUE >";
-  cut_draw_text((int)br - pad - cut_text_w(cont, chrome), barY, cont,
-                rgb(150, 185, 235), chrome);
+  /* ---- 4. NOTHING ELSE ----
+     A cutscene is the held tunnel, the staged cast and props, and the speech
+     layer above them — nothing more. The 2014 has no title, no progress
+     readout and no Continue prompt (its scenes advance the level themselves),
+     so the port draws none either: there is no chrome on this overlay. The
+     title buffer and the frame's step/total stay in the API because the host
+     still hands them over, but they are never rendered. */
 }
 /* tiny strlen for the wrap tables (the wasm build has no libc) */
 static int strlen_p(const char *s) {
@@ -1741,74 +1730,264 @@ static int strlen_p(const char *s) {
 /* ==================== MAP RENDERING ==================== */
 #include "levels/map_assets.h"
 
-/* Draw a filled circle */
-/* map background: fully procedural old parchment (no baked texture).
-   Warm paper base with subtle fibre grain plus black/brown age spots, all in
-   2D world space so it scrolls 1:1 with the dots in both axes.
-   screen_x = world_x + scrollX, screen_y = world_y + scrollY. */
-#define MAP_WORLD_MINX -800
-#define MAP_WORLD_W 7600
-#define MAP_WORLD_MINY -500
-#define MAP_WORLD_H 1800
-static int map_floor4(int v) { return v >= 0 ? v >> 2 : -(((-v) + 3) >> 2); }
-static void render_map_bg(int scrollX, int scrollY) {
-  /* paper base with a soft world-vertical tone so the 2D pan reads */
-  for (int y = 0; y < H; y++) {
-    int yworld = y - scrollY;
-    double t = (double)(yworld - MAP_WORLD_MINY) / (double)(MAP_WORLD_H - 1);
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-    uint32_t row = mixc(rgb(201,181,130), rgb(213,195,145), t);
-    int ycell = map_floor4(yworld);
-    int x = 0;
-    while (x < W) {
-      int xcell = map_floor4(x - scrollX);
-      int xn = (xcell + 1) * 4 + scrollX; /* first screen x of next grain cell */
-      if (xn <= x) xn = x + 1;
-      if (xn > W) xn = W;
-      /* subtle fibre grain: one hash per 4px cell */
-      uint32_t h = h32(((uint32_t)xcell * 7349u) ^ ((uint32_t)ycell * 9119u) ^ 0x9A7Cu);
-      int d = (int)(h % 13u) - 6; /* -6..+6 */
-      int rr = (int)((row >> 16) & 0xff) + d;
-      int gg = (int)((row >> 8) & 0xff) + d;
-      int bb = (int)(row & 0xff) + (d * 3) / 4;
-      if (rr < 0) rr = 0; if (rr > 255) rr = 255;
-      if (gg < 0) gg = 0; if (gg > 255) gg = 255;
-      if (bb < 0) bb = 0; if (bb > 255) bb = 255;
-      uint32_t c = 0xFF000000u | ((uint32_t)rr << 16) | ((uint32_t)gg << 8) | (uint32_t)bb;
-      for (int xx = x; xx < xn; xx++) fb[(uint32_t)y * W + (uint32_t)xx] = c;
-      x = xn;
-    }
+/* ---- THE MAP'S OWN PLACEMENT: the 2014 build's rule, verbatim ----
+
+   `MapMenu.create()` builds the scaler the map is authored against:
+
+     new §--____-___-§(3000, 2000, true, null);
+
+   and haxeutils.display.ScaledAssets turns that into
+
+     scaleX = stageW / 3000 ; scaleY = stageH / 2000 ;   then, uniform, both
+     become min(scaleX, scaleY)                                 (§-_-_-_-_..)
+
+   so every COORDINATE in MapContents is scaled by `k = min(W/3000, H/2000)`.
+   Two more lines of the same class decide the ART:
+
+     §-__-_--_-___§() { scaleX *= 2; scaleY *= 2; }       (the ctor's tail)
+     §---_--_§(name) { bitmap.scaleX = scaleX; scaleY = scaleY; }
+
+   so a BITMAP is drawn at TWICE k — the map's own art is authored at half the
+   coordinate space's resolution.
+
+   And MapMenu places it (with `.width` the SCALED width, so 1536*2k):
+
+     mask.x = (stageWidth - mask.width) / 2;   mask.y = stageHeight - mask.height;
+     content.x = mask.x + 1;                   content.y = mask.y + 1;
+
+   i.e. the mask is drawn at 2k, centred horizontally and BOTTOM-aligned in the
+   original, and the content pane's origin is its top-left + 1. That origin IS
+   design (0, 0).
+
+   THE PORT CENTRES THE MAP ON BOTH AXES instead of bottom-aligning it, and it
+   draws the cutout ONCE, at one uniform scale, over BLACK — never tiled and
+   never stretched: the mask is the map's own cutout (a black frame with a
+   transparent window), everything outside it is black, and the pane's origin is
+   still the cutout's top-left + 1.
+
+   The port's stage for all of this is the BASE BOX — the centred 4:3 main
+   viewport (see run3_resize) — so the map occupies the main viewport and
+   nothing else, at every window size. Everything below is derived from
+   BASE_W/BASE_H and cached until the next resize; the coordinates in
+   map_assets.h are the 2014's own DESIGN UNITS. */
+#define MAP_DESIGN_W 3000.0
+#define MAP_DESIGN_H 2000.0
+static double map_k = 0.0;      /* design units -> pixels */
+static int map_ox = 0, map_oy = 0;   /* design (0,0) in the frame, unscrolled */
+static int map_mx = 0, map_my = 0;   /* the mask's own top-left, unscrolled */
+static int map_mw = 0, map_mh = 0;   /* the mask's drawn size (2k x 1536/1024) */
+static int map_placed_w = -1, map_placed_h = -1;
+
+static int rnd_to_int(double v) { return v >= 0.0 ? (int)(v + 0.5) : -(int)(0.5 - v); }
+
+static void map_place(void) {
+  if (map_placed_w == BASE_W && map_placed_h == BASE_H) return;
+  map_placed_w = BASE_W; map_placed_h = BASE_H;
+  double a = (double)BASE_W / MAP_DESIGN_W;
+  double b = (double)BASE_H / MAP_DESIGN_H;
+  map_k = a < b ? a : b;                       /* the uniform scale */
+  double mw = (double)MAP_MASK_W * 2.0 * map_k;
+  double mh = (double)MAP_MASK_H * 2.0 * map_k;
+  map_mw = rnd_to_int(mw);
+  map_mh = rnd_to_int(mh);
+  /* centred on BOTH axes: the map cutout sits in the middle of the main
+     viewport, with the black around it on every side */
+  map_mx = BASE_X0 + rnd_to_int(((double)BASE_W - mw) * 0.5);
+  map_my = BASE_Y0 + rnd_to_int(((double)BASE_H - mh) * 0.5);
+  map_ox = map_mx + 1;
+  map_oy = map_my + 1;
+}
+/* the seam run3.c's pan/pick and the suites use: design -> screen px (the
+   scroll is NOT included; both callers add it, so the two can never disagree
+   about where a dot is) */
+double run3_map_scale(void) { map_place(); return map_k; }
+int run3_map_origin_x(void) { map_place(); return map_ox; }
+int run3_map_origin_y(void) { map_place(); return map_oy; }
+int run3_map_screen_x(int dx) { map_place(); return map_ox + rnd_to_int((double)dx * map_k); }
+int run3_map_screen_y(int dy) { map_place(); return map_oy + rnd_to_int((double)dy * map_k); }
+int run3_map_mask_x(void) { map_place(); return map_mx; }
+int run3_map_mask_y(void) { map_place(); return map_my; }
+int run3_map_mask_w(void) { map_place(); return map_mw; }
+int run3_map_mask_h(void) { map_place(); return map_mh; }
+
+/* ---- CLIPPING ----
+   The original puts the content in a scroll pane exactly the size of the mask
+   minus its frame, so the map is cropped to the viewport and the mask's black
+   border covers the pane's edge. The port clips the content to the BASE BOX
+   (its main viewport) and blits the mask — at 2k, its opaque frame included —
+   over it, which is the same composition. Only the map's own content goes
+   through these wrappers; the world renderer is untouched. */
+static int mcx0 = 0, mcy0 = 0, mcx1 = -1, mcy1 = -1;
+static void m_set_clip(int x0, int y0, int x1, int y1) {
+  mcx0 = x0; mcy0 = y0; mcx1 = x1; mcy1 = y1;
+}
+static void m_rect(int x, int y, int w, int h, uint32_t c) {
+  int x0 = x < mcx0 ? mcx0 : x, y0 = y < mcy0 ? mcy0 : y;
+  int x1 = x + w; if (x1 > mcx1 + 1) x1 = mcx1 + 1;
+  int y1 = y + h; if (y1 > mcy1 + 1) y1 = mcy1 + 1;
+  if (x1 <= x0 || y1 <= y0) return;
+  fill_rect(x0, y0, x1 - x0, y1 - y0, c);
+}
+static void m_disc(int cx, int cy, int r, uint32_t c) {
+  if (r < 1) r = 1;
+  for (int dy = -r; dy <= r; dy++) {
+    int y = cy + dy;
+    if (y < mcy0 || y > mcy1) continue;
+    int dxmax = (int)ssqrt((double)(r * r - dy * dy));
+    int x0 = cx - dxmax, x1 = cx + dxmax;
+    if (x0 < mcx0) x0 = mcx0;
+    if (x1 > mcx1) x1 = mcx1;
+    if (x1 < x0) continue;
+    m_rect(x0, y, x1 - x0 + 1, 1, c);
   }
-  /* black/brown spots and speckles in 2D world space */
-  for (int i = 0; i < 620; i++) {
-    uint32_t h = h32(0x51ECu ^ (uint32_t)(i * 2246822519u));
-    int wx = MAP_WORLD_MINX + (int)(h % (uint32_t)MAP_WORLD_W);
-    int sx = wx + scrollX;
-    if (sx < -3 || sx >= W + 3) continue;
-    int wy = MAP_WORLD_MINY + (int)((h >> 9) % (uint32_t)MAP_WORLD_H);
-    int sy = wy + scrollY;
-    if (sy < -3 || sy >= H + 3) continue;
-    if (((h >> 4) & 15u) == 0) {
-      /* occasional bigger black spot */
-      int r = 2 + (int)((h >> 12) & 3u); /* 2..5 */
-      fill_circle(sx, sy, r, rgb(38,26,14));
-      fill_circle(sx, sy, r > 2 ? r - 2 : 1, rgb(24,16,8));
-    } else {
-      int sz = 1 + (int)((h >> 5) & 1u);
-      int dk = 70 + (int)((h >> 16) & 50u);
-      uint32_t c = ((h >> 7) & 1u) ? rgb(30,20,10) : rgb(dk, dk - 22, dk - 45);
-      fill_rect(sx, sy, sz, sz, c);
+}
+static void m_ring(int cx, int cy, int r, uint32_t c) {
+  for (int a = 0; a < 360; a++) {
+    double rad = (double)a * PI / 180.0;
+    int x = cx + (int)(scos(rad) * (double)r);
+    int y = cy - (int)(ssin(rad) * (double)r);
+    if (x < mcx0 || x > mcx1 || y < mcy0 || y > mcy1) continue;
+    fb[(uint32_t)y * W + (uint32_t)x] = c;
+  }
+}
+/* clip a segment to the viewport (parametric/Liang-Barsky) then draw it */
+static void m_line(double x0, double y0, double x1, double y1, uint32_t c) {
+  double dx = x1 - x0, dy = y1 - y0;
+  double t0 = 0.0, t1 = 1.0;
+  double p[4] = { -dx, dx, -dy, dy };
+  double q[4] = { x0 - (double)mcx0, (double)mcx1 - x0,
+                  y0 - (double)mcy0, (double)mcy1 - y0 };
+  for (int i = 0; i < 4; i++) {
+    if (p[i] == 0.0) { if (q[i] < 0.0) return; continue; }
+    double t = q[i] / p[i];
+    if (p[i] < 0.0) { if (t > t1) return; if (t > t0) t0 = t; }
+    else { if (t < t0) return; if (t < t1) t1 = t; }
+  }
+  if (t1 < t0) return;
+  draw_line((int)(x0 + dx * t0), (int)(y0 + dy * t0),
+            (int)(x0 + dx * t1), (int)(y0 + dy * t1), c);
+}
+/* scaled, alpha-blended blit clipped to the viewport */
+static void m_blit(int dx, int dy, int dw, int dh,
+                   const uint32_t *pix, int sw, int sh, double alpha) {
+  if (dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0 || !pix) return;
+  int x0 = dx > mcx0 ? dx : mcx0, x1 = dx + dw - 1; if (x1 > mcx1) x1 = mcx1;
+  int y0 = dy > mcy0 ? dy : mcy0, y1 = dy + dh - 1; if (y1 > mcy1) y1 = mcy1;
+  if (x1 < x0 || y1 < y0) return;
+  for (int y = y0; y <= y1; y++) {
+    int sy = ((y - dy) * sh) / dh; if (sy >= sh) sy = sh - 1;
+    for (int x = x0; x <= x1; x++) {
+      int sx = ((x - dx) * sw) / dw; if (sx >= sw) sx = sw - 1;
+      uint32_t src = pix[sy * sw + sx];
+      unsigned int sa = src >> 24;
+      if (sa < 10) continue;
+      double a = (double)sa / 255.0 * alpha; if (a > 1.0) a = 1.0;
+      uint32_t dst = fb[(uint32_t)y * W + (uint32_t)x];
+      int dr = (int)((dst >> 16) & 0xff), dg = (int)((dst >> 8) & 0xff), db = (int)(dst & 0xff);
+      int sr = (int)((src >> 16) & 0xff), sg = (int)((src >> 8) & 0xff), sb = (int)(src & 0xff);
+      fb[(uint32_t)y * W + (uint32_t)x] = 0xFF000000u |
+        ((uint32_t)(int)(dr + (sr - dr) * a) << 16) |
+        ((uint32_t)(int)(dg + (sg - dg) * a) << 8) |
+        (uint32_t)(int)(db + (sb - db) * a);
     }
   }
 }
 
+/* THE MAP SCREEN'S BACKDROP IS BLACK.
+   The 2014's map is its pane and nothing else — the sheet (below) is exactly
+   the size of the mask's window, MapMask blacks out everything around it, and
+   the rest of the screen is empty. So the port clears the WHOLE frame to black
+   first and draws the map over it, once each, at one uniform scale: nothing is
+   tiled to fill the frame and nothing is stretched to fit it. */
+static void render_map_black(void) {
+  for (int y = 0; y < H; y++) {
+    uint32_t *row = &fb[(uint32_t)y * (uint32_t)W];
+    for (int x = 0; x < W; x++) row[x] = 0xFF000000u;
+  }
+  m_set_clip(0, 0, W - 1, H - 1);
+}
+
+/* THE MAP'S OWN SHEET — the 2014's backdrop for the map's pane, verbatim.
+   `§-_--_-__-_-§` (package com.player03.run3.menu.map) is the Bitmap the pane
+   is backed with: a BitmapData of the PANE's size filled with `colours[1]`,
+   and over it a RADIAL gradient of
+
+     colours = [12364668, 13154184]  = 0xBCAB7C -> 0xC8B788
+     alphas  = [1, 1]      ratios = [0, 1]
+
+   drawn in a box made by createGradientBox(w * 1.5, h * 1.5, 0, w * 0.8,
+   h * 1.2) on a w x h pane, whose ellipse has radii (0.75w, 0.75h) about
+   (1.55w, 1.95h). That centre is past the pane's bottom-right corner on BOTH
+   axes and the radii are three quarters of it, so EVERY point of the pane is
+   outside the ellipse and SpreadMethod.PAD holds the last stop: the sheet
+   reads as colours[1] = 0xC8B788 throughout, which is what is painted here.
+   The rect is generated at exactly the pane's own size — the sheet is never
+   tiled and never stretched, and the pane is the only place it is drawn. */
+#define MAP_PAPER 0xFFC8B788u /* OPAQUE: the framebuffer is 0xAARRGGBB and the
+   sheet is written raw, so a bare 0xC8B788 lands as alpha 0 and the pane
+   reads as the black behind it - which is what "the map background is
+   defunct" was. The 2014's colour is the RGB triple 0xC8B788; only the alpha
+   byte is the port's. */
+
+/* the map's own design extents, from the bake: the content's world span and
+   the pan's reach are derived from them (a bigger map can always be reached) */
+static int map_world_left(void) { return run3_map_screen_x(MAP_DESIGN_MINX); }
+static int map_world_right(void) { return run3_map_screen_x(MAP_DESIGN_MAXX); }
+static int map_world_top(void) { return run3_map_screen_y(MAP_DESIGN_MINY); }
+static int map_world_bottom(void) { return run3_map_screen_y(MAP_DESIGN_MAXY); }
+/* the pan's own reach, in pixels (run3.c's clamp): symmetric, and never less
+   than the offset a point needs to be brought to the viewport's centre */
+int run3_map_clamp_x(void) {
+  map_place();
+  int a = BASE_X0 - map_world_right();       /* right edge -> viewport left */
+  int b = BASE_X0 + BASE_W - map_world_left();
+  int lim = a < 0 ? -a : a;
+  int bb = b < 0 ? -b : b;
+  if (bb > lim) lim = bb;
+  return lim + 64;
+}
+int run3_map_clamp_y(void) {
+  map_place();
+  int a = BASE_Y0 - map_world_bottom();
+  int b = BASE_Y0 + BASE_H - map_world_top();
+  int lim = a < 0 ? -a : a;
+  int bb = b < 0 ? -b : b;
+  if (bb > lim) lim = bb;
+  return lim + 64;
+}
+
 /* draw the Run 3 world map on the canvas — free 2D pan, black circles/lines,
-   discovered only, name on hover */
+   discovered only, name on hover. The original's own map art (the decoration
+   images at their authored places, and MapMask over the whole thing) is drawn
+   with it, so the map reads as the game's. */
 void render_map(void) {
   int scroll = run3_map_scroll_x();
   int scrollY = run3_map_scroll_y();
-  render_map_bg(scroll, scrollY);
+  map_place();
+  render_map_black();
+  /* THE PANE: the cutout's own rect pulled in by 1, which is where the original
+     puts it (`pane.x = mask.x + 1; pane.y = mask.y + 1`, sized mask.width - 2 by
+     mask.height - 2). It carries the sheet, and the content is clipped to it —
+     so the map is exactly the cutout's window and the rest of the screen is the
+     black that MapMask and render_map_black left there. */
+  int paneX = map_mx + 1, paneY = map_my + 1;
+  int paneW = map_mw - 2, paneH = map_mh - 2;
+  m_set_clip(paneX, paneY, paneX + paneW - 1, paneY + paneH - 1);
+  m_rect(paneX, paneY, paneW, paneH, MAP_PAPER);
+
+  /* the original's map art, at its authored design places (top-left anchored,
+     native size at 2k — ScaledAssets' bitmap scale) */
+  for (int i = 0; i < MAP_DECO_COUNT; i++) {
+    const map_deco_t *d = &map_decorations[i];
+    int dx = run3_map_screen_x(d->x) + scroll;
+    int dy = run3_map_screen_y(d->y) + scrollY;
+    int dw = rnd_to_int((double)d->w * 2.0 * run3_map_scale());
+    int dh = rnd_to_int((double)d->h * 2.0 * run3_map_scale());
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    if (dx > mcx1 || dx + dw < mcx0 || dy > mcy1 || dy + dh < mcy0) continue;
+    m_blit(dx, dy, dw, dh, d->pix, d->w, d->h, 1.0);
+  }
 
   /* draw each discovered tunnel's ORIGINAL drawn curve, both axes pan */
   for (int i = 0; i < MAP_TUNNEL_COUNT; i++) {
@@ -1817,12 +1996,12 @@ void render_map(void) {
     if (n < 2) continue;
     const int16_t *w = map_wp[i];
     for (int s = 0; s + 1 < n; s++) {
-      int ax = w[2 * s] + scroll, ay = w[2 * s + 1] + scrollY;
-      int bx = w[2 * s + 2] + scroll, by = w[2 * s + 3] + scrollY;
-      if ((ax < -30 && bx < -30) || (ax >= W+30 && bx >= W+30)) continue;
-      if ((ay < -30 && by < -30) || (ay >= H+30 && by >= H+30)) continue;
+      int ax = run3_map_screen_x(w[2 * s]) + scroll, ay = run3_map_screen_y(w[2 * s + 1]) + scrollY;
+      int bx = run3_map_screen_x(w[2 * s + 2]) + scroll, by = run3_map_screen_y(w[2 * s + 3]) + scrollY;
+      if ((ax < mcx0 - 30 && bx < mcx0 - 30) || (ax > mcx1 + 30 && bx > mcx1 + 30)) continue;
+      if ((ay < mcy0 - 30 && by < mcy0 - 30) || (ay > mcy1 + 30 && by > mcy1 + 30)) continue;
       if (ax == bx && ay == by) continue;
-      draw_line(ax, ay, bx, by, rgb(0,0,0));
+      m_line(ax, ay, bx, by, rgb(0,0,0));
     }
   }
 
@@ -1842,46 +2021,46 @@ void render_map(void) {
       int r = (j == 0) ? r_first : r_rest;
       int cx, cy;
       run3_map_checkpoint_pos(i, j, &cx, &cy);
-      cx += scroll;
-      cy += scrollY;
-      if (cx < -12 || cx >= W + 12 || cy < -12 || cy >= H + 12) continue;
-      fill_circle(cx, cy, r, rgb(0,0,0));
-      stroke_circle(cx, cy, r + 1, rgb(90,90,90));
+      cx = run3_map_screen_x(cx) + scroll;
+      cy = run3_map_screen_y(cy) + scrollY;
+      if (cx < mcx0 - 12 || cx > mcx1 + 12 || cy < mcy0 - 12 || cy > mcy1 + 12) continue;
+      m_disc(cx, cy, r, rgb(0,0,0));
+      m_ring(cx, cy, r + 1, rgb(90,90,90));
       if (i == sel && j == selLvl) {
-        stroke_circle(cx, cy, r + 4, rgb(255, 215, 80));
+        m_ring(cx, cy, r + 4, rgb(255, 215, 80));
       } else if (i == hov && j == hovLvl) {
-        stroke_circle(cx, cy, r + 4, rgb(255,255,255));
+        m_ring(cx, cy, r + 4, rgb(255,255,255));
       }
     }
   }
 
-  /* draw nodes — only discovered, black circles, horizontal scroll */
+  /* draw nodes — only discovered, black circles, both axes panned */
   // (sel/hov already fetched above)
   for (int i = 0; i < MAP_TUNNEL_COUNT; i++) {
     if (!run3_map_is_discovered(i)) continue;
     const map_node_t *n = &map_nodes[i];
-    int nx = n->x + scroll;
-    int ny = n->y + scrollY;
-    if (nx < -30 || nx >= W + 30) continue;
-    if (ny < -30 || ny >= H + 30) continue;
+    int nx = run3_map_screen_x(n->x) + scroll;
+    int ny = run3_map_screen_y(n->y) + scrollY;
+    if (nx < mcx0 - 30 || nx > mcx1 + 30) continue;
+    if (ny < mcy0 - 30 || ny > mcy1 + 30) continue;
     int cleared = run3_map_is_cleared(i);
     // black fill, white outline for visibility, gold dot if cleared
     if (i == sel) {
-      fill_circle(nx, ny, 22, rgb(0,0,0));
-      stroke_circle(nx, ny, 26, rgb(255,255,255));
-      stroke_circle(nx, ny, 22, rgb(0,0,0));
-      if (cleared) fill_circle(nx, ny, 6, rgb(255,215,80));
+      m_disc(nx, ny, 22, rgb(0,0,0));
+      m_ring(nx, ny, 26, rgb(255,255,255));
+      m_ring(nx, ny, 22, rgb(0,0,0));
+      if (cleared) m_disc(nx, ny, 6, rgb(255,215,80));
     } else if (i == hov) {
-      fill_circle(nx, ny, 18, rgb(0,0,0));
-      stroke_circle(nx, ny, 22, rgb(255,255,255));
-      stroke_circle(nx, ny, 18, rgb(0,0,0));
-      if (cleared) fill_circle(nx, ny, 6, rgb(255,215,80));
+      m_disc(nx, ny, 18, rgb(0,0,0));
+      m_ring(nx, ny, 22, rgb(255,255,255));
+      m_ring(nx, ny, 18, rgb(0,0,0));
+      if (cleared) m_disc(nx, ny, 6, rgb(255,215,80));
     } else {
-      fill_circle(nx, ny, 14, rgb(0,0,0));
-      stroke_circle(nx, ny, 16, rgb(40,40,40));
+      m_disc(nx, ny, 14, rgb(0,0,0));
+      m_ring(nx, ny, 16, rgb(40,40,40));
       // thin white rim for black on dark
-      stroke_circle(nx, ny, 15, rgb(80,80,80));
-      if (cleared) fill_circle(nx, ny, 4, rgb(255,215,80));
+      m_ring(nx, ny, 15, rgb(80,80,80));
+      if (cleared) m_disc(nx, ny, 4, rgb(255,215,80));
     }
   }
 
@@ -1903,30 +2082,44 @@ void render_map(void) {
       for (int k = nd - 1; k >= 0 && p < 38; k--) buf[p++] = digits[k];
       buf[p] = '\0';
       run3_map_checkpoint_pos(hov, hovLvl, &hx, &hy);
-      hx += scroll;
-      hy += scrollY;
+      hx = run3_map_screen_x(hx) + scroll;
+      hy = run3_map_screen_y(hy) + scrollY;
     } else {
       buf[p] = '\0';
       const map_node_t *hn = &map_nodes[hov];
-      hx = hn->x + scroll;
-      hy = hn->y + scrollY;
+      hx = run3_map_screen_x(hn->x) + scroll;
+      hy = run3_map_screen_y(hn->y) + scrollY;
     }
     int tw = text_width(buf, scale);
     int tx = hx - tw/2;
     int ty = hy - 32;
-    if (tx < 4) tx = 4;
-    if (tx + tw >= W-4) tx = W - 4 - tw;
-    if (ty < 4) ty = hy + 28;
+    if (tx < mcx0 + 4) tx = mcx0 + 4;
+    if (tx + tw >= mcx1 - 4) tx = mcx1 - 4 - tw;
+    if (ty < mcy0 + 4) ty = hy + 28;
     fill_rect(tx-6, ty-4, tw+12, 26, rgb(0,0,0));
     stroke_rect(tx-6, ty-4, tw+12, 26, rgb(80,80,80));
     draw_text(tx, ty, buf, rgb(255,255,255), scale);
   }
 
-  /* header — dark ink on parchment */
-  draw_text_centered(18, "WORLD MAP", rgb(48,32,16), 0.55);
+  /* THE MAP CUTOUT over all of it, at 2k — the original's own MapMask. It is a
+     black frame with a transparent window (91% of it is fully transparent), so
+     it is what crops the content AND what blacks out everything outside the
+     map: the marks outside the window disappear under its black while the
+     frame's own halo stays part of the screen. Drawn once, at ONE uniform
+     scale (2k on both axes — map_mw/map_mh come from that same scale), never
+     tiled and never stretched, and over everything else so nothing can paint
+     outside the map. */
+  m_blit(map_mx, map_my, map_mw, map_mh, map_mask, MAP_MASK_W, MAP_MASK_H, 1.0);
+
+  /* header — light ink on the black, inside the main viewport */
+  {
+    const char *title = "WORLD MAP";
+    int tws = text_width(title, 0.55);
+    draw_text(BASE_X0 + (BASE_W - tws) / 2, BASE_Y0 + 12, title, rgb(226,216,196), 0.55);
+  }
   const char *hint = "Drag to pan  |  Click discovered tunnel  |  Arrow keys pan";
   int hw = text_width(hint, 0.32);
-  draw_text((W - hw)/2, 48, hint, rgb(96,72,46), 0.32);
+  draw_text(BASE_X0 + (BASE_W - hw)/2, BASE_Y0 + 44, hint, rgb(132,132,132), 0.32);
   if (scroll != 0 || scrollY != 0) {
     /* bottom-right "X: 1234  Y: -56" world offset readout */
     char sbuf[32];
@@ -1948,7 +2141,7 @@ void render_map(void) {
     if (w2 / 10 || idx > 9) sbuf[++idx]='0'+((w2/10)%10);
     sbuf[++idx]='0'+(w2%10);
     sbuf[++idx]='\0';
-    draw_text(W - 170, H - 28, sbuf, rgb(96,72,46), 0.30);
+    draw_text(BASE_X0 + BASE_W - 170, BASE_Y0 + BASE_H - 28, sbuf, rgb(132,132,132), 0.30);
   }
 }
 

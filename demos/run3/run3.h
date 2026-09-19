@@ -8,12 +8,12 @@
 
 /* ==================== THE VIEWPORT AND ITS 4:3 BASE ====================
  * The render target follows the WINDOW (run3_resize), and the composition lives
- * in a 4:3 BASE box CENTRED on both axes that takes up HALF the frame in x and
- * y (a quarter of its area): it is the largest 4:3 rectangle that fits in
- * half-width by half-height, so the main viewport is half the screen and every
- * pixel outside it is PERIPHERY showing additional world. 4:3 because that is
- * the original's own stage (800x600, which the authored dialogue coordinates
- * are in).
+ * in a 4:3 BASE box CENTRED on both axes that spans the FULL frame on one axis
+ * and is letterboxed on the other: it is the largest 4:3 rectangle that fits
+ * the window, so the main viewport fills the screen in the limiting direction
+ * and every pixel outside it is PERIPHERY showing additional world. 4:3 because that is
+ * the original's own stage (its 800x600 view, and 4:3 is the ratio the
+ * 3000x2000 design space the authored dialogue is measured in scales onto).
  *
  * Never stretched: FOCAL is derived from the BASE height, so the base box
  * always presents the same framing at the same scale, and a wider window simply
@@ -28,7 +28,7 @@
 #define MAXW 2560         /* framebuffer capacity: the widest viewport supported */
 #define MAXH 1440
 extern int W, H;          /* the viewport (framebuffer) this frame, in pixels */
-extern int BASE_W, BASE_H;/* the centred 4:3 base: half the frame on both axes */
+extern int BASE_W, BASE_H;/* the centred 4:3 base: the largest that fits the frame */
 extern int BASE_X0, BASE_Y0; /* that box's top-left corner in the frame */
 extern int CX, CY;        /* the BASE box's centre: the projection centre and
                              the tunnel axis' vanishing point. Centred on both
@@ -240,8 +240,8 @@ void run3_enter_map(void);
 void run3_enter_menu(void);
 void run3_map_click(int mx, int my);  /* canvas coords -> selects tunnel */
 int  run3_map_hover(int mx, int my);  /* returns tunnel id under cursor, -1 */
-int  run3_map_scroll_x(void);          /* current horizontal pan (world x) */
-int  run3_map_scroll_y(void);          /* current vertical pan (world y) */
+int  run3_map_scroll_x(void);          /* current horizontal pan (screen px) */
+int  run3_map_scroll_y(void);          /* current vertical pan (screen px) */
 void run3_map_scroll_xy(int dx, int dy); /* pan the map in 2D (drag/wheel/keys) */
 void run3_map_scroll(int dx);          /* horizontal-only pan (legacy alias) */
 void run3_map_scroll_delta(int dx);    /* alias */
@@ -257,10 +257,37 @@ int  run3_map_is_locked(int tun);
 int  run3_map_is_cleared(int tun);
 int  run3_map_is_discovered(int tun);  /* 1 if unlocked or cleared */
 void run3_map_sync_state(int tun, int locked, int cleared); /* bulk helper */
+/* ---- THE MAP'S PLACEMENT (render.c, from the 2014 build's own rule) ----
+   MapMenu.create scales the map with `ScaledAssets(3000, 2000, true)` and
+   loads every bitmap at TWICE that scale, so
+     k          = min(BASE_W/3000, BASE_H/2000)   (design units -> pixels)
+     bitmaps    = native size x 2k
+     MapMask    = 1536x1024 native at 2k — the map's CUTOUT (a black frame
+                  with a transparent window) — with the content's design (0,0)
+                  at its top-left + 1.
+   where the original bottom-aligns that cutout in its own stage, the port
+   CENTRES it on both axes in the base box, and the screen behind and around it
+   is BLACK: everything outside the cutout is black, and the cutout itself is
+   drawn once, at one uniform scale — never tiled, never stretched.
+   The coordinates baked into map_assets.h are the 2014's DESIGN UNITS (2.5 x
+   the stored v1.13 MapContents numbers), so every reader goes through
+   run3_map_screen_x/y and then adds the pan. The pan's clamp is derived from
+   the design extent so a bigger map can never outrun it. */
+double run3_map_scale(void);          /* k: design units -> pixels */
+int run3_map_origin_x(void);          /* design (0,0) in the frame, no scroll */
+int run3_map_origin_y(void);
+int run3_map_screen_x(int dx);        /* design x -> screen px, no scroll */
+int run3_map_screen_y(int dy);
+int run3_map_mask_x(void);            /* the mask's own rect, no scroll */
+int run3_map_mask_y(void);
+int run3_map_mask_w(void);
+int run3_map_mask_h(void);
+int run3_map_clamp_x(void);           /* the pan's reach, in px (symmetric) */
+int run3_map_clamp_y(void);
 /* checkpoints: each tunnel is a continuous run of levels, each on the map */
 int  run3_map_checkpoint_count(int tun);          /* levels in tunnel */
-void run3_map_checkpoint_pos(int tun, int lvl, int *x, int *y); /* base coords, no scroll */
-void run3_map_node_pos(int tun, int *x, int *y);              /* tunnel node (path start) */
+void run3_map_checkpoint_pos(int tun, int lvl, int *x, int *y); /* DESIGN units, no scroll */
+void run3_map_node_pos(int tun, int *x, int *y);              /* tunnel node, DESIGN units */
 int  run3_map_hover_level(int mx, int my);        /* checkpoint lvl under cursor, -1 = node/none */
 int  run3_map_selected_level(void);               /* selected checkpoint lvl, -1 = node/none */
 void run3_map_set_best(int tun, int best);        /* furthest cleared count (unlocks dots) */
@@ -321,11 +348,12 @@ void run3_stage_cam(double side, double lift);         /* staged camera POSITION
  *
  * The host writes each element's NUL-terminated text, sets its attributes, then
  * commits the frame; the engine draws the panels, the bands and the arrows.
- * There is no DOM dialog card on screen.
+ * A scene is the tunnel, the cast and props, and the speech: there is no DOM
+ * card, no title, no progress readout and no Continue prompt on screen.
  */
 #define RUN3_CUT_MAX 10      /* speech elements in one frame */
 #define RUN3_CUT_TEXT 300    /* bytes per element's text */
-char *run3_cut_title_buf(void);                                 /* 96 bytes */
+char *run3_cut_title_buf(void);       /* 96 bytes; accepted, never drawn */
 char *run3_cut_text_buf(int32_t i);                             /* element i */
 void  run3_cut_item(int32_t i, int32_t kind, double x, double y, double size,
                     double width, int32_t conn, int32_t tail);
@@ -389,6 +417,7 @@ double run3_power(void);                                  /* light level 0..1 */
 uint32_t run3_level_color0(void);                         /* tile tint, 0 = theme */
 uint32_t run3_level_color1(void);                         /* accent tint, 0 = theme */
 int32_t run3_level_music(void);                           /* music id, 0 = tunnel */
+double run3_level_tilew(int32_t lvl);                     /* a level's own tile width */
 /* Per-row tube cross-section (engine -> renderer).
 
    A level's layout can change at a checkpoint: sides, tiles per side, tile
@@ -396,13 +425,17 @@ int32_t run3_level_music(void);                           /* music id, 0 = tunne
    current level made every row ahead snap to the new cross-section the instant
    they crossed a boundary, which reads as a teleport. Instead each row carries
    the cross-section of the level that owns it, blended toward the neighbouring
-   level over a run of ROWXC_ROWS rows centred on the boundary, so size, side
-   count and colour all morph slowly. t is the blend toward the neighbour
-   (0 = pure own, 0..0.5 = approaching the boundary from either side). */
-#define ROWXC_ROWS 12
-/* rows of ordinary, unbroken tile either side of a level boundary: 12 either
-   way is the 8-16 tile run a transition happens over */
-#define SEAM_SOLID (ROWXC_ROWS / 2)
+   level over the transition run, so size, side count and colour all morph
+   slowly. t is the blend toward the neighbour (0 = pure own, 0..0.5 =
+   approaching the boundary from either side).
+
+   The run is TRANSITION_LEN world units (run3.c), the 2014's own 1050 - it
+   lays each TunnelSection's startZ at the previous one's endZ + that, and is
+   what `noTransitionTiles` zeroes. It is NOT a row count: each level carries
+   its own tile width, so each half of the run is measured in the tile width
+   of the level it lies in (the pre-boundary half in the outgoing level's, the
+   post-boundary half in the incoming level's). The same run is the band of
+   ordinary, unbroken tile a boundary is crossed on. */
 #define ROWXC_MAX 96
 #define ROWXC_COLS (MAXN * MAXK)
 typedef struct {

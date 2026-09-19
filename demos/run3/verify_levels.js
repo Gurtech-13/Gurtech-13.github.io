@@ -74,16 +74,22 @@ const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
   // and last level of every extended tunnel (rows are absolute, so offset by
   // the level's start row).
   //
-  // The first and last 6 rows of a level are engine-forced solid (the
-  // transition band the cross-sections morph over: see SEAM_SOLID), so they are
-  // excluded here — otherwise this measures the transition, not the authored
-  // level.
-  const SEAM = 6;
+  // The rows either side of a level boundary are engine-forced solid (the
+  // transition band the cross-sections morph over), so they are excluded here
+  // — otherwise this measures the transition, not the authored level. The band
+  // is TRANSITION_LEN (1050, the 2014's own) world units, half of it either
+  // side of the boundary and each half measured in the tile width of the level
+  // it lies in, so this reads the same per-level tile width the engine does.
+  const TRANSITION_LEN = 1050;
+  const transRows = (lvl) =>
+    Math.max(1, Math.round(TRANSITION_LEN / e.run3_level_tilew(lvl)));
+  const halfRows = (lvl) => Math.floor(transRows(lvl) / 2);
   const voidOf = (tun, lvl) => {
     e.run3_seek(tun, lvl);
     const n = e.run3_sides(), k = e.run3_lanes();
     const rows = Math.min(200, e.run3_level_rows() | 0);
     const base = e.run3_row();
+    const SEAM = Math.min(halfRows(lvl), rows >> 1);
     let voidN = 0, tot = 0;
     for (let r = SEAM; r < rows - SEAM; r++)
       for (let s = 0; s < n; s++) for (let l = 0; l < k; l++) {
@@ -106,23 +112,28 @@ const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
   // id-0 main layer has 172 holes, 8 of them in rows 0-3 which the engine
   // always keeps solid (spawn area) -> 164 visible holes. Row 10 is a
   // full-ring gap in the original (a jump), row 9 fully solid.
-  // The level's last 6 rows are the transition band to the next level, which
-  // the engine forces solid (SEAM_SOLID). That band carried 40 of the
+  // The level's last rows are the transition band to the next level, which the
+  // engine forces solid: half of 1050 world units at this level's own tile
+  // width (both levels here are 75, so 7 rows). That band carried 6 of the
   // original's holes, so the exact-match count runs over the authored rows
-  // (0..47) and the band is checked separately below and in the seam pass.
+  // before it and the band is checked separately below and in the seam pass.
   e.run3_seek(0, 0);
   const r0 = Math.round(e.run3_level_rows());
   if (r0 !== 54) throw new Error("primary rows " + r0);
+  const band = halfRows(1); // this level's tail: the NEXT level's own half
+  const authored = 54 - band;
   let holes = 0, seamSolid = 0;
   for (let r = 0; r < 54; r++)
     for (let s = 0; s < 4; s++) for (let l = 0; l < 4; l++) {
       const solid = e.run3_tile(s, r, l);
-      if (r < 48) holes += solid ? 0 : 1;
+      if (r < authored) holes += solid ? 0 : 1;
       else seamSolid += solid ? 1 : 0;
     }
-  console.log(`primary lvl0 holes=${holes} (want 124 in the authored rows)`);
-  if (holes !== 124) throw new Error("hole mismatch: " + holes);
-  if (seamSolid !== 6 * 16) throw new Error(`transition band not solid: ${seamSolid}/96`);
+  console.log(`primary lvl0 holes=${holes} over rows 0..${authored - 1}` +
+    ` (want 118), transition band ${band} rows`);
+  if (holes !== 118) throw new Error("hole mismatch: " + holes);
+  if (seamSolid !== band * 16)
+    throw new Error(`transition band not solid: ${seamSolid}/${band * 16}`);
   let row9 = 0;
   for (let s = 0; s < 4; s++) for (let l = 0; l < 4; l++) row9 += e.run3_tile(s, 9, l);
   if (row9 !== 16) throw new Error("row9 should be solid");
@@ -192,33 +203,58 @@ const EXTENDED = [23, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
 
   // A level boundary changes the tube's cross-section, and the runner has to
   // cross that on a solid run of ordinary tiles: no holes and no crumbling
-  // tiles for 6 rows either side of every boundary, in every tunnel. This is
-  // the 12-tile band the shapes morph over, so the transition can never ask
-  // the runner to jump a gap that only exists because two layouts met.
+  // tiles in the transition band the shapes morph over, in every tunnel. That
+  // band is half of 1050 world units at each end of EVERY level, measured in
+  // that level's own tile width, so the transition can never ask the runner to
+  // jump a gap that only exists because two layouts met.
+  //
+  // The check is per level, because a level can be shorter than its own run
+  // (Wormhole H's level 7 is a single row): a level only guarantees its OWN
+  // rows, and the run spilling into the next level there is the next level's
+  // band, measured in the next level's tile width. Clamping to each level's own
+  // rows is what keeps this honest.
+  // Note a level's terrain runs past its FINISH row (run3_level_rows is the
+  // finish row, not the authored row count - see run3.c's compute_rows), and
+  // the tail band sits at the end of the AUTHORED rows, so the authored count
+  // comes from where the next level starts.
   let seamTiles = 0, seamHoles = 0, seamCrumb = 0, boundaries = 0;
   const tunCount = e.run3_tunnel_count();
   for (let tun = 0; tun < tunCount; tun++) {
     e.run3_init(7);
     e.run3_seek(tun, 0);
     const lvls = e.run3_tunnel_levels();
-    for (let lvl = 1; lvl < lvls; lvl++) {
+    const info = [];
+    for (let lvl = 0; lvl < lvls; lvl++) {
       e.run3_init(7);
-      e.run3_seek(tun, lvl - 1);
-      const prevHead = Math.round(e.run3_rowf());
-      const prevRows = Math.round(e.run3_level_rows());
       e.run3_seek(tun, lvl);
-      const head = Math.round(e.run3_rowf());
-      if (prevHead + prevRows !== head) throw new Error(
-        `tun${tun} lvl${lvl}: rows do not meet (${prevHead}+${prevRows} != ${head})`);
-      boundaries++;
-      const n = e.run3_sides(), k = e.run3_lanes();
-      for (let r = head - 6; r < head + 6; r++)
-        for (let s = 0; s < n; s++)
-          for (let l = 0; l < k; l++) {
-            seamTiles++;
-            if (!e.run3_tile(s, r, l)) seamHoles++;
-            if (e.run3_tile_tex(s, r, l) !== 0) seamCrumb++;
-          }
+      info.push({
+        head: Math.round(e.run3_rowf()),
+        rows: Math.round(e.run3_level_rows()),
+        n: e.run3_sides(), k: e.run3_lanes(),
+      });
+    }
+    for (let lvl = 0; lvl < lvls; lvl++) {
+      const A = info[lvl];
+      const authored = lvl + 1 < lvls ? info[lvl + 1].head - A.head : 0;
+      const own = Math.min(halfRows(lvl), authored);
+      e.run3_init(7);
+      e.run3_seek(tun, lvl);
+      // a tunnel's first level has no boundary before it (the engine applies no
+      // head band there), and its last has none after it
+      const bands = [];
+      if (lvl > 0) bands.push({ from: A.head, to: A.head + own });
+      if (authored > 0) bands.push({ from: A.head + authored - own, to: A.head + authored });
+      for (const band of bands)
+        for (let r = band.from; r < band.to; r++)
+          for (let s = 0; s < A.n; s++)
+            for (let l = 0; l < A.k; l++) {
+              seamTiles++;
+              if (!e.run3_tile(s, r, l)) seamHoles++;
+              if (e.run3_tile_tex(s, r, l) !== 0) seamCrumb++;
+            }
+      if (lvl > 0) boundaries++;
+      if (lvl > 0 && info[lvl - 1].head + info[lvl - 1].rows !== A.head)
+        throw new Error(`tun${tun} lvl${lvl}: rows do not meet`);
     }
   }
   if (boundaries < 50) throw new Error(`only ${boundaries} boundaries found`);

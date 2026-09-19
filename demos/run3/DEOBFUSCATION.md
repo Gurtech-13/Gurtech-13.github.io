@@ -122,15 +122,21 @@ checkpoint where the scene fires, with the tunnel it unlocks
 
 **Cutscenes are composed by the engine** — a scene has no popup card: the held
 tunnel and the staged cast render full-window exactly as gameplay does, and
-`run3_cut_show` draws the dialogue bubble, the scene title and the Continue
-prompt over them. The bubble is anchored on the line's **own** authored x/y
-(dialog units on the original 800x600 stage, `x/2.5` = px, clamped to the box
-the retired DOM bubble used: 24..76% across, 18..78% down) and wraps the text to
-its own width, so a line spoken from the left wall reads on the left — a
-centred full-width band read every line as if it came from the middle of the
-tunnel. The host keeps only input, timing and audio; the `#cutview` /
-`.cutstage` DOM nodes survive as the click target (and as the text the suites
-read), with no card styling.
+`run3_cut_show` draws the whole speech layer — bubble panels with their
+connections, speaker tails and labels. That is the entire overlay: a scene is
+the tunnel, the cast and props, and the speech — there is **no title, no
+progress readout and no Continue prompt**, exactly as the 2014 has none. Every
+authored number is in the original's **3000x2000 design
+space** (`Main.as` builds its `ScaledAssets` scaler as `(3000, 2000, true)`), so
+the port maps it by the same UNIFORM scale `k = min(BASE_W/3000, BASE_H/2000)`:
+bubbles, panel padding, connections and tails are the original's constants
+verbatim (widths 12/40, bulge 13, anchors 0.435, tail capped at 150 and
+shortened to 0.8 of the gap), so a line spoken from the left wall reads on the
+left. A tail points at its speaker's projected screen rect, which is why the
+host hands over a whole authored *frame*: a connection or tail only ever points
+inside its own frame. The host keeps only input, timing and audio; the
+`#cutview` / `.cutstage` DOM nodes survive as the click target — and nothing
+else: no card, no markup, no chrome.
 
 **Per-frame staging** — `STORY_TIMELINE` holds, per dialogue frame, the camera
 and every actor's `ring` (tiles around the tube) and `z` (rows ahead of the
@@ -228,9 +234,15 @@ axis (`TunnelLayout3D.getIndexNearest` indexes a side by `atan2(y, x)` of the
 point turned into the level's own frame and rounds it by `TAU/n`), so at the
 authoring's own identity rotation every scene came out 90° round the bore — the
 cast's world places read correctly (they move with the level) while the shot did
-not. It applies to AUTHORED scenes only: a fallback scene is shot in the port's
-own frame (the level already rolled to the runner's facet), so it takes no
-gauge. The authored rotation is applied as ONE quaternion turn (the original's
+not. That quarter turn is the WHOLE gauge and it is applied ONCE, to one scene:
+the cast is placed by the level's own ring point (`StageActor.placeAt` puts its
+point on the wall with `layout.getPosition(ring) * tileWidth` and no turn of its
+own), so the tube and the cast cannot disagree about which wall a ring names. A
+half turn used to sit in the gauge AND, cancelling it, on the cast alone; the two
+cancelled on the cast and nowhere else, so the tube drew rolled 180° under a
+correctly-oriented cast. It applies to AUTHORED scenes only: a fallback scene is
+shot in the port's own frame (the level already rolled to the runner's facet), so
+it takes no gauge. The authored rotation is applied as ONE quaternion turn (the original's
 `QuaternionUtils.rotateVector(conj(q), offset)`), never as a pitch/yaw/roll
 chain: the bake builds the quaternions as `Rx*Ry*Rz`, so reading their Euler
 components back by name and applying each about a different axis turned a

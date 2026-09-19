@@ -408,6 +408,10 @@ double run3_tunnel_tile(int tun) {
   if (bi >= 0 && BAKED_TILEW[bi] > 0) return (double)BAKED_TILEW[bi];
   return DEFAULT_TILEW;
 }
+/* Exported for the verify suite: the transition bands are measured in the tile
+   width of the level they lie in, so an independent check of the solid-band
+   invariant has to read the same per-level value the engine reads. */
+double run3_level_tilew(int32_t lvl) { return level_tilew((int)lvl); }
 static double level_finish_row(int lvl) {
   double end = g_rowStart[lvl + 1];
   int bi = baked_idx(G.tun, lvl);
@@ -473,18 +477,36 @@ static int level_of_row(int rowAbs) {
   if (g_rowStart[lo] <= (double)rowAbs && (double)rowAbs < g_rowStart[lo + 1]) return lo;
   return -1;
 }
+/* THE TRANSITION RUN, in WORLD UNITS, not in rows.
+   The 2014 lays a TunnelSection's startZ at the previous section's endZ plus
+   this length - `Level.§+M§ = 1050`, and the per-instance default `§'!,' is
+   the same number (`noTransitionTiles` is the option that zeroes it) - and the
+   tube's cross-section morphs across exactly that run. Rows are the port's
+   unit of layout and every level carries its OWN tile width
+   (BAKED_TILEW / the loader's 75 default), so the run has to be converted per
+   level: transition_rows(lvl) = 1050 / that level's own tile width. */
+#define TRANSITION_LEN 1050.0
+static int trans_rows(int lvl) {
+  int r = (int)(TRANSITION_LEN / level_tilew(lvl) + 0.5);
+  return r < 1 ? 1 : r;
+}
 /* How far this row leans toward the level on the other side of the nearest
-   boundary: 0 away from it, 0.5 sitting on it, easing over ROWXC_ROWS rows.
-   That is the run of tiles the transition happens across. */
+   boundary: 0 away from it, 0.5 sitting on it, easing over the transition
+   run. Both halves of the run lie in THIS level - its head against the level
+   before it, its tail against the level after it - so both are measured in
+   this level's own tile width: rows are the port's unit, and within a level
+   every row is spaced by that one level's tile. `dp` and `dn` are those row
+   counts, and t is 0.5 at the boundary easing to 0 at half the run. */
 static double xsec_blend(int rowAbs, int lvl, int *nb) {
   *nb = -1;
   if (G.rowEnd > 900000.0 || lvl < 0) return 0.0;
   int nl = (int)tun()->levels;
   double dp = (double)rowAbs - g_rowStart[lvl];          /* from the level head */
   double dn = g_rowStart[lvl + 1] - 1.0 - (double)rowAbs; /* to the level tail */
-  double half = (double)ROWXC_ROWS * 0.5;
-  if (dp < half && lvl > 0) { *nb = lvl - 1; return 0.5 - dp / (double)ROWXC_ROWS; }
-  if (dn < half && lvl + 1 < nl) { *nb = lvl + 1; return 0.5 - dn / (double)ROWXC_ROWS; }
+  double tr = (double)trans_rows(lvl); /* this level's own run, in rows */
+  double half = tr * 0.5;
+  if (dp < half && lvl > 0) { *nb = lvl - 1; return 0.5 - dp / tr; }
+  if (dn < half && lvl + 1 < nl) { *nb = lvl + 1; return 0.5 - dn / tr; }
   return 0.0;
 }
 static void rowcross_fill(int lvl, int nb, double t, rowcross_t *o) {
@@ -524,7 +546,7 @@ int run3_row_cross(int rowAbs, rowcross_t *out) {
    carry two levels at once and the renderer reads each row with the grid it
    was written with. */
 static void fill_rows(int R0, int R1, const baked_level_t *L, int lvlRow0,
-                      int seamHead, int seamTail) {
+                      int seamHead, int seamTail, int bandHead, int bandTail) {
   if (!L) return;
   for (int R = R0; R <= R1; R++) {
     int i = R - GMAP_BASE;
@@ -534,13 +556,14 @@ static void fill_rows(int R0, int R1, const baked_level_t *L, int lvlRow0,
     /* The level is entered and left on normal tiles: a checkpoint changes the
        tube's cross-section, and the runner has to cross that on a solid,
        unbroken run of floors. Holes and crumbling tiles are suppressed for
-       SEAM_SOLID rows either side of a boundary — the same run the shapes
-       morph over — so the transition is always 2*SEAM_SOLID (12) tiles of
-       ordinary tile, never a gap straddling two layouts. */
+       the two halves of the transition run either side of a boundary - the
+       same run the shapes morph over (TRANSITION_LEN world units, converted
+       per level) - so the whole transition is ordinary tile, never a gap
+       straddling two layouts. */
     int seam = 0;
     if (lr >= 0 && lr < L->rows) {
-      if (seamHead && lr < SEAM_SOLID) seam = 1;
-      if (seamTail && lr >= L->rows - SEAM_SOLID) seam = 1;
+      if (seamHead && lr < bandHead) seam = 1;
+      if (seamTail && lr >= L->rows - bandTail) seam = 1;
     }
     for (int s2 = 0; s2 < L->n; s2++) {
       uint8_t m = 0, mc = 0, mg = 0;
@@ -580,11 +603,18 @@ static void build_window(void) {
      its own terrain keeps its authored rows, so the tunnel's closing stretch
      is drawn — the Low-Power Tunnel's glow wedge narrows right to the end. */
   int tailSeam = (G.lvl < last) || (G.rowEnd >= g_rowStart[G.lvl + 1]);
-  fill_rows(r0, nextRow0 - 1, B, r0, G.lvl > 0, tailSeam);
+  /* both halves of the transition run lie in THIS level (its head against the
+     previous level, its tail against the next), and each is measured in this
+     level's own tile width - see xsec_blend */
+  int band = trans_rows(G.lvl) / 2;
+  fill_rows(r0, nextRow0 - 1, B, r0, G.lvl > 0, tailSeam, band, band);
   int lim = nextRow0 + PADW;
   if (lim > r0 + MAPW - 1) lim = r0 + MAPW - 1;
   const baked_level_t *N = 0;
-  if (baked_at(G.tun, G.lvl + 1, &N)) fill_rows(nextRow0, lim, N, nextRow0, 1, G.lvl + 1 < last);
+  if (baked_at(G.tun, G.lvl + 1, &N)) {
+    int bandN = trans_rows(G.lvl + 1) / 2;
+    fill_rows(nextRow0, lim, N, nextRow0, 1, G.lvl + 1 < last, bandN, bandN);
+  }
 }
 
 /* ---- infinite mode: hand-made segments, played in order, looping.
@@ -1463,7 +1493,7 @@ double run3_rows_per(void) { return G.rowsPer; }
    loaded (run3_version/run3_version_len) and paints the label from that, and
    the engine is fetched with cache revalidation so the bytes are never the
    old ones. Bump this ONE line per build. */
-#define RUN3_VERSION "0.9.11"
+#define RUN3_VERSION "0.9.15"
 const char *run3_version(void) { return RUN3_VERSION; }
 int32_t run3_version_len(void) { return (int32_t)(sizeof(RUN3_VERSION) - 1); }
 int32_t run3_sides(void) { return G.shape; }
@@ -1754,13 +1784,13 @@ void run3_stage_camera(double px, double py, double pz,
    comes off first, in the ORIGINAL's frame, so that scene lands on the axis
    and every other scene keeps its pan relative to the same rig.
 
-   The gauge is `PI/2 + PI` (render.c): the cross-section quarter turn that
-   makes the port's ring index the original's side index, plus the half turn
-   the scenes are presented with. Its inverse is `R(-3*PI/2) = R(PI/2)`, i.e.
-   `(x, y) -> (-y, x)`, and BOTH the offset and the turn have to move together
-   with the gauge or the world turns under a camera that does not. */
-double run3_stage_pos_x(void) { return -(g_stageY - STAGE_PAN_Y) * STAGE_PX; }
-double run3_stage_pos_y(void) { return  (g_stageX - STAGE_PAN_X) * STAGE_PX; }
+   The gauge is `PI/2` (render.c): the cross-section quarter turn that makes
+   the port's ring index the original's side index, and the only cross-section
+   turn in the frame. Its inverse is `R(-PI/2)`, i.e. `(x, y) -> (y, -x)`, and
+   BOTH the offset and the turn have to move together with the gauge or the
+   world turns under a camera that does not. */
+double run3_stage_pos_x(void) { return  (g_stageY - STAGE_PAN_Y) * STAGE_PX; }
+double run3_stage_pos_y(void) { return -(g_stageX - STAGE_PAN_X) * STAGE_PX; }
 double run3_stage_pos_z(void) { return -stage_shot_dist(); }
 /* the shot distance itself: render.c sizes the staged cast against it, so a
    front cast member always reads at the same fraction of the screen */
@@ -2034,21 +2064,20 @@ void run3_menu_select_char(int c) { if (c >= 0 && c < menu_char_count) menu_char
 
 int run3_map_scroll_y(void) { return map_scroll_y; }
 int run3_map_scroll_x(void) { return map_scroll_x; }
-/* clamp the pan so the map cannot be thrown entirely out of view */
-#define MAP_CLAMP_X 6400
-#define MAP_CLAMP_Y 640
+/* clamp the pan so the map cannot be thrown entirely out of view. The reach is
+   DERIVED (render.c: run3_map_clamp_x/y) from the map's own design extent mapped
+   through the 2014's scale, so a bigger map — the custom extended tunnels run
+   the design x out to 18700, 6.2 x the original's — is always fully reachable
+   and the clamp can never be smaller than the content. Symmetric, as the pan
+   contract is, and in the SAME pixel space the scroll lives in. */
 static int clamp_scroll(int v, int lim) {
   if (v < -lim) return -lim;
   if (v > lim) return lim;
   return v;
 }
 void run3_map_scroll2(int dx, int dy) {
-  /* 2D pan. The original map spans x ~55..3400 and the extended world
-     (Wormhole X and its branches) runs out past 6200, with Far Drift's tail
-     the furthest point; y is the map's own vertical extent. Both axes are
-     clamped so the map cannot be thrown entirely out of view. */
-  map_scroll_x = clamp_scroll(map_scroll_x + dx, MAP_CLAMP_X);
-  map_scroll_y = clamp_scroll(map_scroll_y + dy, MAP_CLAMP_Y);
+  map_scroll_x = clamp_scroll(map_scroll_x + dx, run3_map_clamp_x());
+  map_scroll_y = clamp_scroll(map_scroll_y + dy, run3_map_clamp_y());
 }
 /* both axes (drag / wheel / WASD path) */
 void run3_map_scroll_xy(int dx, int dy) { run3_map_scroll2(dx, dy); }
@@ -2063,8 +2092,10 @@ void run3_map_scroll_delta(int dx) { run3_map_scroll2(dx, 0); }
 #define MAP_VIEW_CY CY
 void run3_map_center_on(int tun) {
   if (tun < 0 || tun >= MAP_TUNNEL_COUNT) return;
-  map_scroll_x = clamp_scroll(MAP_VIEW_CX - map_nodes[tun].x, MAP_CLAMP_X);
-  map_scroll_y = clamp_scroll(MAP_VIEW_CY - map_nodes[tun].y, MAP_CLAMP_Y);
+  map_scroll_x = clamp_scroll(MAP_VIEW_CX - run3_map_screen_x(map_nodes[tun].x),
+                              run3_map_clamp_x());
+  map_scroll_y = clamp_scroll(MAP_VIEW_CY - run3_map_screen_y(map_nodes[tun].y),
+                              run3_map_clamp_y());
 }
 
 /* ---- checkpoints: every level of a continuous tunnel shows on the map ----
@@ -2088,8 +2119,11 @@ int run3_map_best(int tun) {
   return map_best[tun];
 }
 
-/* the tunnel's own map node (path start), un-scrolled. checkpoint_pos(t, -1)
-   is NOT this: a negative lvl clamps to the first checkpoint dot. */
+/* the tunnel's own map node (path start), un-scrolled, in the map's DESIGN
+   UNITS (2.5 x the stored v1.13 coordinates, which is the 2014's own space —
+   see bake_map.py). render_map and map_pick both put it through
+   run3_map_screen_* so the drawn dot and the pickable dot are one number.
+   checkpoint_pos(t, -1) is NOT this: a negative lvl clamps to the first dot. */
 void run3_map_node_pos(int tun, int *x, int *y) {
   if (tun < 0 || tun >= MAP_TUNNEL_COUNT) { if (x) *x = 0; if (y) *y = 0; return; }
   if (x) *x = map_nodes[tun].x;
@@ -2105,8 +2139,8 @@ void run3_map_checkpoint_pos(int tun, int lvl, int *x, int *y) {
   if (lvl >= count) lvl = count - 1;
   int n = (tun >= 0 && tun < MAP_TUNNEL_COUNT) ? map_wp_n[tun] : 0;
   if (n < 2) {
-    /* degenerate path: horizontal stub right of the node */
-    if (x) *x = nx + 30 * (lvl + 1);
+    /* degenerate path: horizontal stub right of the node (design units) */
+    if (x) *x = nx + 75 * (lvl + 1);
     if (y) *y = ny;
     return;
   }
@@ -2147,8 +2181,8 @@ static int map_pick(int mx, int my, int *lvlOut) {
   int bestI = -1, bestJ = -1, bestD = 24*24 + 1;
   for (int i = 0; i < MAP_TUNNEL_COUNT; i++) {
     if (run3_map_is_locked(i)) continue;
-    int nx = map_nodes[i].x + map_scroll_x;
-    int ny = map_nodes[i].y + map_scroll_y;
+    int nx = run3_map_screen_x(map_nodes[i].x) + map_scroll_x;
+    int ny = run3_map_screen_y(map_nodes[i].y) + map_scroll_y;
     int dx = mx - nx;
     int dy = my - ny;
     int dd = dx*dx + dy*dy;
@@ -2162,8 +2196,9 @@ static int map_pick(int mx, int my, int *lvlOut) {
     for (int j = 0; j < count && j <= unlocked; j++) {
       int cx, cy;
       run3_map_checkpoint_pos(i, j, &cx, &cy);
-      cx += map_scroll_x;
-      cy += map_scroll_y;
+      /* the dot is DRAWN through the 2014 scale, so it is picked there */
+      cx = run3_map_screen_x(cx) + map_scroll_x;
+      cy = run3_map_screen_y(cy) + map_scroll_y;
       int dx = mx - cx;
       int dy = my - cy;
       int dd = dx*dx + dy*dy;
