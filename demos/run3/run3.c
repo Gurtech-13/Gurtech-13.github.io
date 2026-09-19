@@ -12,6 +12,9 @@
 #include <stdint.h>
 #include "run3.h"
 #include "levels/levels_baked.h"
+/* the 2014 menu bitmaps' native sizes: this file owns the menu's LAYOUT and
+   render.c owns the font it is drawn with, so the two share these numbers */
+#include "levels/menu_metrics.h"
 
 game_t G;
 uint8_t GMAP[MAXN][MAPW];
@@ -1493,7 +1496,7 @@ double run3_rows_per(void) { return G.rowsPer; }
    loaded (run3_version/run3_version_len) and paints the label from that, and
    the engine is fetched with cache revalidation so the bytes are never the
    old ones. Bump this ONE line per build. */
-#define RUN3_VERSION "0.9.15"
+#define RUN3_VERSION "0.9.16"
 const char *run3_version(void) { return RUN3_VERSION; }
 int32_t run3_version_len(void) { return (int32_t)(sizeof(RUN3_VERSION) - 1); }
 int32_t run3_sides(void) { return G.shape; }
@@ -2276,34 +2279,201 @@ int run3_char_is_locked(int id) {
   return char_locked[id];
 }
 
-/* menu click/hover: returns button id (0=play, 1=infinite, 2+=char) — bigger boxes, spread, 2 rows */
-int run3_menu_hover(int mx, int my) {
-  /* the SAME 1280x720 design space render_menu translates onto the viewport
-     centre (see there), so the drawn boxes and these hit boxes cannot drift
-     apart on a window that is not 1280x720 */
-  int cx = CX;
-  int ox = CX - 640, oy = CY - 360;
-  if (mx > cx - 160 && mx < cx + 160 && my > 340 + oy && my < 400 + oy) return 0;
-  if (mx > cx - 160 && mx < cx + 160 && my > 420 + oy && my < 480 + oy) return 1;
-  // character grid: 80x80 boxes, 90px pitch, 9 per row, 2 rows
-  // row 0: y 520-600, row 1: y 620-700. The CELL is the character's
-  // PRESENTATION slot (run3_char_pres) because that is where render_menu draws
-  // the box; indexing by the sprite id put the hit box on a different
-  // character wherever the two orders differ. The returned id is that slot, so
-  // run3_menu_click's run3_char_order(hover - 2) resolves it back to a sprite.
-  for (int i = 0; i < menu_char_count && i < NCHAR; i++) {
-    int pres = run3_char_pres(i);
-    int row = pres / 9;
-    int col = pres % 9;
-    int bx = ox + 40 + col * 90;
-    int by = oy + 520 + row * 100;
-    if (mx >= bx && mx < bx + 80 && my >= by && my < by + 80) return 2 + pres;
+/* ==================== THE MAIN MENU'S LAYOUT ====================
+ * The 2014 build's own screen — com/player03/run3/menu/§-__-_--__-_-§.as in
+ * runIII.swf (NOT the later build's menu, which has a different element set:
+ * see GUI_2014.md §0). That class writes absolute x/y per element, so its
+ * numbers transfer with nothing to interpret:
+ *
+ *   title      x = (sw - w)/2         y = 90*sx
+ *   options    x = sw - w - 20*sx     y = 20*sx           (top-right)
+ *   character  y = sh * 0.3                               (the grid's slot)
+ *   row        y = character.y + boxHeight + 90*sx
+ *   play       x = (sw - w)/2         y = row.y + sh*0.05
+ *   explore    x = sw/2 - w - 40*sx   y = row.y
+ *   infinite   x = sw/2 + 40*sx       y = row.y
+ *   map        x = (sw - w)/2         y = below play
+ *   shop       x = (sw - w)/2         y = below map
+ *   boards     x = 25*sx              y = sh - h - 25*sx   (bottom-left)
+ *   medals     x = boards.x + boards.w + 25*sx      y = boards.y
+ *   edit       x = medals.x + medals.w + 25*sx      y = medals.y + medals.h - h
+ *
+ * where `sw`/`sh` are the original's stage (800x600) and sx/sy its
+ * ScaledAssets scales: `k = min(BASE_W/3000, BASE_H/2000)`, with every BITMAP
+ * drawn at TWICE k. The port lays this out in its 4:3 BASE box rather than the
+ * whole window, so the menu occupies the same composed area the game does; the
+ * base box is the port's stand-in for the original's 4:3 stage.
+ *
+ * ONE DELIBERATE DEVIATION. The original writes the Galaxy map's y as
+ * `infinite.y + infinite.height + 30*sy`, which collides with Play: Play sits
+ * only `sh*0.05` below that same row while standing ~110 px tall, so the two
+ * overlap on a real stage. The port stacks map and shop below PLAY instead.
+ * That is the order the later build gives the same screen once its author
+ * re-expressed it with the layout engine (row -> Play -> map -> Shop, gaps 40
+ * and 24), so it is the same screen, and it is the only reading that is not
+ * self-colliding. Everything else is the original's expression verbatim.
+ *
+ * The character SELECTION GRID is the port's own substitute for the original's
+ * single 3D character model, so it has no counterpart to copy; it is placed in
+ * the original's character-select slot (y = sh*0.3) and its height is what the
+ * row below stacks from. */
+#define MENU_CHAR_COLS  9
+#define MENU_CHAR_BOX   80   /* px each character is drawn in */
+#define MENU_CHAR_PITCH 80   /* 9 * 80 = 720, so the grid fits the base box */
+/* MENU_TEXT_SIZE (the original's text-button font size) is in run3.h: the
+   renderer draws the labels at it too */
+#define MENU_K_EDGE     20   /* the original's 20*sx top-right margin */
+#define MENU_K_CORNER   25   /* the original's 25*sx bottom-left margin */
+#define MENU_K_TITLE    90   /* the original's 90*sx title drop */
+#define MENU_K_ROWGAP   40   /* the original's 40*sx either side of centre */
+#define MENU_K_STACK    30   /* the original's 30*sy between stacked buttons */
+/* These two are FRACTIONS OF THE STAGE, not design units, and that distinction
+   is load-bearing. The original writes them as `stageHeight * 0.3` and
+   `stageHeight * 0.05` (menu/§-__-_--__-_-§.as lines 477 and 483) — plain
+   stage pixels. Every other number on the screen is passed to ScaledAssets'
+   scale accessors, i.e. through k; these two are not.
+   Multiplying them by k as well is a double scale, and it compresses the whole
+   vertical chain (grid, mode row, Play, map, shop) into the top of the box,
+   where the grid lands on the title. */
+#define MENU_CHAR_TOP   0.3  /* the original's `stageHeight * 0.3` */
+#define MENU_PLAY_DROP  0.05 /* the original's `stageHeight * 0.05` */
+
+double run3_menu_scale(void) {
+  double kw = (double)BASE_W / 3000.0, kh = (double)BASE_H / 2000.0;
+  return kw < kh ? kw : kh;
+}
+/* a design distance / a bitmap's native size, in framebuffer pixels. Rounded
+   once, here, so the drawn rect and the hit rect are the same integers. */
+static int menu_px(double k, double v) { return (int)(v * k + 0.5); }
+/* a fraction of the original's STAGE height, in framebuffer pixels. The base
+   box is the port's stand-in for the original's 4:3 stage, so a stage fraction
+   is a fraction of BASE_H — with no k on top (see MENU_CHAR_TOP). */
+static int menu_stage_y(double frac) { return (int)(BASE_H * frac + 0.5); }
+/* the grid's rows and its total height, which the row below stacks from */
+static int menu_grid_rows(void) {
+  int cols = menu_char_count > 0 ? MENU_CHAR_COLS : 0;
+  return cols ? (menu_char_count + cols - 1) / cols : 0;
+}
+static int menu_grid_h(void) { return menu_grid_rows() * MENU_CHAR_PITCH; }
+/* The icon a text button carries. The original loads it as an ordinary Bitmap
+   (so 2k) and then OVERWRITES its height with the text field's height, keeping
+   the aspect: `_loc9_.height = textField.height; _loc9_.scaleX = _loc9_.scaleY`.
+   So the icon is `text_h` tall and `native_w * text_h / native_h` wide, and the
+   text starts at the icon's right edge. */
+int run3_menu_icon_w(int item) {
+  int nw = 0, nh = 0;
+  switch (item) {
+  case MENU_MAP:  nw = MENU_MAPICON_W; nh = MENU_MAPICON_H; break;
+  case MENU_SHOP: nw = MENU_SHOP_W;    nh = MENU_SHOP_H;    break;
+  default: return 0;
   }
-  return -1;
+  int h = render_menu_text_h();
+  return nh > 0 ? (int)((double)nw * h / nh + 0.5) : 0;
+}
+
+int run3_menu_rect(int item, int *x, int *y, int *w, int *h) {
+  const double k = run3_menu_scale(), two = k * 2.0;
+  const int bx = BASE_X0, by = BASE_Y0;
+  /* the vertical chain, from the original's expressions */
+  const int row_y = by + menu_stage_y(MENU_CHAR_TOP) + menu_grid_h()
+                        + menu_px(k, MENU_K_TITLE);
+  int play_y = row_y + menu_stage_y(MENU_PLAY_DROP);
+  int play_h = menu_px(two, MENU_PLAY_H);
+  /* a text button is as tall as its text: the original scales the icon to the
+     text's height (`_loc9_.height = textField.height`) rather than drawing it
+     at 2k, so an item with an icon is still only `text_h` tall */
+  const int text_h = render_menu_text_h();
+  int map_y  = play_y + play_h + menu_px(k, MENU_K_STACK);
+  int map_h  = text_h;
+  int shop_y = map_y + map_h + menu_px(k, MENU_K_STACK);
+  int shop_h = text_h;
+  /* the bottom-left row's own geometry, since later items stack off it */
+  int lb_w = menu_px(two, MENU_LEADERBOARDS_W), lb_h = menu_px(two, MENU_LEADERBOARDS_H);
+  int lb_x = bx + menu_px(k, MENU_K_CORNER);
+  int lb_y = by + BASE_H - lb_h - menu_px(k, MENU_K_CORNER);
+  int am_w = menu_px(two, MENU_ACHIEVEMENTS_W), am_h = menu_px(two, MENU_ACHIEVEMENTS_H);
+  int am_x = lb_x + lb_w + menu_px(k, MENU_K_CORNER);
+  int ed_w = menu_px(two, MENU_EDIT_W), ed_h = menu_px(two, MENU_EDIT_H);
+
+  switch (item) {
+  case MENU_TITLE:
+    *w = menu_px(two, MENU_TITLE_W); *h = menu_px(two, MENU_TITLE_H);
+    *x = bx + (BASE_W - *w) / 2; *y = by + menu_px(k, MENU_K_TITLE);
+    return 1;
+  case MENU_OPTIONS:
+    *w = menu_px(two, MENU_CREDITS_W); *h = menu_px(two, MENU_CREDITS_H);
+    *x = bx + BASE_W - *w - menu_px(k, MENU_K_EDGE); *y = by + menu_px(k, MENU_K_EDGE);
+    return 1;
+  case MENU_PLAY:
+    *w = menu_px(two, MENU_PLAY_W); *h = play_h;
+    *x = bx + (BASE_W - *w) / 2; *y = play_y;
+    return 1;
+  case MENU_EXPLORE:
+    *w = render_menu_text_w("Explore mode"); *h = text_h;
+    *x = bx + BASE_W / 2 - *w - menu_px(k, MENU_K_ROWGAP); *y = row_y;
+    return 1;
+  case MENU_INFINITE:
+    *w = render_menu_text_w("Infinite mode"); *h = text_h;
+    *x = bx + BASE_W / 2 + menu_px(k, MENU_K_ROWGAP); *y = row_y;
+    return 1;
+  case MENU_MAP:
+    *w = run3_menu_icon_w(MENU_MAP) + render_menu_text_w("Galaxy map"); *h = map_h;
+    *x = bx + (BASE_W - *w) / 2; *y = map_y;
+    return 1;
+  case MENU_SHOP:
+    *w = run3_menu_icon_w(MENU_SHOP) + render_menu_text_w("Shop"); *h = shop_h;
+    *x = bx + (BASE_W - *w) / 2; *y = shop_y;
+    return 1;
+  case MENU_LEADERBOARDS:
+    *w = lb_w; *h = lb_h; *x = lb_x; *y = lb_y;
+    return 1;
+  case MENU_ACHIEVEMENTS:
+    *w = am_w; *h = am_h; *x = am_x; *y = lb_y;
+    return 1;
+  case MENU_EDIT:
+    *w = ed_w; *h = ed_h;
+    *x = am_x + am_w + menu_px(k, MENU_K_CORNER); *y = lb_y + lb_h - ed_h;
+    return 1;
+  }
+  return 0;
+}
+
+int run3_menu_char_rect(int pres, int *x, int *y, int *w, int *h) {
+  if (pres < 0 || pres >= menu_char_count || pres >= NCHAR) return 0;
+  int row = pres / MENU_CHAR_COLS, col = pres % MENU_CHAR_COLS;
+  if (row >= menu_grid_rows()) return 0;
+  int gw = MENU_CHAR_COLS * MENU_CHAR_PITCH;
+  *x = BASE_X0 + (BASE_W - gw) / 2 + col * MENU_CHAR_PITCH;
+  *y = BASE_Y0 + menu_stage_y(MENU_CHAR_TOP) + row * MENU_CHAR_PITCH;
+  *w = MENU_CHAR_BOX; *h = MENU_CHAR_BOX;
+  return 1;
+}
+
+/* A menu item's box, when the item is drawn as text with a bitmap in front:
+   the original sizes the icon to the text's height and puts them side by side,
+   so the button's width is icon + text. The port's font is not the original's,
+   so the width differs by the text's own metrics — the ANCHOR (centred, or
+   40*sx off centre) is the original's, which is what fixes the layout. The
+   metrics themselves come from render.c: it owns the font, and both the drawn
+   text and these boxes read the same two functions. */
+
+int run3_menu_hover(int mx, int my) {
+  int x, y, w, h;
+  /* the character grid first: its boxes are inside the row the chrome is
+     stacked off, so a hit there must not fall through to an item underneath */
+  for (int pres = 0; pres < menu_char_count && pres < NCHAR; pres++) {
+    if (!run3_menu_char_rect(pres, &x, &y, &w, &h)) continue;
+    if (mx >= x && mx < x + w && my >= y && my < y + h) return MENU_CHAR_BASE + pres;
+  }
+  for (int item = MENU_TITLE; item < MENU_COUNT; item++) {
+    if (!run3_menu_rect(item, &x, &y, &w, &h)) continue;
+    if (mx >= x && mx < x + w && my >= y && my < y + h) return item;
+  }
+  return MENU_NONE;
 }
 void run3_menu_click(int mx, int my) {
   menu_hover = run3_menu_hover(mx, my);
-  if (menu_hover >= 2) {
-    menu_char = run3_char_order(menu_hover - 2);
+  if (menu_hover >= MENU_CHAR_BASE) {
+    menu_char = run3_char_order(menu_hover - MENU_CHAR_BASE);
   }
 }

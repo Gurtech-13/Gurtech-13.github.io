@@ -205,10 +205,28 @@ function makeEl() {
     if (el("cutview").classList.contains("on")) throw new Error("scene never finished");
   }
 
-  // menu -> Play
-  click(640, 370);
+  // menu -> Play. CLICK WHERE THE ENGINE SAYS THE BUTTON IS, for the same
+  // reason the map node below is clicked that way: the menu's layout is the
+  // 2014 build's own (verify_menu.js pins it, MENU_PLAY is id 1), so a
+  // hard-coded pixel only ever described whatever the placement maths happened
+  // to be the day it was written — and while it was stale this click silently
+  // landed on a character box, so the run never started at all.
+  {
+    const SP = wasmExports.run3_scratch();
+    if (!wasmExports.run3_menu_rect(1, SP, SP + 4, SP + 8, SP + 12))
+      throw new Error("the menu has no Play button");
+    const a = new Int32Array(wasmExports.memory.buffer, SP, 4);
+    const b = { x: a[0], y: a[1], w: a[2], h: a[3] };
+    if (wasmExports.run3_menu_hover(b.x + (b.w >> 1), b.y + (b.h >> 1)) !== 1)
+      throw new Error("the Play button's centre is not a Play hit");
+    click(b.x + (b.w >> 1), b.y + (b.h >> 1));
+  }
   await frames(3);
-  if (els.status.textContent.indexOf("mapped") < 0) throw new Error("did not reach map: " + els.status.textContent);
+  // the map screen, by the engine's own state code (7 = menu, 6 = map); a
+  // "mapped" substring can be left in the status line by earlier renders, so
+  // it is not evidence that the click did anything.
+  if (wasmExports.run3_state() !== 6)
+    throw new Error("the Play button did not reach the map (state " + wasmExports.run3_state() + ")");
   console.log("menu -> map OK");
 
   // tunnel entry plays NO scene anymore (all scenes fire at level end).

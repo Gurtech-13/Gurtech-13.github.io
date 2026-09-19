@@ -292,8 +292,55 @@ int  run3_map_hover_level(int mx, int my);        /* checkpoint lvl under cursor
 int  run3_map_selected_level(void);               /* selected checkpoint lvl, -1 = node/none */
 void run3_map_set_best(int tun, int best);        /* furthest cleared count (unlocks dots) */
 int  run3_map_best(int tun);                      /* furthest cleared count */
-void run3_menu_click(int mx, int my); /* menu click: 0=play, 1=inf, etc */
-int  run3_menu_hover(int mx, int my); /* menu hover result */
+/* ---- THE MENU'S LAYOUT (the 2014 build's own, not the port's invention) ----
+   com/player03/run3/menu/§-__-_--__-_-§.as in runIII.swf lays the screen out
+   by writing absolute x/y for each element, so there is nothing to interpret:
+   the numbers are the original's. The two rules they use are
+
+     k    = min(BASE_W/3000, BASE_H/2000)   design units -> pixels
+     bitmap drawn at 2k                      (ScaledAssets setting Bitmap.scale
+                                             = 2 * scaleX/scaleY)
+
+   i.e. exactly the map's placement rule, so the menu and the map agree. Text
+   is set at the original's design size (MENU_TEXT_SIZE = the 100 it passes to
+   its text buttons) scaled by k.
+
+   run3_menu_rect is the ONE description: render_menu draws these rects and
+   run3_menu_hover tests against the same ones, so a drawn box and its hit box
+   cannot drift apart on a window that is not the design size. Ids: */
+#define MENU_TITLE        0
+#define MENU_PLAY         1
+#define MENU_EXPLORE      2
+#define MENU_INFINITE     3
+#define MENU_MAP          4
+#define MENU_SHOP         5
+#define MENU_LEADERBOARDS 6
+#define MENU_ACHIEVEMENTS 7
+#define MENU_EDIT         8
+#define MENU_OPTIONS      9
+#define MENU_COUNT       10
+/* a clickable character in the selection grid: id = MENU_CHAR_BASE + the
+   character's PRESENTATION slot (run3_char_pres), so the hit box lands on the
+   character that is actually drawn there. run3_char_order turns it back. */
+#define MENU_CHAR_BASE   16
+#define MENU_NONE        (-1)
+/* the original's text-button font size, in design units: both the line box the
+   layout reserves (run3.c) and the size the label is drawn at (render.c) are
+   this number through k */
+#define MENU_TEXT_SIZE   100
+
+double run3_menu_scale(void);         /* k: design units -> pixels */
+/* the rect of one menu item, in FRAMEBUFFER pixels (already offset into the
+   base box). 0 if the id is not a menu item. */
+int  run3_menu_rect(int item, int *x, int *y, int *w, int *h);
+/* the width of a text button's leading icon, which the original scales to the
+   text's height instead of drawing at 2k. 0 for an item with no icon. */
+int  run3_menu_icon_w(int item);
+/* the rect of one character box in the selection grid, by presentation slot.
+   0 if that slot holds no character (or would fall outside the grid). */
+int  run3_menu_char_rect(int pres, int *x, int *y, int *w, int *h);
+void run3_menu_click(int mx, int my); /* forward a click; selects a character */
+int  run3_menu_hover(int mx, int my); /* MENU_* / MENU_CHAR_BASE+slot / MENU_NONE */
 void run3_menu_select_char(int c);    /* select character on menu (atlas id) */
 int  run3_menu_char(void);            /* currently selected char (atlas id) */
 /* The selection screen shows the characters in the ORIGINAL game's registry
@@ -307,6 +354,12 @@ int  run3_char_is_locked(int id);
 /* renderer exports (render.c) */
 void render_map(void);   /* draw the world map on the canvas */
 void render_menu(void);  /* draw the main menu on the canvas */
+/* a menu label's box at the original's design text size (MENU_TEXT_SIZE).
+   render.c owns the font, so it owns the metrics; run3_menu_rect builds the
+   hit boxes from these same two numbers, so a label's box is the box its text
+   is drawn in. */
+int render_menu_text_w(const char *s);
+int render_menu_text_h(void);
 
 /* infinite mode / shop API (implemented in run3.c, exported to host) */
 void run3_start_inf(void);

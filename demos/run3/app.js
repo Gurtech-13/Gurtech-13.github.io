@@ -1120,26 +1120,36 @@
       /* menu: forward click to WASM */
       exps.run3_menu_click(c.x, c.y);
       var hv = exps.run3_menu_hover(c.x, c.y);
-      if(hv===0) {
-        /* Play button */
+      /* The ids are the engine's MENU_* codes (run3.h): a character box is
+         MENU_CHAR_BASE + its presentation slot, which is the slot in story.js
+         C[] (the ORIGINAL registry order); the engine and save.char speak
+         sprite-atlas ids. Play, Explore mode and the Galaxy map all begin the
+         same run in the original (PlayGame and "Explore mode" are both
+         startExploreMode, and the map button goes to the map), so they share
+         one branch here. */
+      if(hv===1 || hv===2 || hv===4) {
         exps.run3_enter_map();
         syncAllToWasm();
-      } else if(hv===1) {
+      } else if(hv===3) {
         /* Infinite mode */
         exps.run3_start_inf();
         inGame=true; lastState=-1;
         infDeaths=0;
         try { cellsRun0 = exps.run3_powercells() | 0; } catch (e) {}
-      } else if(hv>=2) {
-        /* character select: hv-2 is the slot in story.js C[] (the ORIGINAL
-           registry order); the engine and save.char speak sprite-atlas ids */
-        var chSel = CHARS[hv-2];
+      } else if(hv===7) {
+        /* achievements */
+        openAch();
+      } else if(hv>=16) {
+        var chSel = CHARS[hv-16];
         if (!chSel) return;
         var cid = chSel.sprite;
         if (charLocked(cid)) { showLockedChar(cid); return; }
         exps.run3_menu_select_char(cid);
         save.char=cid; persist();
       }
+      /* MENU_SHOP (5, the shop overlay), Menu_LEADERBOARDS (6) and the edit
+         and options entries (8, 9) are drawn because the 2014 draws them;
+         this port has no view behind them yet, so they are inert. */
     } else if(st===6) {
       /* map: forward click to WASM — checkpoint dots seek straight into the continuous tunnel.
          A drag pans instead, so suppress the click when the pointer moved. */

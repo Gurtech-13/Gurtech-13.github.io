@@ -51,6 +51,9 @@ fi
   -Wl,--export=run3_map_set_best -Wl,--export=run3_map_best \
   -Wl,--export=run3_enter_menu -Wl,--export=run3_menu_click -Wl,--export=run3_menu_hover \
   -Wl,--export=run3_menu_select_char -Wl,--export=run3_menu_char -Wl,--export=run3_set_char_count \
+  -Wl,--export=run3_char_order -Wl,--export=run3_char_pres \
+  -Wl,--export=run3_menu_scale -Wl,--export=run3_menu_rect -Wl,--export=run3_menu_icon_w -Wl,--export=run3_menu_char_rect \
+  -Wl,--export=render_menu_text_w -Wl,--export=render_menu_text_h \
   -Wl,--export=run3_char_set_locked -Wl,--export=run3_char_is_locked \
   -Wl,--export=render_map -Wl,--export=render_menu -Wl,--export=render_frame \
   -o run3.wasm run3.c render.c gfx.c math.c space.c levels/levels.c

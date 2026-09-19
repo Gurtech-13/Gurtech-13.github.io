@@ -325,7 +325,7 @@ declares what they share internally.
 
 | dir | files | what it is | consumer |
 | --- | --- | --- | --- |
-| `images/` | 126 | character sprite sheets, tile/prop textures, map + menu art, closeups, the 6 skybox faces, `singledpi_texture_wormhole.png` | the ones the engine draws are baked by `levels/bake_assets.py` into `assets_data.h` / `char_*.h` / `map_assets.h`, and the skybox faces into `skybox_data.h`; the rest (menu art, student closeups, `character_shadow`, `controls_*`, most `map_*/menu_*` icons) are UI-only and unused by the demo |
+| `images/` | 126 | character sprite sheets, tile/prop textures, map + menu art, closeups, the 6 skybox faces, `singledpi_texture_wormhole.png` | the ones the engine draws are baked by `levels/bake_assets.py` into `assets_data.h` / `char_*.h` / `map_assets.h`, the skybox faces into `skybox_data.h`, and the 2014 menu's own bitmaps by `levels/bake_menu.py` into `menu_assets.h` / `menu_metrics.h`; the rest (student closeups, `character_shadow`, `controls_*`, most `map_*/menu_*` icons) are UI-only and unused by the demo |
 | `atlas/` | 17 | per-character frame metadata (grid + frame roles) | `bake_assets.py` (`atlas/<char>.json`) |
 | `cutscenes/` | 67 | one still per cutscene plus the two pop textures (`trainride_balloon.png`, `candy_balloon.png`) | `app.js` (`sceneIcon`, story cards) and `bake_assets.py` (`tex_balloon_train`) |
 | `fonts/` | 3 | glyph atlas + metrics | `levels/bake_font.py` → `font_data.h` |

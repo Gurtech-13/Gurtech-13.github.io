@@ -21,6 +21,9 @@
 #include "render_int.h"
 /* the star sphere's raw table (baked from the original's skybox faces) */
 #include "levels/skybox_data.h"
+/* the 2014 menu's own bitmaps (bake_menu.py): the pixel arrays, included once,
+   here, alongside the metrics both this file and run3.c compile in */
+#include "levels/menu_assets.h"
 /* the baked art (tile textures, character atlases, animation ranges): a
    multi-megabyte generated header, so it is included once, here */
 #include "levels/assets_data.h"
@@ -1226,7 +1229,6 @@ void render_frame(void) {
 static void draw_glyph(int x, int y, char ch, uint32_t col, double scale);
 static int draw_text(int x, int y, const char *s, uint32_t col, double scale);
 static int text_width(const char *s, double scale);
-static void draw_text_centered(int y, const char *s, uint32_t col, double scale);
 static int strlen_p(const char *s);
 
 /* ==================== CUTSCENE SPEECH (the 2014 engine, ported) ====================
@@ -2215,12 +2217,17 @@ static int text_width(const char *s, double scale) {
   return (int)((double)cx * scale);
 }
 
-static void draw_text_centered(int y, const char *s, uint32_t col, double scale) {
-  int sw = text_width(s, scale);
-  draw_text((W - sw) / 2, y, s, col, scale);
-}
+/* ==================== MAIN MENU — the 2014 build's own screen ====================
+ * Nothing about the layout is decided here: run3_menu_rect is its one
+ * description (the 2014's own expressions — see its comment in run3.c), and
+ * this file only draws into the rects it reports. So the pixels and the hit
+ * tests in run3_menu_hover cannot drift apart, and the whole screen scales
+ * with k instead of being a fixed 1280x720 design that has to be translated.
+ *
+ * The art is the original's own, baked by levels/bake_menu.py. */
+static void draw_items(void);
+static void draw_grid(void);
 
-/* ==================== MAIN MENU — stars bg as requested, not parchment ==================== */
 void render_menu(void) {
   /* the same baked star sphere as in-game, held at a fixed tilt */
   uint32_t sky = rgb(10,12,26);
@@ -2228,59 +2235,106 @@ void render_menu(void) {
   cam_back = DCAM; cam_out = 0.0; view_z = VIEW; near_z = NEARZ;
   sky_render(sky, 0.12, 0.0);
 
-  int cx = CX;
-  /* The menu is a fixed 1280x720 design, TRANSLATED onto the viewport centre so
-     it stays centred and clickable at any window shape. At 1280x720 the offset
-     is zero, so this is the layout it has always had. run3_menu_hover runs the
-     same offset, so the drawn boxes and the hit tests cannot drift apart. */
-  int ox = CX - 640, oy = CY - 360;
-  draw_text_centered(60 + oy, "Run 3", rgb(130, 185, 255), 1.6);
-  draw_text_centered(150 + oy, "Tunnel Runner Tribute", rgb(100, 130, 180), 0.54);
+  draw_items();
+  draw_grid();
+}
 
-  fill_rect(cx - 160, 340 + oy, 320, 60, rgb(50, 120, 60));
-  draw_text_centered(351 + oy, "Play", rgb(220, 255, 220), 0.76);
+/* ---------------- the menu's text metrics ----------------
+ * render_menu_text_h is the LINE BOX the layout reserves for a menu label:
+ * the original sets its text buttons at design size 100, so the box is that
+ * size through k. render_menu_text_w is that same label's width in the port's
+ * own font, which is what both the drawn text and run3_menu_rect's hit box
+ * measure. There is one copy of each, so they cannot disagree. */
+int render_menu_text_h(void) {
+  return (int)(MENU_TEXT_SIZE * run3_menu_scale() + 0.5);
+}
+static double menu_text_scale(void) {
+  /* the port's font has a 39 px cap height at scale 1, so a box of
+     `render_menu_text_h()` pixels is set at (that / 39) */
+  return (double)render_menu_text_h() / 39.0;
+}
+int render_menu_text_w(const char *s) {
+  return text_width(s, menu_text_scale());
+}
 
-  fill_rect(cx - 160, 420 + oy, 320, 60, rgb(90, 50, 140));
-  draw_text_centered(436 + oy, "Infinite Mode", rgb(220, 200, 255), 0.54);
+/* a menu label, with the dark drop the original gets from its glow constraint:
+   the labels sit on the star sky, where a bare light glyph is unreadable */
+static void menu_label(int x, int y, const char *s, uint32_t col) {
+  draw_text(x + 1, y + 1, s, rgb(0, 0, 0), menu_text_scale());
+  draw_text(x, y, s, col, menu_text_scale());
+}
 
-  draw_text_centered(500 + oy, "Character:", rgb(180, 180, 200), 0.49);
-  int nchar = CHAR_COUNT;
+/* ---------------- the menu's elements ----------------
+ * Each one is drawn into the rect run3_menu_rect reports, so what is hit is
+ * exactly what is drawn. The bitmaps are the original's own, at the size the
+ * original draws them: native x 2k (ScaledAssets sets every Bitmap's scale to
+ * twice the design scale). */
+static void menu_bitmap(const uint32_t *px, int nw, int nh, int x, int y, int w, int h) {
+  blit_sprite(x, y, w, h, px, nw, nh, 1.0);
+}
+
+static void draw_items(void) {
+  int x, y, w, h;
+
+  if (run3_menu_rect(MENU_TITLE, &x, &y, &w, &h))
+    menu_bitmap(menu_title, MENU_TITLE_W, MENU_TITLE_H, x, y, w, h);
+  if (run3_menu_rect(MENU_PLAY, &x, &y, &w, &h))
+    menu_bitmap(menu_play, MENU_PLAY_W, MENU_PLAY_H, x, y, w, h);
+
+  /* the two mode labels flank the centre on the character row */
+  if (run3_menu_rect(MENU_EXPLORE, &x, &y, &w, &h))
+    menu_label(x, y, "Explore mode", rgb(228, 232, 240));
+  if (run3_menu_rect(MENU_INFINITE, &x, &y, &w, &h))
+    menu_label(x, y, "Infinite mode", rgb(228, 232, 240));
+
+  /* text buttons: icon first, sized to the text height, then the label */
+  if (run3_menu_rect(MENU_MAP, &x, &y, &w, &h)) {
+    int iw = run3_menu_icon_w(MENU_MAP);
+    menu_bitmap(menu_mapicon, MENU_MAPICON_W, MENU_MAPICON_H, x, y, iw, h);
+    menu_label(x + iw, y, "Galaxy map", rgb(228, 232, 240));
+  }
+  if (run3_menu_rect(MENU_SHOP, &x, &y, &w, &h)) {
+    int iw = run3_menu_icon_w(MENU_SHOP);
+    menu_bitmap(menu_shop, MENU_SHOP_W, MENU_SHOP_H, x, y, iw, h);
+    menu_label(x + iw, y, "Shop", rgb(228, 232, 240));
+  }
+
+  /* bottom-left row */
+  if (run3_menu_rect(MENU_LEADERBOARDS, &x, &y, &w, &h))
+    menu_bitmap(menu_leaderboards, MENU_LEADERBOARDS_W, MENU_LEADERBOARDS_H, x, y, w, h);
+  if (run3_menu_rect(MENU_ACHIEVEMENTS, &x, &y, &w, &h))
+    menu_bitmap(menu_achievements, MENU_ACHIEVEMENTS_W, MENU_ACHIEVEMENTS_H, x, y, w, h);
+  if (run3_menu_rect(MENU_EDIT, &x, &y, &w, &h))
+    menu_bitmap(menu_edit, MENU_EDIT_W, MENU_EDIT_H, x, y, w, h);
+  /* top-right: the original's options/credits entry */
+  if (run3_menu_rect(MENU_OPTIONS, &x, &y, &w, &h))
+    menu_bitmap(menu_credits, MENU_CREDITS_W, MENU_CREDITS_H, x, y, w, h);
+}
+
+/* The character grid. The original's character select is a single 3D model, so
+   the grid is this port's substitute and has no counterpart to copy: it lives
+   in the original's slot (y = sh*0.3) and its height is what the row below
+   stacks from (run3_menu_rect). The box is indexed by the character's
+   PRESENTATION slot, so the box a character is drawn in is the box it is
+   picked in. */
+static void draw_grid(void) {
   int sel = run3_menu_char();
-  // bigger boxes 80x80, 90px pitch, 2 rows (9+8) — spread out.
-  // i is the sprite-atlas id (the art lookup), but the BOX POSITION comes
-  // from the character's slot in the original game's registry order, so the
-  // grid reads in the original order (see CHAR_MENU_ORDER in run3.c).
+  int nchar = CHAR_COUNT;
+  int x, y, w, h;
   for (int i = 0; i < nchar; i++) {
     int pres = run3_char_pres(i);
-    int row = pres / 9;
-    int col = pres % 9;
-    int bx = ox + 40 + col * 90;
-    int by = oy + 520 + row * 100;
-    if (by + 80 > oy + 700) break;
+    if (!run3_menu_char_rect(pres, &x, &y, &w, &h)) continue;
     int is_locked = run3_char_is_locked(i);
-    uint32_t cc = (i == sel) ? rgb(255, 255, 255) : (is_locked ? rgb(45, 45, 60) : rgb(60, 60, 80));
-    fill_rect(bx, by, 80, 80, cc);
+    if (i == sel)
+      fill_rect(x - 2, y - 2, w + 4, h + 4, rgb(255, 220, 50));
     int fw2 = 0, fh2 = 0;
     /* preview the run-cycle lead frame, not the jump pose (compact 0) */
     anim_range_t mar = CHAR_ANIM_RANGE(i, STATE_RUN, DIR_CENTER);
     const uint32_t *pix = get_char_frame(i, mar.start, &fw2, &fh2);
-    if (pix && fw2 > 0 && fh2 > 0) {
-      // native resolution — same scale for all, centered, may overflow box
-      int dw = fw2;
-      int dh = fh2;
-      int px = bx + 40 - dw / 2;
-      int py = by + 40 - dh / 2;
-      // dim locked characters slightly
-      double alpha = is_locked ? 0.35 : 1.0;
-      blit_sprite(px, py, dw, dh, pix, fw2, fh2, alpha);
-    }
-    if (is_locked) {
-      // use locked overlay texture
-      blit_sprite(bx, by, 80, 80, tex_locked, tex_locked_W, tex_locked_H, 0.92);
-    }
-    if (i == sel) stroke_rect(bx - 2, by - 2, 84, 84, rgb(255, 220, 50));
-    else if (is_locked) stroke_rect(bx, by, 80, 80, rgb(60, 60, 80));
+    if (pix && fw2 > 0 && fh2 > 0)
+      blit_sprite(x + w / 2 - fw2 / 2, y + h / 2 - fh2 / 2, fw2, fh2,
+                  pix, fw2, fh2, is_locked ? 0.35 : 1.0);
+    if (is_locked)
+      blit_sprite(x, y, w, h, tex_locked, tex_locked_W, tex_locked_H, 0.92);
   }
-
-  draw_text_centered(640 + oy, "Click to select  |  Fullscreen", rgb(100, 110, 130), 0.38);
 }
